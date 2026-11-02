@@ -2,6 +2,8 @@
 
 An unofficial, independent native Linux client for [Rex](https://www.superlogical.com/rex), the terminal multiplexer from Superlogical. It is not affiliated with, endorsed by or supported by Superlogical or the Rex authors.
 
+![Rex Linux with the sessions sidebar open and a three-pane split showing a file tree, source code and test results](docs/screenshot.png)
+
 Rex Linux attaches to an existing Rex server. Saved hosts contain sessions, each session's Rex windows become tabs, and the server defines the terminal splits. Sessions and their programs stay on the server when the app closes, so any other Rex client can attach to the same sessions.
 
 It is written in Rust on [Rune](https://github.com/anomalyco/rune) (wgpu/winit, `rune-kit` components) with libghostty-vt for terminal emulation, and talks to the server through the [`rexrs`](https://github.com/a10y/rexrs) control SDK.
@@ -124,6 +126,7 @@ The `scripts/` directory holds integration checks; each script's docstring lists
 - `chrome-spike-x11.py` (with the `chrome_spike` example): borderless window chrome on X11.
 - `wayland-seat-smoke.py`: Wayland seat/resource selection on a multi-seat compositor.
 - `mouse-check.py`: terminal mouse reporting with real pointer input on a private headless Wayland display.
+- `readme-screenshot.py`: regenerates `docs/screenshot.png` from a private Rex server and headless compositor, with a throwaway home and prompt so no local details appear.
 - `demo-record.py`: records a demo video of the app on a private headless compositor (uses the `tools/vptr` virtual-pointer helper).
 
 See [AGENTS.md](AGENTS.md) for the code layout and contributor conventions, and [DESIGN.md](DESIGN.md) / [PRODUCT.md](PRODUCT.md) for the design system and product intent.
