@@ -118,7 +118,7 @@ def main():
         config = WORK / "workspace.json"
         config.write_text(json.dumps({
             "hosts": [{"label": "workstation", "endpoint": endpoint}],
-            "last_host": endpoint, "sessions": {endpoint: main_sid}, "sidebar": False, "font_size": 14}))
+            "last_host": endpoint, "sessions": {endpoint: main_sid}, "font_size": 14}))
         spawn([str(ROOT / "target/release/rex-linux"), "--endpoint", endpoint, "--session", main_sid,
                "--config", str(config), "--window-size", f"{int(W / SCALE)}x{int(H / SCALE)}"], env=env)
         keymap = WORK / "us.xkb"

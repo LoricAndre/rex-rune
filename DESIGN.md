@@ -6,7 +6,7 @@ Rex Linux draws calm, dark chrome around terminals that the server owns. The tok
 
 - **The terminal is the content.** Chrome frames it and stays out of the way. Terminal text, colours, cursor and split geometry come from the server and are never recoloured. The one exception: the server's default terminal black is replaced by the pane-card colour so panes sit in the surface; explicit colours are preserved.
 - **Chrome moves, content doesn't.** Popups spring open from their anchor and highlights and the sidebar slide; terminal content, pane geometry and cell rendering never animate.
-- **One working row.** Session identity, tabs, commands and the window's own controls share a single toolbar. Navigation (hosts → sessions) opens on demand, with an optional saved sidebar.
+- **One working row.** Session identity, tabs, commands and the window's own controls share a single toolbar. Navigation (hosts → sessions) opens on demand, with an optional sidebar.
 - **Quiet when healthy.** A connected host, a live pane and the active tab carry no status dots or "Connected" labels; names and host icons are enough. Words appear only for trouble ("Offline", "Reconnecting", "input paused"), in `WARNING`, next to the action that fixes it.
 - **Distinct states.** The current session, the keyboard-selected row, a captured pane target and live terminal focus each have a different cue. Keyboard selection is never fill alone.
 - **Name the target.** Creation actions name their host; destructive confirmations name the pane, tab and host and default to **Keep running**; closing the app leaves server programs running.
@@ -37,7 +37,7 @@ Chrome uses Inter (bundled with the kit) in 10–13 pt steps, weights about 450 
 
 - **Toolbar:** 52 pt chip bar. Controls sit on glassy chips (10 pt radius, 5.5% white fill, gradient hairline border). The empty space moves the window; edges and corners resize it; minimize/maximize/close are at the right end.
 - **Pane cards:** server-defined placements as rounded cards (12 pt radius) with a 30 pt header (pane name and, when needed, its exception strip), 8 pt gutters and 10 pt outer margin on the ground. Terminal text has 8 px padding inside its card. Divider drags preview immediately and send a ratio clamped to 0.1–0.9.
-- **Sidebar:** optional, hidden on a new install, default 236 pt wide (200–360 pt, drag the edge to resize, double-click to reset). Host rows are 28 pt, session rows 32 pt, groups separated by 12 pt.
+- **Sidebar:** optional and collapsed at every launch (only its width is saved), default 236 pt wide (200–360 pt, drag the edge to resize, double-click to reset). Host rows are 28 pt, session rows 32 pt, groups separated by 12 pt.
 - **Popovers:** session/host menus anchor to the identity; pane menus to the pointer (right-click) or the toolbar; the command menu is centered near the top. Popovers clamp to the viewport; long lists scroll with directional hints that count hidden rows.
 - **Dialogs** (forms, preferences, confirmation) are centered over a dark scrim and sized to their content within the viewport.
 - **Radii:** kit small 8, medium 10; chips 10; cards and popovers 12.

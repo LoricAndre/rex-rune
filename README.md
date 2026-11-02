@@ -14,7 +14,7 @@ It is written in Rust on [Rune](https://github.com/anomalyco/rune) (wgpu/winit, 
 
 - Multiple saved hosts, each with its sessions; session windows are tabs and splits follow the server's layout.
 - Unix-socket and HTTPS/WSS endpoints (for example a Tailscale-exposed Rex server).
-- A single toolbar with session identity, tabs, commands and the window's own controls, over rounded pane cards. Host-grouped session navigation opens on demand, with an optional saved sidebar.
+- A single toolbar with session identity, tabs, commands and the window's own controls, over rounded pane cards. Host-grouped session navigation opens on demand, with an optional sidebar (Ctrl Shift B) that starts collapsed on every launch.
 - Searchable session switcher (`Ctrl K`) and command palette (`Ctrl Shift P`).
 - Snapshot restore, live output, input, bracketed paste, text selection and copy, local scrollback, and mouse/wheel reporting for terminal programs.
 - Reconnect handling: a transport failure pauses input on affected panes (input is never replayed) while parsed output survives reconnects and session changes.
@@ -79,7 +79,7 @@ This installs `dev.shuv.rex-linux.desktop` under `$XDG_DATA_HOME/applications` (
 
 ## Configuration
 
-Preferences are stored as JSON in `$XDG_CONFIG_HOME/rex-linux/workspace.json` (default `~/.config/rex-linux/workspace.json`): saved hosts (label, endpoint, collapsed state, optional default shell), the last host and session per host, sidebar visibility and width, terminal font size and interface zoom (`ui_scale`). Use `--config <path>` to keep a separate workspace.
+Preferences are stored as JSON in `$XDG_CONFIG_HOME/rex-linux/workspace.json` (default `~/.config/rex-linux/workspace.json`): saved hosts (label, endpoint, collapsed state, optional default shell), the last host and session per host, sidebar width, terminal font size and interface zoom (`ui_scale`). Use `--config <path>` to keep a separate workspace.
 
 A host's default shell (empty means the server user's login shell) is used for every new session, tab and split this client creates on that host. Host endpoints must be `unix://` with an absolute path, or `https://`, `http://`, `wss://` or `ws://` URLs.
 

@@ -104,7 +104,7 @@ def main():
         call(["wlr-randr", "--output", "HEADLESS-1", "--custom-mode", f"{W}x{H}@60", "--scale", "1"], env)
         config = WORK / "workspace.json"
         config.write_text(json.dumps({"hosts": [{"label": "Mouse host", "endpoint": endpoint}],
-            "last_host": endpoint, "sessions": {endpoint: sid}, "sidebar": False, "font_size": 15, "ui_scale": 1.0}))
+            "last_host": endpoint, "sessions": {endpoint: sid}, "font_size": 15, "ui_scale": 1.0}))
         spawn([ROOT / "target/release/rex-linux", "--endpoint", endpoint, "--session", sid,
                "--config", config, "--window-size", f"{W}x{H}"], "app", env)
         keymap = WORK / "us.xkb"

@@ -116,12 +116,11 @@ impl Workspace {
         if options.font_size != 15. {
             settings.font_size = options.font_size;
         }
-        let mut sidebar = rune_kit::PaneState::new(236.)
+        // Every launch starts with the sidebar collapsed; only its width is remembered.
+        let sidebar = rune_kit::PaneState::new(236.)
             .range(200., 360.)
-            .with_width(settings.sidebar_width);
-        if !settings.sidebar {
-            sidebar = sidebar.collapsed();
-        }
+            .with_width(settings.sidebar_width)
+            .collapsed();
         let mut this = Self {
             logo: None,
             options,
@@ -406,7 +405,6 @@ impl Workspace {
             .hosts
             .get(self.active)
             .map(|h| h.endpoint.clone());
-        self.settings.sidebar = self.sidebar.is_open();
         self.settings.sidebar_width = self.sidebar.width();
         if let Err(error) = self.settings.save(&self.settings_path) {
             self.notify(format!("Preferences not saved: {error:#}"));

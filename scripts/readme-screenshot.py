@@ -3,8 +3,8 @@
 private Rex server whose fixture sessions run in a throwaway home with a plain bash prompt, so no
 user, host or path from the machine running it appears in the image.
 
-Needs a `rex` server binary, labwc, wlr-randr, grim, bat, eza, cargo and a release build
-(`cargo build --release`). Writes docs/screenshot.png (or SHOT_OUT).
+Needs a `rex` server binary, labwc, wlr-randr, grim, xkbcli, bat, eza, cargo, a release build
+(`cargo build --release`) and the `vptr` helper (`cargo build --release` in tools/vptr, or SHOT_VPTR). Writes docs/screenshot.png (or SHOT_OUT).
 """
 import json
 import os
@@ -97,7 +97,7 @@ def main():
         config = work / "workspace.json"
         config.write_text(json.dumps({
             "hosts": [{"label": "workstation", "endpoint": endpoint}],
-            "last_host": endpoint, "sessions": {endpoint: main_sid}, "sidebar": True, "font_size": 14}))
+            "last_host": endpoint, "sessions": {endpoint: main_sid}, "font_size": 14}))
         spawn([str(ROOT / "target/release/rex-linux"), "--endpoint", endpoint, "--session", main_sid,
                "--config", str(config), "--window-size", f"{int(W / SCALE)}x{int(H / SCALE)}"], env=env)
         # Run the fixture commands only once the client has attached and sized the panes.
@@ -105,6 +105,18 @@ def main():
         send(left, "eza --tree --color=always src")
         send(top_right, "bat -pp --color=always -r 54:73 src/app/theme.rs")
         send(bottom_right, "cargo test -q")
+        # The sidebar starts collapsed: open it with Ctrl Shift B through the virtual keyboard.
+        keymap = work / "us.xkb"
+        keymap.write_text(subprocess.check_output(["xkbcli", "compile-keymap", "--layout", "us"], text=True))
+        driver = subprocess.Popen([os.environ.get("SHOT_VPTR", str(ROOT / "tools/vptr/target/release/vptr")),
+                                   str(W), str(H), str(keymap)], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        processes.append(driver)
+        assert driver.stdout.readline().strip() == "ready"
+        for line in ("kdown 29", "kdown 42", "mods 5", "kdown 48", "kup 48",
+                     "kup 42", "kup 29", "mods 0"):
+            driver.stdin.write(line + "\n")
+            driver.stdin.flush()
+            time.sleep(0.05)
         time.sleep(float(os.environ.get("SHOT_WAIT", "20")))
         OUT.parent.mkdir(parents=True, exist_ok=True)
         subprocess.check_call(["grim", "-o", "HEADLESS-1", str(OUT)], env=env)
