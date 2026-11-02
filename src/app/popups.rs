@@ -20,6 +20,14 @@ enum Hidden {
 }
 
 /// A transparent full-window layer that eats presses outside the popup and closes it.
+/// The window-sized layer menus and dialogs open in, mounted even while empty. A surface that
+/// mounts with the layer rides the layer's fade, which composites offscreen, so its backdrop
+/// blur would see an empty layer until the fade fully settled, and then snap on.
+pub fn overlay() -> El {
+    el().key("overlay")
+        .pin(Some(0.), Some(0.), Some(0.), Some(0.))
+}
+
 fn dismiss_layer() -> El {
     el().key("popup-dismiss")
         .pin(Some(0.), Some(0.), Some(0.), Some(0.))
@@ -367,10 +375,7 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
         + if overflow { 24. } else { 0. };
     let x = ax.clamp(8., (vw - width - 8.).max(8.));
     let y = ay.clamp(8., (vh - estimated - 8.).max(8.));
-    let mut layer = el()
-        .key("popup-layer")
-        .pin(Some(0.), Some(0.), Some(0.), Some(0.))
-        .child(dismiss_layer());
+    let mut layer = overlay().child(dismiss_layer());
     if let Some(outline) = target_outline(s) {
         layer = layer.child(outline);
     }

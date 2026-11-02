@@ -76,13 +76,12 @@ pub(crate) fn view(s: &Workspace, cx: &mut Cx<Workspace>) -> El {
     if let Some(toasts) = dialogs::toasts(s) {
         root = root.child(toasts);
     }
-    if let Some(panel) = &s.panel {
-        if panel.is_list() {
-            root = root.child(popups::list_popup(s, viewport));
-        } else if let Some(dialog) = dialogs::dialog(s, viewport) {
-            root = root.child(dialog);
-        }
-    }
+    let open = match &s.panel {
+        Some(panel) if panel.is_list() => Some(popups::list_popup(s, viewport)),
+        Some(_) => dialogs::dialog(s, viewport),
+        None => None,
+    };
+    root = root.child(open.unwrap_or_else(popups::overlay));
     let mut window = el()
         .key("window")
         .w_full()

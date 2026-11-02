@@ -2,7 +2,7 @@
 use super::widgets::{Pill, glyph, pill};
 use super::{
     panel::{Form, PanelKind},
-    popups::target_outline,
+    popups::{overlay, target_outline},
     theme::*,
     workspace::Workspace,
 };
@@ -23,9 +23,8 @@ fn modal(s: &Workspace, viewport: [f32; 2], body: El) -> El {
 /// A centered dialog surface over a dark scrim; `surface` sets its own size and padding.
 pub fn modal_frame(s: &Workspace, surface: El) -> El {
     let panel = glass(surface.key("dialog").role("dialog"), 16., true).transition(pop_in());
-    let mut layer = el()
-        .key("modal")
-        .pin(Some(0.), Some(0.), Some(0.), Some(0.))
+    let mut layer = overlay()
+        .center()
         .modal(false, |s: &mut Workspace| s.cancel_panel_quiet())
         .child(
             el().key("scrim")
@@ -38,12 +37,7 @@ pub fn modal_frame(s: &Workspace, surface: El) -> El {
     if let Some(outline) = target_outline(s) {
         layer = layer.child(outline);
     }
-    layer.child(
-        col()
-            .pin(Some(0.), Some(0.), Some(0.), Some(0.))
-            .center()
-            .child(panel),
-    )
+    layer.child(panel)
 }
 
 fn title(t: &str) -> El {
