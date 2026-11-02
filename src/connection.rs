@@ -1113,7 +1113,18 @@ async fn handle_command(
             request(control, &method, payload).await?;
             shared.update(|m| m.notice = None);
             if let Some(id) = session_id {
-                refresh(control, shared, state, &id).await?;
+                // Destroying a session, or closing its last tab, ends it: nothing to re-read.
+                match refresh(control, shared, state, &id).await {
+                    Err(error)
+                        if matches!(
+                            error.downcast_ref::<rexrs::Error>(),
+                            Some(rexrs::Error::Api(rexrs::ApiError::SessionNotFound { .. }))
+                        ) =>
+                    {
+                        remove_session(shared, workers, &id)
+                    }
+                    result => result?,
+                }
             }
         }
         HostCommand::Ticket {

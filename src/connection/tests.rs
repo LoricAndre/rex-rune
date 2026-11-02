@@ -484,3 +484,51 @@ async fn activity_follows_every_session_and_queries_the_selected_one() {
     drop(host);
     server.await.unwrap();
 }
+
+#[tokio::test]
+async fn destroying_a_session_forgets_it_without_an_error() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let mut ws = accept(&listener, "rex.control.v1").await;
+        welcome(&mut ws, 8).await;
+        let request = recv(&mut ws).await;
+        reply(&mut ws, &request, 1, serde_json::to_value(boot()).unwrap()).await;
+        let destroy = recv(&mut ws).await;
+        assert_eq!(destroy["method"], "session.destroy");
+        reply(&mut ws, &destroy, 2, json!({})).await;
+        // The client re-reads the session it acted on, which is gone now.
+        let view = recv(&mut ws).await;
+        assert_eq!(view["method"], "session.view");
+        send(
+            &mut ws,
+            json!({"type":"response","id":view["id"],"error":{"code":"session_not_found",
+            "message":"session not found","status":404}}),
+        )
+        .await;
+        assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
+    });
+    let host = HostConnection::spawn(endpoint, None, None, None, false);
+    connected(&host).await;
+    host.commands
+        .send(HostCommand::Request {
+            method: "session.destroy".into(),
+            payload: json!({"session_id": SESSION}),
+        })
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(8), async {
+        while !host.model.lock().unwrap().sessions.is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    {
+        let m = host.model.lock().unwrap();
+        assert_eq!(m.notice, None);
+        assert_eq!(m.selected, None);
+        assert!(m.connected);
+    }
+    drop(host);
+    server.await.unwrap();
+}
