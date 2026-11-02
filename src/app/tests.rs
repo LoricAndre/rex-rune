@@ -364,6 +364,135 @@ fn tabs_and_splits_start_the_right_hosts_shell() {
     std::fs::remove_file(&ws.settings_path).ok();
 }
 
+/// Host 0 connected on session "s" with a one-pane tab "single" and a split tab "split".
+fn tabbed_workspace(active: &str) -> (Workspace, flume::Receiver<HostCommand>) {
+    let mut ws = workspace();
+    let rx = capture_host(&mut ws, 0);
+    let model = &mut ws.hosts[0].model;
+    model.connected = true;
+    model.sessions = vec![session("s")];
+    model.selected = Some("s".into());
+    model.views.insert(
+        "s".into(),
+        serde_json::from_value(serde_json::json!({
+            "revision": 1,
+            "session_id": "s",
+            "active_window_id": active,
+            "windows": [
+                {"window_id": "single", "label": "server", "focused_block_id": "block:a",
+                 "layers": [{"kind": "tiled", "layout": {"block_id": "block:a"},
+                    "blocks": [{"block_id": "block:a"}]}]},
+                {"window_id": "split", "label": "dev", "focused_block_id": "block:b",
+                 "layers": [{"kind": "tiled", "layout": {"split": {"direction": "horizontal", "ratio": 0.5,
+                    "before": {"block_id": "block:b"}, "after": {"block_id": "block:c"}}},
+                    "blocks": [{"block_id": "block:b"}, {"block_id": "block:c"}]}]}
+            ]
+        }))
+        .expect("a view"),
+    );
+    (ws, rx)
+}
+
+fn ctrl_shift(rt: &mut Runtime<Workspace>, c: char) {
+    rt.key(KeyEvent {
+        key: Key::Text(c.to_ascii_uppercase().to_string()),
+        mods: Mods {
+            ctrl: true,
+            shift: true,
+            ..Mods::default()
+        },
+    });
+    for _ in 0..3 {
+        rt.frame(1. / 60.);
+    }
+}
+
+#[test]
+fn a_single_pane_is_full_bleed_and_a_split_keeps_its_cards() {
+    let (ws, _rx) = tabbed_workspace("single");
+    let mut rt = runtime(ws);
+    for _ in 0..90 {
+        rt.frame(1. / 60.);
+    }
+    assert!(has(&rt, "pane:block:a"));
+    assert!(!has(&rt, "pane-header:block:a"), "no header on a lone pane");
+    let r = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("pane:block:a"))
+        .unwrap()
+        .rect;
+    assert_eq!((r[0], r[2]), (0., 1024.), "edge to edge: {r:?}");
+    assert!(!has(&rt, "close-tab:single"), "tabs have no close button");
+    std::fs::remove_file(&rt.state.settings_path).ok();
+
+    let (ws, _rx) = tabbed_workspace("split");
+    let rt = runtime(ws);
+    assert!(has(&rt, "pane-header:block:b") && has(&rt, "pane-header:block:c"));
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn a_tabs_menu_and_middle_click_act_on_that_tab() {
+    let (ws, rx) = tabbed_workspace("single");
+    let mut rt = runtime(ws);
+    secondary_click(&mut rt, "tab:split");
+    let panel = rt.state.panel.as_ref().expect("a tab menu");
+    assert!(matches!(&panel.kind, PanelKind::Window(id) if id == "split"));
+    assert_eq!(panel.title, "dev");
+    let labels: Vec<String> = rt.state.entries().into_iter().map(|e| e.label).collect();
+    assert_eq!(labels, ["Rename tab…", "Close tab…", "New tab"]);
+    assert!(has(&rt, "menu-surface"));
+    press(&mut rt, Key::Escape);
+    assert!(rt.state.panel.is_none());
+
+    let r = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("tab:split"))
+        .unwrap()
+        .rect;
+    let (x, y) = (r[0] + r[2] / 2., r[1] + r[3] / 2.);
+    rt.button_down(x, y, rune::PointerButton::Middle);
+    rt.button_up(x, y, rune::PointerButton::Middle);
+    for _ in 0..4 {
+        rt.frame(1. / 60.);
+    }
+    let panel = rt.state.panel.as_ref().expect("a close confirmation");
+    assert!(
+        matches!(&panel.kind, PanelKind::Confirm { method, payload, .. }
+            if method == "session.close_window" && payload["window_id"] == "split")
+    );
+    assert!(
+        requests(&rx).iter().all(|r| r.0 != "session.focus_window"),
+        "a middle-click doesn't switch tabs"
+    );
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn ctrl_shift_w_closes_a_lone_panes_tab_or_a_splits_focused_pane() {
+    let (ws, _rx) = tabbed_workspace("single");
+    let mut rt = runtime(ws);
+    ctrl_shift(&mut rt, 'w');
+    let panel = rt.state.panel.take().expect("a confirmation");
+    assert!(
+        matches!(&panel.kind, PanelKind::Confirm { method, payload, .. }
+            if method == "session.close_window" && payload["window_id"] == "single")
+    );
+    std::fs::remove_file(&rt.state.settings_path).ok();
+
+    let (ws, _rx) = tabbed_workspace("split");
+    let mut rt = runtime(ws);
+    ctrl_shift(&mut rt, 'w');
+    let panel = rt.state.panel.take().expect("a confirmation");
+    assert!(
+        matches!(&panel.kind, PanelKind::Confirm { method, payload, .. }
+            if method == "block.close" && payload["block_id"] == "block:b")
+    );
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
 fn session(id: &str) -> rexrs::api::session::Session {
     rexrs::api::session::Session {
         session_id: id.into(),

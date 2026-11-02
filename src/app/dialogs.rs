@@ -155,6 +155,7 @@ fn preferences(s: &Workspace) -> El {
         (&["Ctrl", "Alt", "D"], "Split down"),
         (&["Ctrl", "Shift", "Enter"], "Zoom pane"),
         (&["Ctrl", "Shift", "Space"], "Pane actions"),
+        (&["Ctrl", "Shift", "W"], "Close pane or tab"),
         (&["Ctrl", "Shift", "B"], "Toggle sidebar"),
     ];
     let mut table = col().gap(6.);

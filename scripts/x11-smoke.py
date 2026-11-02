@@ -105,10 +105,10 @@ def run():
             text("printf '\\033[2J\\033[HPOINTER_COPY_OK\\n'")
             key("Return")
             time.sleep(0.3)
-            # Midnight: 52pt bar, 30pt card header, grid 22pt in, 9px cells.
-            x("mousemove", "--window", window, "24", "92")
+            # A single pane is full-bleed: 52pt bar, grid 12pt in and 8pt down, 9px cells.
+            x("mousemove", "--window", window, "16", "68")
             x("mousedown", "1")
-            x("mousemove", "--window", window, "150", "92")
+            x("mousemove", "--window", window, "142", "68")
             x("mouseup", "1")
             key("ctrl+shift+c")
             text("echo ")

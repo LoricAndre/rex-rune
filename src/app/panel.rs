@@ -103,6 +103,8 @@ pub enum PanelKind {
     Session,
     /// A sidebar host header's right-click menu.
     Host(usize),
+    /// A tab's right-click menu, by window id.
+    Window(String),
     Form(Form),
     Settings,
     Confirm {
@@ -162,6 +164,7 @@ impl Panel {
                 | PanelKind::Pane
                 | PanelKind::Session
                 | PanelKind::Host(_)
+                | PanelKind::Window(_)
         )
     }
 }
@@ -314,6 +317,18 @@ impl Workspace {
         }
         if let PanelKind::Host(host) = panel.kind {
             return self.host_entries(host);
+        }
+        if let PanelKind::Window(id) = &panel.kind {
+            let connected = self.model().connected;
+            let mut entries = vec![
+                Entry::new("Rename tab…", "", "", Intent::RenameWindow(id.clone())),
+                Entry::new("Close tab…", "", "", Intent::CloseWindow(id.clone())),
+                Entry::new("New tab", "Ctrl Shift T", "", Intent::NewWindow),
+            ];
+            for e in &mut entries {
+                e.enabled = connected;
+            }
+            return entries;
         }
         let sessions_only = matches!(panel.kind, PanelKind::Picker(true));
         let pane_only = matches!(panel.kind, PanelKind::Pane);

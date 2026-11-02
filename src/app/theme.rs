@@ -51,9 +51,10 @@ pub fn inset(y: f32, color: Color) -> Shadow {
     }
 }
 
-pub const GROUND: u32 = 0x060b14;
+pub const GROUND: u32 = 0x001528;
 /// The card, and the terminal's default background (the server's default black is replaced).
-pub const CARD: u32 = 0x05080e;
+/// The same navy as the ground, so a single pane and the toolbar read as one surface.
+pub const CARD: u32 = 0x001528;
 pub const POPOVER: u32 = 0x0d1524;
 pub const INK: u32 = 0xe8eef6;
 pub const MUTED: u32 = 0x93a3b8;

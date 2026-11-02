@@ -6,7 +6,7 @@ use super::{
     widgets::{chrome_button, glyph},
     workspace::Workspace,
 };
-use rune::{Cursor, Cx, El, ScrollPos, Tx, col, el, row, text};
+use rune::{Cursor, Cx, El, PointerButton, ScrollPos, Tx, col, el, row, text};
 use serde_json::json;
 
 /// A chip's press: consume it (chips never drag the window) and keep the terminal focused.
@@ -78,25 +78,34 @@ fn tab_track(s: &Workspace) -> El {
             };
             let active = view.active_window_id.as_ref() == Some(&id);
             let label = tab.label.clone().unwrap_or_else(|| "Terminal".into());
-            let (press_id, rename_id, close_id) = (id.clone(), id.clone(), id.clone());
+            let (press_id, rename_id, menu_id) = (id.clone(), id.clone(), id.clone());
             let mut tab_el = row()
                 .key(format!("tab:{id}"))
                 .role("tab")
                 .label(label.clone())
                 .h_full()
-                .min_w(64.)
-                .max_w(210.)
-                .px(12.)
-                .gap(7.)
+                .min_w(96.)
+                .max_w(240.)
+                .px(14.)
+                .gap(8.)
                 .center_y()
                 .cursor(Cursor::Pointer)
                 .preserve_focus_on_press(true)
+                .pointer_buttons([PointerButton::Middle])
                 .on_press_tx(move |s: &mut Workspace, tx: &mut Tx| {
-                    s.request("session.focus_window", json!({"window_id":press_id}));
-                    tx.blur();
+                    // Middle-click closes, behind the same confirmation as Close tab.
+                    if tx.button() == PointerButton::Middle {
+                        s.perform(Intent::CloseWindow(press_id.clone()), tx);
+                    } else {
+                        s.request("session.focus_window", json!({"window_id":press_id}));
+                        tx.blur();
+                    }
                 })
                 .on_double_press_tx(move |s: &mut Workspace, tx: &mut Tx| {
                     s.perform(Intent::RenameWindow(rename_id.clone()), tx);
+                })
+                .on_secondary_press(move |s: &mut Workspace, p, _| {
+                    s.tab_menu(menu_id.clone(), (p.x, p.y))
                 });
             if active {
                 tab_el = tab_el.child(
@@ -122,25 +131,6 @@ fn tab_track(s: &Workspace) -> El {
                     .help_when_truncated(label)
                     .shrink(),
             );
-            if active {
-                tab_el = tab_el.child(
-                    row()
-                        .key(format!("close-tab:{close_id}"))
-                        .role("button")
-                        .label("Close tab and its programs")
-                        .size(18., 18.)
-                        .center()
-                        .radius(6.)
-                        .hover(white(0.1))
-                        .cursor(Cursor::Pointer)
-                        .preserve_focus_on_press(true)
-                        .help("Close tab and its programs")
-                        .on_press_tx(move |s: &mut Workspace, tx: &mut Tx| {
-                            s.perform(Intent::CloseWindow(close_id.clone()), tx)
-                        })
-                        .child(glyph(&CLOSE, 12., rgb(INK).alpha(0.8))),
-                );
-            }
             names = names.child(tab_el);
         }
     }
@@ -193,49 +183,32 @@ fn tab_track(s: &Workspace) -> El {
             .live_opacity(&s.tab_fade[1]),
         );
     }
-    track = track
-        .child(el().w(1.).h(16.).mx(3.).fill(white(0.08)))
-        .child(chrome_button(
-            "new-tab",
-            &PLUS,
-            "New tab · Ctrl Shift T",
-            28.,
-            |s, tx| s.perform(Intent::NewWindow, tx),
-        ));
     chip_press(chip(track).on_press(|_: &mut Workspace| {}))
 }
 
-fn search_chip(wide: bool) -> El {
-    let mut e = row()
-        .key("commands")
-        .role("button")
-        .label("Commands")
-        .h(34.)
-        .px(10.)
-        .gap(8.)
-        .center_y()
-        .hover(white(0.08))
-        .help("Commands, sessions and tabs · Ctrl Shift P")
-        .on_press_tx(|s: &mut Workspace, tx: &mut Tx| {
-            s.picker(false);
-            tx.blur();
-        })
-        .child(glyph(&COMMAND, 15., rgb(MUTED)));
-    if wide {
-        e = e
-            .w(240.)
-            .child(
-                text("Commands, sessions, tabs")
-                    .font(ui(12.))
-                    .color(rgb(MUTED))
-                    .grow(1.)
-                    .truncate(),
-            )
-            .child(text("⌃⇧P").font(medium(10.5)).color(rgb(MUTED)));
-    } else {
-        e = e.w(36.).px(0.).center();
-    }
-    chip_press(chip(e))
+/// A 34pt square chip holding one icon: Commands and New tab.
+fn icon_chip(
+    key: &str,
+    i: &'static rune::Icon,
+    label: &str,
+    help: &str,
+    f: impl Fn(&mut Workspace, &mut Tx) + 'static,
+) -> El {
+    chip_press(chip(
+        row()
+            .key(key.to_owned())
+            .role("button")
+            .label(label.to_owned())
+            .size(34., 34.)
+            .center()
+            .hover(white(0.08))
+            .help(help.to_owned())
+            .on_press_tx(move |s: &mut Workspace, tx: &mut Tx| {
+                f(s, tx);
+                tx.blur();
+            })
+            .child(glyph(i, 15., rgb(MUTED))),
+    ))
 }
 
 /// A window control: the round hover shows inside, but the hit area takes the bar's whole
@@ -287,7 +260,6 @@ fn window_control(
 }
 
 pub fn toolbar(s: &Workspace, cx: &mut Cx<Workspace>) -> El {
-    let width = cx.layout_size("root").map_or(1440., |[w, _]| w);
     let maximized = cx.window_maximized();
     row()
         .key("toolbar")
@@ -309,7 +281,20 @@ pub fn toolbar(s: &Workspace, cx: &mut Cx<Workspace>) -> El {
         .child(tab_track(s))
         // Always at least 48pt of window to drag, outside the tabs.
         .child(el().key("title-drag").grow(1.).min_w(48.).h_full())
-        .child(search_chip(width >= 1280.))
+        .child(icon_chip(
+            "commands",
+            &COMMAND,
+            "Commands",
+            "Commands, sessions and tabs · Ctrl Shift P",
+            |s, _| s.picker(false),
+        ))
+        .child(icon_chip(
+            "new-tab",
+            &PLUS,
+            "New tab",
+            "New tab · Ctrl Shift T",
+            |s, tx| s.perform(Intent::NewWindow, tx),
+        ))
         .child(
             row()
                 .child(window_control(

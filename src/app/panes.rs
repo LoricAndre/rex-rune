@@ -1,5 +1,6 @@
 //! The pane area: server-placed terminals as floating cards in 8pt gutters, each with a header
-//! (status, label, size, exception pill), drag handles in the gutters, and empty states.
+//! (status, label, size, exception pill), drag handles in the gutters, and empty states. A tab
+//! with a single pane draws it edge to edge instead.
 //! Cards spring when the layout changes; the terminal grid inside never animates.
 use super::{
     panel::{Form, Intent, PanelKind},
@@ -9,6 +10,7 @@ use super::{
     workspace::{DividerDrag, Workspace},
 };
 use rex_linux::{connection::Command, layout};
+use rexrs::api::session::Window;
 use rune::{Cursor, El, Phase, PointerButton, PointerEvent, Tx, WheelEvent, col, el, row, text};
 
 /// The area cards are laid out in, in the pane area's own points.
@@ -61,14 +63,16 @@ enum CardState {
     Plain,
 }
 
+/// A tab with one pane, not zoomed, draws it edge to edge: no card, header or margin.
+pub fn full_bleed(window: &Window) -> bool {
+    window.zoomed_block_id.is_none() && layout::placements(window, None).0.len() == 1
+}
+
 fn header(s: &Workspace, block: &str, width: f32, focused: bool, m: &Metrics) -> El {
-    let key = (s.active, block.to_owned());
     let label = s.block_label(block);
-    let t = s.terminals.get(&key);
-    let status = t.map(|t| t.status());
     let id = block.to_owned();
     let menu_id = block.to_owned();
-    let mut h = row()
+    let h = row()
         .key(format!("pane-header:{block}"))
         .w_full()
         .h(CARD_HEADER)
@@ -96,6 +100,17 @@ fn header(s: &Workspace, block: &str, width: f32, focused: bool, m: &Metrics) ->
                 .shrink(),
         )
         .child(el().grow(1.));
+    match strip(s, block, width, m) {
+        Some(strip) => h.child(strip),
+        None => h,
+    }
+}
+
+/// The exception strip for a pane that is reconnecting, with its Retry action.
+fn strip(s: &Workspace, block: &str, width: f32, m: &Metrics) -> Option<El> {
+    let key = (s.active, block.to_owned());
+    let t = s.terminals.get(&key);
+    let status = t.map(|t| t.status());
     let pill_label = status.as_ref().and_then(|st| {
         let hidden = t.map_or(0, |t| t.hidden_rows(m.cell));
         let rows = if hidden > 0 {
@@ -108,7 +123,7 @@ fn header(s: &Workspace, block: &str, width: f32, focused: bool, m: &Metrics) ->
         };
         (!st.live).then(|| (format!("Reconnecting · input paused{rows}"), "Retry"))
     });
-    if let Some((msg, action)) = pill_label {
+    pill_label.map(|(msg, action)| {
         let target = key.clone();
         let status_text = status.map(|s| s.status).unwrap_or_default();
         let mut p = row()
@@ -133,7 +148,7 @@ fn header(s: &Workspace, block: &str, width: f32, focused: bool, m: &Metrics) ->
                     .help(status_text),
             );
         }
-        p = p.child(
+        p.child(
             pill(
                 &format!("strip-action:{block}"),
                 action,
@@ -147,10 +162,8 @@ fn header(s: &Workspace, block: &str, width: f32, focused: bool, m: &Metrics) ->
             .focusable(false)
             .preserve_focus_on_press(true)
             .tab_index(-1),
-        );
-        h = h.child(p);
-    }
-    h
+        )
+    })
 }
 
 fn card(
@@ -160,6 +173,7 @@ fn card(
     m: &Metrics,
     state: CardState,
     input: bool,
+    bleed: bool,
 ) -> El {
     let key = (s.active, block.to_owned());
     let id = block.to_owned();
@@ -168,9 +182,6 @@ fn card(
         .key(format!("pane:{block}"))
         .absolute(rect[0], rect[1])
         .size(rect[2], rect[3])
-        .radius(CARD_RADIUS)
-        .continuous_corners()
-        .clip_rounded(CARD_RADIUS)
         .fill(rgb(CARD))
         .motion(SNAPPY)
         // Cards appear and leave at once (a tab or session switch never crossfades terminals);
@@ -179,21 +190,27 @@ fn card(
         .on_secondary_press(move |s: &mut Workspace, p, _| {
             s.pane_menu(id.clone(), Some((p.x, p.y)))
         });
-    c = match state {
-        CardState::Focused => c
-            .border_gradient(1., rgb(ACCENT).alpha(0.85), rgb(ACCENT).alpha(0.5))
-            .box_shadow(shadow(0., 0., 24., rgb(ACCENT).alpha(0.2)))
-            .box_shadow(shadow(0., 14., 40., black(0.55))),
-        CardState::Target => {
-            c.border(1., rgb(ACCENT).alpha(0.85))
-                .box_shadow(shadow(0., 10., 30., black(0.45)))
-        }
-        CardState::Plain => c
-            .border_gradient(1., white(0.10), white(0.035))
-            .box_shadow(shadow(0., 10., 30., black(0.45))),
-    };
-    c = c.child(header(s, block, rect[2], focused, m));
-    match s.terminals.get(&key) {
+    if !bleed {
+        c = c
+            .radius(CARD_RADIUS)
+            .continuous_corners()
+            .clip_rounded(CARD_RADIUS);
+        c = match state {
+            CardState::Focused => c
+                .border_gradient(1., rgb(ACCENT).alpha(0.85), rgb(ACCENT).alpha(0.5))
+                .box_shadow(shadow(0., 0., 24., rgb(ACCENT).alpha(0.2)))
+                .box_shadow(shadow(0., 14., 40., black(0.55))),
+            CardState::Target => {
+                c.border(1., rgb(ACCENT).alpha(0.85))
+                    .box_shadow(shadow(0., 10., 30., black(0.45)))
+            }
+            CardState::Plain => c
+                .border_gradient(1., white(0.10), white(0.035))
+                .box_shadow(shadow(0., 10., 30., black(0.45))),
+        };
+        c = c.child(header(s, block, rect[2], focused, m));
+    }
+    let c = match s.terminals.get(&key) {
         Some(t) => {
             let cursor = if input && s.window_focused {
                 CursorLook::Block
@@ -360,6 +377,7 @@ fn card(
                     .w_full()
                     .min_h(0.)
                     .px(PADDING + 4.)
+                    .pt(if bleed { PADDING } else { 0. })
                     .pb(PADDING)
                     .instant_changes()
                     .motion(STILL)
@@ -377,6 +395,11 @@ fn card(
                 .color(rgb(MUTED)),
             ),
         ),
+    };
+    // With no header to hold it, the strip floats over the pane's top-right corner.
+    match strip(s, block, rect[2], m).filter(|_| bleed) {
+        Some(strip) => c.child(strip.pin(None, Some(8.), Some(12.), None)),
+        None => c,
     }
 }
 
@@ -471,8 +494,13 @@ pub fn area(s: &Workspace) -> El {
     let preview = s.drag.as_ref().map(|d| (d.divider.key(), d.ratio));
     let (panes, dividers) =
         layout::placements(current, preview.as_ref().map(|(k, r)| (k.as_str(), *r)));
+    let bleed = full_bleed(current);
     for placement in panes {
-        let rect = card_rect(s, placement.rect);
+        let rect = if bleed {
+            [0., 0., s.area[2], s.area[3]]
+        } else {
+            card_rect(s, placement.rect)
+        };
         let is_focus = focused.as_deref() == Some(placement.block.as_str());
         let state = if target.as_deref() == Some(placement.block.as_str()) {
             CardState::Target
@@ -488,6 +516,7 @@ pub fn area(s: &Workspace) -> El {
             &m,
             state,
             is_focus && s.panel.is_none(),
+            bleed,
         ));
     }
     let [ix, iy, iw, ih] = inner(s);

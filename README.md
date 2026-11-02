@@ -14,7 +14,7 @@ It is written in Rust on [Rune](https://github.com/anomalyco/rune) (wgpu/winit, 
 
 - Multiple saved hosts, each with its sessions; session windows are tabs and splits follow the server's layout.
 - Unix-socket and HTTPS/WSS endpoints (for example a Tailscale-exposed Rex server).
-- A single toolbar with session identity, tabs, commands and the window's own controls, over rounded pane cards. Host-grouped session navigation opens on demand, with an optional sidebar (Ctrl Shift B) that starts collapsed on every launch.
+- A single toolbar with session identity, tabs, commands and the window's own controls. A tab with one pane draws it edge to edge; splits are rounded pane cards. Tabs close from their right-click menu, a middle-click or `Ctrl Shift W`, always behind a confirmation. Host-grouped session navigation opens on demand, with an optional sidebar (Ctrl Shift B) that starts collapsed on every launch.
 - Searchable session switcher (`Ctrl K`) and command palette (`Ctrl Shift P`).
 - Snapshot restore, live output, input, bracketed paste, text selection and copy, local scrollback, and mouse/wheel reporting for terminal programs.
 - Reconnect handling: a transport failure pauses input on affected panes (input is never replayed) while parsed output survives reconnects and session changes.
@@ -95,6 +95,7 @@ A host's default shell (empty means the server user's login shell) is used for e
 | Alt arrows | Focus an adjacent pane |
 | Ctrl Shift Enter | Zoom / restore the focused pane |
 | Ctrl Shift Space | Focused-pane actions |
+| Ctrl Shift W | Close the focused pane, or the tab when it has one pane (asks first) |
 | Ctrl Shift B | Collapse / restore the sidebar |
 | Ctrl Shift C / V | Copy selection / paste (bracketed-paste aware) |
 | Ctrl Shift R | Resume the focused terminal's data stream |

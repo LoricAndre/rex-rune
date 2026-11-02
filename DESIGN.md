@@ -4,7 +4,7 @@ Rex Linux draws calm, dark chrome around terminals that the server owns. The tok
 
 ## Principles
 
-- **The terminal is the content.** Chrome frames it and stays out of the way. Terminal text, colours, cursor and split geometry come from the server and are never recoloured. The one exception: the server's default terminal black is replaced by the pane-card colour so panes sit in the surface; explicit colours are preserved.
+- **The terminal is the content.** Chrome frames it and stays out of the way. Terminal text, colours, cursor and split geometry come from the server and are never recoloured. The one exception: the server's default terminal background is drawn in the navy `CARD` colour, the same as the ground, so a single pane and the toolbar read as one surface; explicit colours are preserved.
 - **Chrome moves, content doesn't.** Popups spring open from their anchor and highlights and the sidebar slide; terminal content, pane geometry and cell rendering never animate.
 - **One working row.** Session identity, tabs, commands and the window's own controls share a single toolbar. Navigation (hosts → sessions) opens on demand, with an optional sidebar.
 - **Quiet when healthy.** A connected host, a live pane and the active tab carry no status dots or "Connected" labels; names and host icons are enough. Words appear only for trouble ("Offline", "Reconnecting", "input paused"), in `WARNING`, next to the action that fixes it.
@@ -15,8 +15,8 @@ Rex Linux draws calm, dark chrome around terminals that the server owns. The tok
 
 | Token | Value | Use |
 | --- | --- | --- |
-| `GROUND` | `#060b14` | Window ground and page background |
-| `CARD` | `#05080e` | Pane cards; the terminal's default background |
+| `GROUND` | `#001528` | Window ground and page background |
+| `CARD` | `#001528` | Pane cards; the terminal's default background (the same navy as the ground) |
 | `POPOVER` | `#0d1524` | Popovers, dialogs, raised surfaces (drawn at 95% over a backdrop blur) |
 | `INK` | `#e8eef6` | Primary text and icons |
 | `MUTED` | `#93a3b8` | Secondary text, labels, shortcuts and icons |
@@ -35,10 +35,11 @@ Chrome uses Inter (bundled with the kit) in 10–13 pt steps, weights about 450 
 
 ## Layout and shape
 
-- **Toolbar:** 52 pt chip bar. Controls sit on glassy chips (10 pt radius, 5.5% white fill, gradient hairline border). The empty space moves the window; edges and corners resize it; minimize/maximize/close are at the right end.
-- **Pane cards:** server-defined placements as rounded cards (12 pt radius) with a 30 pt header (pane name and, when needed, its exception strip), 8 pt gutters and 10 pt outer margin on the ground. Terminal text has 8 px padding inside its card. Divider drags preview immediately and send a ratio clamped to 0.1–0.9.
+- **Toolbar:** 52 pt chip bar. Controls sit on glassy chips (10 pt radius, 5.5% white fill, gradient hairline border). Tab pills are 96–240 pt wide with no close button: a tab closes from its right-click menu, a middle-click or `Ctrl Shift W`. Commands (⌘) and New tab (+) are 34 pt icon chips on the right. The empty space moves the window; edges and corners resize it; minimize/maximize/close are at the right end.
+- **Single pane:** a tab with one pane, not zoomed, draws it edge to edge under the toolbar with no card, header, border or margin. Its exception strip floats at the pane's top-right corner.
+- **Pane cards:** splits, and a zoomed pane, are server-defined placements as rounded cards (12 pt radius) with a 30 pt header (pane name and, when needed, its exception strip), 8 pt gutters and 10 pt outer margin on the ground; their border separates them from the same-coloured ground. Terminal text has 8 px padding inside its card. Divider drags preview immediately and send a ratio clamped to 0.1–0.9.
 - **Sidebar:** optional and collapsed at every launch (only its width is saved), default 236 pt wide (200–360 pt, drag the edge to resize, double-click to reset). Host rows are 28 pt, session rows 32 pt, groups separated by 12 pt.
-- **Popovers:** session/host menus anchor to the identity; pane menus to the pointer (right-click) or the toolbar; the command menu is centered near the top. Popovers clamp to the viewport; long lists scroll with directional hints that count hidden rows.
+- **Popovers:** session/host menus anchor to the identity; pane and tab menus to the pointer (right-click), and pane menus also to the toolbar; the command menu is centered near the top. Popovers clamp to the viewport; long lists scroll with directional hints that count hidden rows.
 - **Dialogs** (forms, preferences, confirmation) are centered over a dark scrim and sized to their content within the viewport.
 - **Radii:** kit small 8, medium 10; chips 10; cards and popovers 12.
 - **Icons:** authored strokes on a 20×20 view box, 1.5 stroke, round caps and joins, `currentColor`. Hosts show their kind (a monitor for this machine's Unix socket, a server for a remote endpoint) in the identity chip, sidebar headers and switcher groups; tabs carry a `>_` glyph; the Commands button is ⌘. Magnifying glasses mark search fields only.

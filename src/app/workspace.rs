@@ -609,6 +609,42 @@ impl Workspace {
         panel.anchor = Some((anchor.0 / scale, anchor.1 / scale));
     }
 
+    /// A tab's right-click menu, at the pointer (window points).
+    pub fn tab_menu(&mut self, window: String, anchor: (f32, f32)) {
+        let title = self
+            .model()
+            .view()
+            .and_then(|v| {
+                v.windows
+                    .iter()
+                    .find(|w| w.window_id.as_ref() == Some(&window))
+            })
+            .map(|w| w.label.clone().unwrap_or_else(|| "Terminal".into()))
+            .unwrap_or_else(|| "Tab".into());
+        let scale = self.ui_scale();
+        self.open_panel(PanelKind::Window(window), &title, &[]);
+        let panel = self.panel.as_mut().unwrap();
+        panel.target = None;
+        panel.anchor = Some((anchor.0 / scale, anchor.1 / scale));
+    }
+
+    /// Ctrl Shift W: closes the focused pane of a split tab, or the tab when it has one pane.
+    /// Both ask first.
+    pub fn close_focused(&mut self, tx: &mut Tx) {
+        let Some(window) = self.model().window() else {
+            return;
+        };
+        let panes = window.layers.iter().flat_map(|l| &l.blocks).count();
+        let id = window.window_id.clone();
+        if panes > 1
+            && let Some(target) = self.focused_block().and_then(|b| self.target(&b))
+        {
+            self.perform(Intent::Pane(target, PaneAction::Close), tx);
+        } else if let Some(id) = id {
+            self.perform(Intent::CloseWindow(id), tx);
+        }
+    }
+
     pub fn target(&self, block: &str) -> Option<PaneTarget> {
         let model = self.model();
         Some(PaneTarget {

@@ -1,4 +1,4 @@
-//! List popups: the session switcher, the host step, Commands and the pane menu. No scrim;
+//! List popups: the session switcher, the host step, Commands and the pane and tab menus. No scrim;
 //! an outside press dismisses and is consumed.
 use super::{
     input::list_key,
@@ -49,13 +49,18 @@ pub fn target_outline(s: &Workspace) -> Option<El> {
         .0
         .into_iter()
         .find(|p| p.block == target.block)?;
-    let [ax, ay, _, _] = s.area;
-    let [x, y, w, h] = super::panes::card_rect(s, placement.rect);
+    let [ax, ay, aw, ah] = s.area;
+    let bleed = super::panes::full_bleed(current);
+    let ([x, y, w, h], radius) = if bleed {
+        ([0., 0., aw, ah], 0.)
+    } else {
+        (super::panes::card_rect(s, placement.rect), CARD_RADIUS)
+    };
     Some(
         el().key("target-outline")
             .absolute(ax + x, ay + y)
             .size(w, h)
-            .radius(CARD_RADIUS)
+            .radius(radius)
             .continuous_corners()
             .border(1.5, rgb(ACCENT)),
     )
@@ -65,10 +70,10 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
     let k = kit();
     let panel = s.panel.as_ref().expect("list panel");
     let sessions = matches!(panel.kind, PanelKind::Picker(true) | PanelKind::Hosts(_));
-    // Context menus (a pane's, a sidebar session's) share one shape.
+    // Context menus (a pane's, a tab's, a sidebar session's) share one shape.
     let pane = matches!(
         panel.kind,
-        PanelKind::Pane | PanelKind::Session | PanelKind::Host(_)
+        PanelKind::Pane | PanelKind::Session | PanelKind::Host(_) | PanelKind::Window(_)
     );
     let commands = matches!(panel.kind, PanelKind::Picker(false));
     let [vw, vh] = viewport;
@@ -112,6 +117,7 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
         PanelKind::Hosts(_) => "hosts",
         PanelKind::Session => "session-menu",
         PanelKind::Host(_) => "host-menu",
+        PanelKind::Window(_) => "tab-menu",
         _ => "pane-menu",
     };
     let mut spans: Vec<(f32, f32, Hidden)> = Vec::new();

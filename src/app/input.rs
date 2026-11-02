@@ -27,6 +27,7 @@ fn letter(ev: &KeyEvent, tx: &Tx, c: char) -> bool {
         'r' => Code::KeyR,
         't' => Code::KeyT,
         'v' => Code::KeyV,
+        'w' => Code::KeyW,
         _ => return false,
     };
     // By the character the key types (Dvorak's Ctrl T is where QWERTY's K is), falling back
@@ -82,6 +83,8 @@ fn shortcut(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
             s.perform(Intent::NewSession, tx);
         } else if letter(ev, tx, 't') {
             s.perform(Intent::NewWindow, tx);
+        } else if letter(ev, tx, 'w') {
+            s.close_focused(tx);
         } else if letter(ev, tx, 'd') {
             s.perform(Intent::Split("horizontal"), tx);
         } else if ev.key == Key::Enter {
