@@ -8,7 +8,7 @@ use super::{
     widgets::ScrollFx,
 };
 use rex_linux::{
-    connection::{Command, HostCommand, HostConnection, HostModel, Options},
+    connection::{Command, DEFAULT_TAB_LABEL, HostCommand, HostConnection, HostModel, Options},
     layout::{Divider, shell_layout},
     settings::{Host, NoticePosition, Settings, validate_host},
 };
@@ -666,7 +666,7 @@ impl Workspace {
             ),
             Intent::NewWindow => self.request(
                 "session.new_window",
-                json!({"window_label":"Shell","layout":shell_layout(self.shell(self.active)),"focus":true}),
+                json!({"window_label":DEFAULT_TAB_LABEL,"layout":shell_layout(self.shell(self.active)),"focus":true}),
             ),
             Intent::Split(direction) => {
                 if let Some(block) = self.focused_block() {
@@ -682,7 +682,7 @@ impl Workspace {
                     .model()
                     .view()
                     .and_then(|v| v.windows.iter().find(|w| w.window_id.as_ref() == Some(&id)))
-                    .and_then(|w| w.label.clone())
+                    .map(|w| super::activity::tab_name(self.model(), w))
                     .unwrap_or_default();
                 self.open_panel(PanelKind::Form(Form::RenameWindow(id)), "Rename tab", &[("Tab name", "", &label)]);
             }
@@ -765,7 +765,7 @@ impl Workspace {
                     .iter()
                     .find(|w| w.window_id.as_ref() == Some(&window))
             })
-            .map(|w| w.label.clone().unwrap_or_else(|| "Terminal".into()))
+            .map(|w| super::activity::tab_name(self.model(), w))
             .unwrap_or_else(|| "Tab".into());
         let scale = self.ui_scale();
         self.open_panel(PanelKind::Window(window), &title, &[]);

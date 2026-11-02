@@ -7,7 +7,7 @@ use super::{
     workspace::{HostId, Workspace},
 };
 use rex_linux::connection::{
-    HostModel,
+    DEFAULT_TAB_LABEL, HostModel,
     activity::{BlockedKind, ProgramState},
 };
 use rexrs::api::session;
@@ -36,18 +36,32 @@ fn blocks(window: &session::Window) -> impl Iterator<Item = &str> {
         .filter_map(|b| b.block_id.as_deref())
 }
 
+fn focused_block(window: &session::Window) -> Option<&str> {
+    window
+        .focused_block_id
+        .as_deref()
+        .filter(|f| blocks(window).any(|b| b == *f))
+        .or_else(|| blocks(window).next())
+}
+
+/// What a tab is called: the name it was given, or for one that still has the label every
+/// new tab gets, its focused program's terminal title when there is one.
+pub fn tab_name(model: &HostModel, window: &session::Window) -> String {
+    let label = window.label.as_deref().filter(|l| !l.is_empty());
+    let title = label
+        .is_none_or(|l| l == DEFAULT_TAB_LABEL)
+        .then(|| focused_block(window).and_then(|b| model.title(b)))
+        .flatten();
+    title.or(label).unwrap_or("Terminal").to_owned()
+}
+
 /// Fold a tab's records with Blocked > Error > Working > Done > Idle.
 pub fn tab_activity(model: &HostModel, window: &session::Window) -> TabActivity {
     let top = blocks(window)
         .filter_map(|b| model.activity.get(b))
         .flat_map(|records| records.values())
         .max_by_key(|r| r.state);
-    let focus = window
-        .focused_block_id
-        .as_deref()
-        .filter(|f| blocks(window).any(|b| b == *f))
-        .or_else(|| blocks(window).next());
-    let program = focus.and_then(|b| {
+    let program = focused_block(window).and_then(|b| {
         model
             .activity
             .get(b)
@@ -272,8 +286,7 @@ impl Workspace {
         let view = model.views.get(session);
         let tab = view
             .and_then(|v| v.windows.iter().find(|w| w.window_id.as_deref() == window))
-            .and_then(|w| w.label.clone())
-            .unwrap_or_else(|| "Terminal".into());
+            .map_or_else(|| "Terminal".into(), |w| tab_name(model, w));
         let session = model
             .sessions
             .iter()

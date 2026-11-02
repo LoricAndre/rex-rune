@@ -17,6 +17,9 @@ use std::{
 
 pub mod activity;
 
+/// The label new tabs get. A tab that still has it shows its program's terminal title.
+pub const DEFAULT_TAB_LABEL: &str = "Shell";
+
 #[derive(Clone, Debug, clap::Parser)]
 #[command(
     version,
@@ -133,6 +136,10 @@ pub struct HostModel {
     pub activity: HashMap<String, BTreeMap<String, StatusRecord>>,
     /// Each terminal block's foreground program, when the server named one.
     pub programs: HashMap<String, String>,
+    /// Each terminal block's foreground process and its ancestors, by pid.
+    pub foreground: HashMap<String, Vec<u64>>,
+    /// Each terminal block's title, as a program last set it, and the pid that set it.
+    pub titles: HashMap<String, (String, Option<u64>)>,
     /// Program notifications not yet taken by the UI.
     pub notices: Vec<DesktopNotice>,
     /// Bumped whenever `activity` is dropped wholesale (on reconnect), so the UI starts its
@@ -155,11 +162,23 @@ impl HostModel {
                     }
                 }
             }
-            BlockEvent::Process(Some(name)) => {
-                self.programs.insert(block, name);
+            BlockEvent::Process { name, pids } => {
+                match name {
+                    Some(name) => self.programs.insert(block.clone(), name),
+                    None => self.programs.remove(&block),
+                };
+                if pids.is_empty() {
+                    self.foreground.remove(&block);
+                } else {
+                    self.foreground.insert(block, pids);
+                }
             }
-            BlockEvent::Process(None) => {
-                self.programs.remove(&block);
+            BlockEvent::Title { text, owner } => {
+                if text.is_empty() {
+                    self.titles.remove(&block);
+                } else {
+                    self.titles.insert(block, (text, owner));
+                }
             }
             BlockEvent::Notification { title, body } => {
                 // A program spamming notifications can't grow this without bound.
@@ -177,6 +196,19 @@ impl HostModel {
     fn forget_block(&mut self, block: &str) {
         self.activity.remove(block);
         self.programs.remove(block);
+        self.foreground.remove(block);
+        self.titles.remove(block);
+    }
+
+    /// The block's terminal title while it's current. Shells rarely clear a title when the
+    /// program that set it exits, so it counts only while that program, or one it runs under,
+    /// is still in the foreground.
+    pub fn title(&self, block: &str) -> Option<&str> {
+        let (text, owner) = self.titles.get(block)?;
+        match (owner, self.foreground.get(block)) {
+            (Some(pid), Some(pids)) if !pids.contains(pid) => None,
+            _ => Some(text),
+        }
     }
 
     pub fn view(&self) -> Option<&session::ViewResponse> {
@@ -692,8 +724,9 @@ fn view_blocks(view: &session::ViewResponse) -> impl Iterator<Item = String> + '
         .filter_map(|b| b.block_id.clone())
 }
 
-/// Ask once per block of the selected session what its programs last reported, and which
-/// program runs in the blocks that aren't streamed (streams get process_changed anyway).
+/// Ask once per block of the selected session what its programs last reported, its title,
+/// and which program runs in the blocks that aren't streamed (streams get process_changed
+/// anyway).
 /// Revision 8 and later only. A failed query leaves the block without activity; it isn't
 /// retried.
 async fn query_activity(
@@ -730,13 +763,18 @@ async fn query_activity(
                 }
             });
         }
+        let method = format!("{}.title", activity::TERMINAL);
+        if let Ok(reply) = request(control, &method, target.clone()).await {
+            let title = activity::parse_title(&reply);
+            shared.update(|m| m.apply_block_event(&session, block.clone(), title));
+        }
         if workers.contains_key(&block) {
             continue;
         }
         let method = format!("{}.process", activity::TERMINAL);
         if let Ok(reply) = request(control, &method, target).await {
-            let name = activity::program_name(&reply["foreground"]);
-            shared.update(|m| m.apply_block_event(&session, block, BlockEvent::Process(name)));
+            let process = activity::parse_process(&reply);
+            shared.update(|m| m.apply_block_event(&session, block, process));
         }
     }
 }
@@ -922,6 +960,8 @@ async fn run_host(
                 // Reports made while disconnected were missed; queries refill what's shown.
                 m.activity.clear();
                 m.programs.clear();
+                m.foreground.clear();
+                m.titles.clear();
                 m.activity_epoch += 1;
             });
             let mut state = ControlState::default();
@@ -1095,7 +1135,7 @@ async fn handle_command(
             });
         }
         HostCommand::CreateSession { label, shell } => {
-            let mut payload = json!({"initial_windows":[{"window_label":"Shell","layout":crate::layout::shell_layout(shell.as_deref())}]});
+            let mut payload = json!({"initial_windows":[{"window_label":DEFAULT_TAB_LABEL,"layout":crate::layout::shell_layout(shell.as_deref())}]});
             if let Some(label) = label.filter(|l| !l.trim().is_empty()) {
                 payload["label"] = json!(label);
             }

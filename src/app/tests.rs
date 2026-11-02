@@ -1222,6 +1222,33 @@ fn tab_pills_carry_the_activity_word_and_hide_it_when_turned_off() {
     assert_eq!(pill(false), (None, Some("dev".into())));
 }
 
+#[test]
+fn a_default_tab_takes_its_programs_title_and_a_named_one_keeps_its_name() {
+    let (mut ws, _rx) = tabbed_workspace("single");
+    let model = &mut ws.hosts[0].model;
+    let view = model.views.get_mut("s").unwrap();
+    view.windows[1].label = Some(rex_linux::connection::DEFAULT_TAB_LABEL.into());
+    for (block, title) in [
+        ("block:a", "vim notes"),
+        ("block:b", "OC | USB device exploration"),
+    ] {
+        model.titles.insert(block.into(), (title.into(), None));
+    }
+    let rt = runtime(ws);
+    let label = |key: &str| {
+        rt.elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some(key))
+            .and_then(|e| e.label)
+    };
+    assert_eq!(label("tab:single").as_deref(), Some("server"));
+    assert_eq!(
+        label("tab:split").as_deref(),
+        Some("OC | USB device exploration")
+    );
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
 const SKILL_STATUS: &str = include_str!("fixtures/skill_status.json");
 const SKILL_SETUP_CODEX: &str = include_str!("fixtures/skill_setup_codex.json");
 

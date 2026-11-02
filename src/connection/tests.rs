@@ -345,6 +345,57 @@ fn captured_block_events_update_activity_programs_and_notices() {
 }
 
 #[test]
+fn a_title_lasts_while_the_program_that_set_it_runs() {
+    let mut model = HostModel::default();
+    let replay = |model: &mut HostModel, lines: &str| {
+        for line in lines.lines() {
+            let payload: Value = serde_json::from_str(line).unwrap();
+            let (block, event) = activity::parse_block_event(&payload).unwrap();
+            model.apply_block_event(SESSION, block, event);
+        }
+    };
+    let block = "block:01a19e0b-91d8-7213-8fda-04f8b42016e6";
+    let fixture: Vec<_> = include_str!("fixtures/title_events.jsonl")
+        .lines()
+        .collect();
+    // A program titles the terminal just before the server reports it in the foreground.
+    replay(&mut model, fixture[0]);
+    replay(&mut model, fixture[1]);
+    assert_eq!(model.title(block), Some("OC | USB device exploration"));
+    // Back at the prompt, the shell titles it again.
+    replay(&mut model, &fixture[2..].join("\n"));
+    assert_eq!(model.title(block), Some("shuv@shuvdev:~"));
+
+    // A program that exits without resetting the title leaves a stale one behind.
+    let title =
+        activity::parse_title(&json!({"title":"nvim notes.md","owner":{"pid":7,"name":"nvim"}}));
+    model.apply_block_event(SESSION, "b".into(), title);
+    let foreground = |pids: &[u64]| {
+        activity::parse_process(&json!({
+            "foreground": {"pid": pids[0], "name": "x"},
+            "ancestors": pids[1..].iter().map(|p| json!({"pid": p})).collect::<Vec<_>>(),
+        }))
+    };
+    model.apply_block_event(SESSION, "b".into(), foreground(&[7, 1]));
+    assert_eq!(model.title("b"), Some("nvim notes.md"));
+    // A child of the titling program keeps its title; the shell coming back drops it.
+    model.apply_block_event(SESSION, "b".into(), foreground(&[9, 7, 1]));
+    assert_eq!(model.title("b"), Some("nvim notes.md"));
+    model.apply_block_event(SESSION, "b".into(), foreground(&[1]));
+    assert_eq!(model.title("b"), None);
+    // A cleared title is gone; an unknown owner can't go stale.
+    let clear = activity::parse_title(&json!({"title":""}));
+    model.apply_block_event(SESSION, "b".into(), clear);
+    assert!(!model.titles.contains_key("b"));
+    model.apply_block_event(
+        SESSION,
+        "b".into(),
+        activity::parse_title(&json!({"title":"t"})),
+    );
+    assert_eq!(model.title("b"), Some("t"));
+}
+
+#[test]
 fn unknown_states_kinds_and_events_stay_quiet() {
     use activity::{BlockEvent, ProgramState, StatusRecord};
     let record = StatusRecord::parse(&json!({"state":"sleeping","kind":"coffee","app":"x"}));
@@ -356,7 +407,13 @@ fn unknown_states_kinds_and_events_stay_quiet() {
     assert!(activity::parse_block_event(&event(activity::TERMINAL, "bell")).is_none());
     assert_eq!(
         activity::parse_block_event(&event(activity::TERMINAL, "process_changed")),
-        Some(("b".into(), BlockEvent::Process(None)))
+        Some((
+            "b".into(),
+            BlockEvent::Process {
+                name: None,
+                pids: Vec::new()
+            }
+        ))
     );
     assert!(ProgramState::Blocked > ProgramState::Error);
     assert!(ProgramState::Error > ProgramState::Working);
@@ -419,24 +476,33 @@ async fn activity_follows_every_session_and_queries_the_selected_one() {
             json!({"records":[{"state":"blocked","kind":"question","app":"codex"}]}),
         )
         .await;
+        let title = recv(&mut ws).await;
+        assert_eq!(title["method"], "com.superlogical.terminal.title");
+        reply(
+            &mut ws,
+            &title,
+            3,
+            json!({"title":"Codex · fix tests","owner":{"pid":41,"name":"node"}}),
+        )
+        .await;
         let process = recv(&mut ws).await;
         assert_eq!(process["method"], "com.superlogical.terminal.process");
         reply(
             &mut ws,
             &process,
-            3,
+            4,
             json!({"foreground":{"name":"node","argv0":"codex"}}),
         )
         .await;
         // attach_all replaces the scope, so after session_created it must still ask for all.
-        send(&mut ws, json!({"type":"event","seq":4,"payload":{"type":"session_created","payload":{"session_id":OTHER}}})).await;
+        send(&mut ws, json!({"type":"event","seq":5,"payload":{"type":"session_created","payload":{"session_id":OTHER}}})).await;
         let list = recv(&mut ws).await;
         assert_eq!(list["method"], "session.attach_all");
         assert_eq!(list["payload"]["event_scope"], "all");
         reply(
             &mut ws,
             &list,
-            5,
+            6,
             json!({"sessions":[{"session_id":SESSION,"label":"snapshot"},
             {"session_id":OTHER,"label":"other"}]}),
         )
@@ -448,12 +514,12 @@ async fn activity_follows_every_session_and_queries_the_selected_one() {
                 "creator_name":activity::TERMINAL,"name":"program_status_changed",
                 "payload":{"id":"","record":{"state":"working"}}}}}}})
         };
-        send(&mut ws, report(6)).await;
+        send(&mut ws, report(7)).await;
         let view = recv(&mut ws).await;
         assert_eq!(view["method"], "session.view");
         assert_eq!(view["payload"]["session_id"], OTHER);
         send(&mut ws, json!({"type":"response","id":view["id"],"error":{"code":"conflict","message":"no","status":409}})).await;
-        send(&mut ws, report(7)).await;
+        send(&mut ws, report(8)).await;
         // No second session.view: the next message is the client closing.
         assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
     });
@@ -475,6 +541,7 @@ async fn activity_follows_every_session_and_queries_the_selected_one() {
         let m = host.model.lock().unwrap();
         let a = &m.activity["block:a"][""];
         assert_eq!(a.state, activity::ProgramState::Blocked);
+        assert_eq!(m.title("block:a"), Some("Codex · fix tests"));
         assert_eq!(a.app.as_deref(), Some("codex"));
         assert_eq!(m.programs["block:a"], "codex");
         assert_eq!(m.sessions.len(), 2);

@@ -554,7 +554,7 @@ impl Workspace {
             for tab in &view.windows {
                 if let Some(id) = &tab.window_id {
                     let mut e = Entry::new(
-                        tab.label.clone().unwrap_or_else(|| "Terminal".into()),
+                        super::activity::tab_name(model, tab),
                         "Tab",
                         format!(
                             "Tabs · {host_name} / {}",

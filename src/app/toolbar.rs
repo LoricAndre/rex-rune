@@ -1,7 +1,7 @@
 //! The 52pt bar on the window ground: sidebar toggle, identity chip, tab track, drag space,
 //! Commands, and the window's own controls.
 use super::{
-    activity::{program_icon, tab_activity, tab_word},
+    activity::{program_icon, tab_activity, tab_name, tab_word},
     panel::Intent,
     theme::*,
     widgets::{chrome_button, glyph},
@@ -78,7 +78,7 @@ fn tab_track(s: &Workspace) -> El {
                 continue;
             };
             let active = view.active_window_id.as_ref() == Some(&id);
-            let label = tab.label.clone().unwrap_or_else(|| "Terminal".into());
+            let label = tab_name(model, tab);
             let activity = tab_activity(model, tab);
             let word = tab_word(&activity, s.unseen(&id))
                 .filter(|_| s.settings.notifications.show_in_tabs);

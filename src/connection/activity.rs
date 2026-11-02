@@ -1,6 +1,7 @@
 //! What programs in a terminal report about themselves: OSC 7501 status records, the
-//! foreground process, and OSC 9 / OSC 777 desktop notifications. All of it arrives as the
-//! terminal creator's `block_event`s, or from its `program_status` and `process` methods.
+//! foreground process, the terminal title, and OSC 9 / OSC 777 desktop notifications. All of
+//! it arrives as the terminal creator's `block_event`s, or from its `program_status`,
+//! `process` and `title` methods.
 use serde_json::Value;
 
 pub const TERMINAL: &str = "com.superlogical.terminal";
@@ -96,8 +97,17 @@ pub enum BlockEvent {
     StatusRemoved {
         ids: Vec<String>,
     },
-    /// The foreground program's name; none when the server couldn't tell.
-    Process(Option<String>),
+    /// The foreground program's name, and the pids of it and its ancestors; empty when the
+    /// server couldn't tell.
+    Process {
+        name: Option<String>,
+        pids: Vec<u64>,
+    },
+    /// A program set the terminal's title (empty: cleared), with the pid that set it.
+    Title {
+        text: String,
+        owner: Option<u64>,
+    },
     Notification {
         title: String,
         body: String,
@@ -126,7 +136,8 @@ pub fn parse_block_event(payload: &Value) -> Option<(String, BlockEvent)> {
                 .filter_map(|id| id.as_str().map(str::to_owned))
                 .collect(),
         },
-        "process_changed" => BlockEvent::Process(program_name(&body["foreground"])),
+        "process_changed" => parse_process(body),
+        "title_changed" => parse_title(body),
         "desktop_notification" => BlockEvent::Notification {
             title: body["title"].as_str().unwrap_or_default().to_owned(),
             body: body["body"].as_str().unwrap_or_default().to_owned(),
@@ -134,6 +145,27 @@ pub fn parse_block_event(payload: &Value) -> Option<(String, BlockEvent)> {
         _ => return None,
     };
     Some((block, event))
+}
+
+/// A `process_changed` payload or a `process` reply.
+pub fn parse_process(body: &Value) -> BlockEvent {
+    let foreground = &body["foreground"];
+    let pids = std::iter::once(foreground)
+        .chain(body["ancestors"].as_array().into_iter().flatten())
+        .filter_map(|p| p["pid"].as_u64())
+        .collect();
+    BlockEvent::Process {
+        name: program_name(foreground),
+        pids,
+    }
+}
+
+/// A `title_changed` payload or a `title` reply.
+pub fn parse_title(body: &Value) -> BlockEvent {
+    BlockEvent::Title {
+        text: body["title"].as_str().unwrap_or_default().trim().to_owned(),
+        owner: body["owner"]["pid"].as_u64(),
+    }
 }
 
 /// A `program_status` reply's records by id; the root record's id is empty.
