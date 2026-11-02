@@ -161,9 +161,13 @@ pub fn list_row(
         .gap(8.)
         .center_y()
         .help_when_truncated(format!("{} · {}", r.label, r.detail));
-    if r.selected {
-        e = e.child(highlight(&format!("sel:{}", r.surface), 7.));
-    }
+    // The highlight's slot is always there, so the row's other children keep their places
+    // (and don't animate) as it comes and goes.
+    e = e.child(if r.selected {
+        highlight(&format!("sel:{}", r.surface), 7.)
+    } else {
+        el().pin(Some(0.), Some(0.), Some(0.), Some(0.))
+    });
     if r.enabled {
         e = e
             .cursor(Cursor::Pointer)
@@ -190,7 +194,9 @@ pub fn list_row(
             .shrink(),
     );
     match r.actions.filter(|_| r.selected) {
-        Some(actions) => e.child(actions),
+        Some(actions) => e
+            .child(actions)
+            .child(el().pin(Some(0.), Some(0.), Some(0.), Some(0.))),
         None => e
             .child(text(r.detail.to_owned()).font(ui(11.)).color(detail))
             .child(el().w(14.).child(if r.followup {
