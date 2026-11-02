@@ -1,0 +1,102 @@
+project:
+  name: rex-linux
+  type: desktop
+  description: Unofficial native Linux client for Rex terminal servers, written in Rust on Rune.
+  repo: https://github.com/shuv1337/rex-rune
+  license: MIT
+
+execution_policy:
+  trust: trusted-local
+  # Builds run offline: crates come from CARGO_HOME, Ghostty and Zig packages from local caches.
+  network: none
+  env_allowlist:
+    - PATH
+    - LANG
+    - CARGO_HOME
+    - RUSTUP_HOME
+    - CARGO_NET_OFFLINE
+    - GHOSTTY_SOURCE_DIR
+    - ZIG_GLOBAL_CACHE_DIR
+  secret_names: []
+
+verify:
+  commands:
+    - id: fmt
+      run: ["cargo", "fmt", "--all", "--", "--check"]
+      cwd: .
+      timeout_s: 120
+      expect_exit: 0
+      requires_env: []
+      optional: false
+    - id: build-release
+      run: ["cargo", "build", "--locked", "--offline", "--release", "--bin", "rex-linux"]
+      cwd: .
+      timeout_s: 2400
+      expect_exit: 0
+      requires_env: [CARGO_HOME, RUSTUP_HOME, GHOSTTY_SOURCE_DIR]
+      optional: false
+    - id: app-help
+      run: ["./target/release/rex-linux", "--help"]
+      cwd: .
+      timeout_s: 30
+      expect_exit: 0
+      requires_env: []
+      optional: false
+    - id: test
+      run: ["cargo", "test", "--locked", "--offline", "--all-features"]
+      cwd: .
+      timeout_s: 2400
+      expect_exit: 0
+      requires_env: [CARGO_HOME, RUSTUP_HOME, GHOSTTY_SOURCE_DIR]
+      optional: false
+    - id: clippy
+      run: ["cargo", "clippy", "--locked", "--offline", "--all-targets", "--all-features", "--", "-D", "warnings"]
+      cwd: .
+      timeout_s: 2400
+      expect_exit: 0
+      requires_env: [CARGO_HOME, RUSTUP_HOME, GHOSTTY_SOURCE_DIR]
+      optional: false
+    - id: build-probes
+      run: ["cargo", "build", "--locked", "--offline", "--no-default-features", "--bin", "rex-probe", "--bin", "rex-workspace-probe"]
+      cwd: .
+      timeout_s: 1200
+      expect_exit: 0
+      requires_env: [CARGO_HOME, RUSTUP_HOME, GHOSTTY_SOURCE_DIR]
+      optional: false
+    - id: probe-help
+      run: ["./target/debug/rex-probe", "--help"]
+      cwd: .
+      timeout_s: 30
+      expect_exit: 0
+      requires_env: []
+      optional: true
+    - id: rexrs-tests
+      run: ["cargo", "test", "--offline", "--manifest-path", "vendor/rexrs/Cargo.toml", "--all-features"]
+      cwd: .
+      timeout_s: 1200
+      expect_exit: 0
+      requires_env: [CARGO_HOME, RUSTUP_HOME]
+      optional: true
+    - id: scripts-compile
+      run: ["python3", "-m", "py_compile", "scripts/readme-screenshot.py", "scripts/docs-captures.py", "scripts/x11-smoke.py", "scripts/wayland-seat-smoke.py", "scripts/connection-only-smoke.py", "scripts/revision8-check.py", "scripts/rune-acceptance-x11.py", "scripts/chrome-spike-x11.py", "scripts/mouse-check.py", "scripts/demo-record.py"]
+      cwd: .
+      timeout_s: 60
+      expect_exit: 0
+      requires_env: []
+      optional: false
+
+capture:
+  terminal: []
+
+doc:
+  output: README.md
+  attribution:
+    allow_terms: []
+  pii:
+    allow: []
+    public_hosts: [www.superlogical.com, github.com, crates.io, raw.githubusercontent.com]
+  visuals:
+    mode: visual
+  preserve:
+    - "## Acknowledgements"
+    - "## Third-party software and assets"
