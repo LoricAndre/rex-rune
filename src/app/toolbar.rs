@@ -47,6 +47,11 @@ fn identity(s: &Workspace) -> El {
                 s.picker(true);
                 tx.blur();
             })
+            .on_secondary_press(|s: &mut Workspace, p, _| {
+                if let Some(session) = s.model().selected.clone() {
+                    s.session_menu(s.active, session, (p.x, p.y));
+                }
+            })
             .child(el().size(22., 22.).center().child(glyph(
                 s.host_icon(s.active),
                 16.,

@@ -540,6 +540,49 @@ fn secondary_click(rt: &mut Runtime<Workspace>, key: &str) {
 }
 
 #[test]
+fn switcher_rows_and_the_session_chip_open_the_session_menu() {
+    let mut ws = workspace_hosts(2);
+    let _current = capture_host(&mut ws, 0);
+    let _other = capture_host(&mut ws, 1);
+    ws.hosts[0].model.connected = true;
+    ws.hosts[0].model.sessions = vec![session("cur")];
+    ws.hosts[0].model.selected = Some("cur".into());
+    ws.hosts[1].model.connected = true;
+    ws.hosts[1].model.sessions = vec![session("b")];
+    let mut rt = runtime(ws);
+
+    click(&mut rt, "identity");
+    let row = rt
+        .elements()
+        .into_iter()
+        .find(|e| {
+            e.label.as_deref() == Some("b-label")
+                && e.key.as_deref().is_some_and(|k| k.starts_with("entry:"))
+        })
+        .and_then(|e| e.key)
+        .expect("b's switcher row");
+    secondary_click(&mut rt, &row);
+    let panel = rt.state.panel.as_ref().expect("session menu");
+    assert!(matches!(panel.kind, PanelKind::Session));
+    assert_eq!(panel.title, "test-1 · b-label");
+    press(&mut rt, Key::Escape);
+
+    secondary_click(&mut rt, "identity");
+    let panel = rt.state.panel.as_ref().expect("session menu");
+    assert_eq!(panel.title, "test-0 · cur-label");
+    let rename = rt
+        .state
+        .entries()
+        .iter()
+        .position(|e| e.label == "Rename session…")
+        .unwrap();
+    click(&mut rt, &format!("entry:{rename}"));
+    let panel = rt.state.panel.as_ref().expect("rename form");
+    assert_eq!(panel.inputs[0].text, "cur-label");
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
 fn session_menu_acts_on_its_row_not_the_current_session() {
     let mut ws = workspace_hosts(2);
     ws.sidebar.toggle();

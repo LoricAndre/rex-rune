@@ -180,7 +180,7 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
         }
         let action = entry.action.clone();
         let enabled = entry.enabled;
-        let r = list_row(
+        let mut r = list_row(
             Row {
                 key: format!("entry:{i}"),
                 surface: surface_id,
@@ -195,6 +195,12 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
             i,
             move |s: &mut Workspace, tx: &mut Tx| s.perform(action.clone(), tx),
         );
+        if let Intent::Select(host, session) = &entry.action {
+            let (host, session) = (*host, session.clone());
+            r = r.on_secondary_press(move |s: &mut Workspace, p, _| {
+                s.session_menu(host, session.clone(), (p.x, p.y))
+            });
+        }
         if entry.footer {
             footer = footer.child(r);
         } else {
