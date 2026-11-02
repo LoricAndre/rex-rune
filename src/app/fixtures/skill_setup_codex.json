@@ -1,0 +1,23 @@
+{
+  "dry_run": true,
+  "action": "install",
+  "scope": "user",
+  "steps": [
+    {
+      "harnesses": [
+        "codex"
+      ],
+      "kind": "skill",
+      "path": "/home/user/.agents/skills/rex",
+      "change": "created"
+    },
+    {
+      "harnesses": [
+        "codex"
+      ],
+      "kind": "hook",
+      "path": "/home/user/.codex/hooks.json",
+      "change": "created"
+    }
+  ]
+}

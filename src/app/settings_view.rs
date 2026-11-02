@@ -60,7 +60,7 @@ const SHORTCUTS: &[(&str, &[Shortcut])] = &[
 ];
 
 /// A labelled setting: name and optional explanation on the left, its control on the right.
-fn setting(label: &str, detail: &str, control: El) -> El {
+pub(super) fn setting(label: &str, detail: &str, control: El) -> El {
     let mut words = col()
         .grow(1.)
         .min_w(0.)
@@ -83,7 +83,7 @@ fn setting(label: &str, detail: &str, control: El) -> El {
         .child(control)
 }
 
-fn group(name: &str) -> El {
+pub(super) fn group(name: &str) -> El {
     text(name.to_owned())
         .font(label_caps())
         .text_case(rune::TextCase::Uppercase)
@@ -91,7 +91,7 @@ fn group(name: &str) -> El {
         .mt(10.)
 }
 
-fn divider() -> El {
+pub(super) fn divider() -> El {
     el().w_full().h(1.).fill(white(0.06))
 }
 
@@ -466,7 +466,7 @@ fn nav(s: &Workspace) -> El {
             .focusable(true)
             .focus_selected(selected)
             .focus_ring(2., 0., rgb(ACCENT))
-            .on_press(move |s: &mut Workspace| s.settings_section = section)
+            .on_press(move |s: &mut Workspace| s.open_section(section))
             .child(
                 text(section.title())
                     .font(if selected { medium(13.) } else { ui(13.) })
@@ -501,6 +501,7 @@ pub fn settings(s: &Workspace, viewport: [f32; 2]) -> El {
         SettingsSection::Interface => interface(s),
         SettingsSection::Terminal => terminal(s),
         SettingsSection::Notifications => notifications(s),
+        SettingsSection::Integrations => super::integrations::section(s),
         SettingsSection::Hosts => hosts(s),
         SettingsSection::Shortcuts => shortcuts(),
     };

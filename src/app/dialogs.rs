@@ -166,6 +166,9 @@ pub fn dialog(s: &Workspace, viewport: [f32; 2]) -> Option<El> {
                 "Remove host",
             )
         }
+        PanelKind::AgentChange { change, steps } => {
+            super::integrations::confirm(s, &panel.title, change, steps)
+        }
         _ => return None,
     };
     Some(modal(s, viewport, body))

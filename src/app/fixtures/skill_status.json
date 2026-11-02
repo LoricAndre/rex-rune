@@ -1,0 +1,67 @@
+{
+  "scope": "user",
+  "harnesses": [
+    {
+      "id": "claude",
+      "detected": true,
+      "items": [
+        {
+          "kind": "skill",
+          "path": "/home/user/.claude/skills/rex",
+          "state": "missing"
+        },
+        {
+          "kind": "hook",
+          "path": "/home/user/.claude/settings.json",
+          "state": "missing"
+        }
+      ]
+    },
+    {
+      "id": "codex",
+      "detected": true,
+      "items": [
+        {
+          "kind": "skill",
+          "path": "/home/user/.agents/skills/rex",
+          "state": "missing"
+        },
+        {
+          "kind": "hook",
+          "path": "/home/user/.codex/hooks.json",
+          "state": "missing"
+        }
+      ]
+    },
+    {
+      "id": "opencode",
+      "detected": true,
+      "items": [
+        {
+          "kind": "skill",
+          "path": "/home/user/.agents/skills/rex",
+          "state": "missing"
+        },
+        {
+          "kind": "hook",
+          "state": "unsupported"
+        }
+      ]
+    },
+    {
+      "id": "pi",
+      "detected": true,
+      "items": [
+        {
+          "kind": "skill",
+          "path": "/home/user/.agents/skills/rex",
+          "state": "missing"
+        },
+        {
+          "kind": "hook",
+          "state": "unsupported"
+        }
+      ]
+    }
+  ]
+}

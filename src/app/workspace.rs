@@ -91,6 +91,7 @@ pub struct Workspace {
     pub notifier: Option<Notifier>,
     /// Notifications headless tests would have sent.
     pub outbox: Vec<Note>,
+    pub integrations: super::integrations::Integrations,
 }
 
 #[derive(Default)]
@@ -181,6 +182,7 @@ impl Workspace {
             activity_epochs: HashMap::new(),
             notifier: None,
             outbox: Vec::new(),
+            integrations: Default::default(),
         };
         for index in 0..this.settings.hosts.len() {
             this.connect_host(index, explicit);
@@ -1048,10 +1050,12 @@ impl Workspace {
         let target = previous.as_ref().and_then(|p| p.target.clone());
         // Forms and confirmations opened from Settings go back to it.
         let keep_back = matches!(kind, PanelKind::Hosts(_))
-            || (matches!(kind, PanelKind::Form(_) | PanelKind::RemoveHost(_))
-                && previous
-                    .as_ref()
-                    .is_some_and(|p| matches!(p.kind, PanelKind::Settings)));
+            || (matches!(
+                kind,
+                PanelKind::Form(_) | PanelKind::RemoveHost(_) | PanelKind::AgentChange { .. }
+            ) && previous
+                .as_ref()
+                .is_some_and(|p| matches!(p.kind, PanelKind::Settings)));
         let mut panel = Panel::new(kind, title, fields);
         panel.target = target;
         panel.back = if keep_back {
@@ -1072,6 +1076,16 @@ impl Workspace {
             .and_then(|p| p.back.take())
             .filter(|b| matches!(b.kind, PanelKind::Settings))
             .map(|b| *b)
+    }
+
+    /// Show a Settings section; Integrations reads the agents' state when first shown.
+    pub fn open_section(&mut self, section: SettingsSection) {
+        self.settings_section = section;
+        if section == SettingsSection::Integrations
+            && self.integrations.status == super::integrations::AgentStatus::Unknown
+        {
+            self.refresh_integrations();
+        }
     }
 
     pub fn set_notice_position(&mut self, position: NoticePosition) {
@@ -1253,6 +1267,11 @@ impl Workspace {
             PanelKind::RemoveHost(host) => {
                 let back = self.settings_back();
                 self.remove_host(host, tx);
+                self.panel = back;
+            }
+            PanelKind::AgentChange { change, .. } => {
+                let back = self.settings_back();
+                self.apply_agents(change);
                 self.panel = back;
             }
             PanelKind::Confirm {

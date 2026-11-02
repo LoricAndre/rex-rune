@@ -1221,3 +1221,179 @@ fn tab_pills_carry_the_activity_word_and_hide_it_when_turned_off() {
     );
     assert_eq!(pill(false), (None, Some("dev".into())));
 }
+
+const SKILL_STATUS: &str = include_str!("fixtures/skill_status.json");
+const SKILL_SETUP_CODEX: &str = include_str!("fixtures/skill_setup_codex.json");
+
+fn strings(args: &[&str]) -> Vec<String> {
+    args.iter().map(|a| a.to_string()).collect()
+}
+
+#[test]
+fn agent_commands_never_autostart_and_always_name_the_naming_choice() {
+    use super::integrations::{AgentChange, status_args};
+    assert_eq!(
+        status_args(),
+        strings(&["--autostart=false", "skill", "status", "--json"])
+    );
+    let setup = AgentChange::Setup {
+        agents: vec!["codex".into()],
+        force: false,
+    };
+    assert_eq!(
+        setup.args(false, true),
+        strings(&[
+            "--autostart=false",
+            "skill",
+            "setup",
+            "--agent=codex",
+            "--session-naming=false",
+            "--dry-run",
+            "--json"
+        ])
+    );
+    let all = AgentChange::Setup {
+        agents: vec![],
+        force: true,
+    };
+    assert_eq!(
+        all.args(true, false),
+        strings(&[
+            "--autostart=false",
+            "skill",
+            "setup",
+            "--session-naming=true",
+            "--force",
+            "--json"
+        ])
+    );
+    let remove = AgentChange::Remove {
+        agents: vec!["pi".into()],
+    };
+    assert_eq!(
+        remove.args(true, false),
+        strings(&[
+            "--autostart=false",
+            "skill",
+            "remove",
+            "--agent=pi",
+            "--json"
+        ])
+    );
+}
+
+fn integrations_open(status: Result<String, String>) -> Runtime<Workspace> {
+    let mut ws = workspace();
+    ws.perform(Intent::Settings, &mut rune::Tx::default());
+    ws.open_section(super::panel::SettingsSection::Integrations);
+    assert_eq!(
+        ws.integrations.ran,
+        vec![super::integrations::status_args()],
+        "opening the section reads the status once"
+    );
+    ws.open_section(super::panel::SettingsSection::Integrations);
+    assert_eq!(ws.integrations.ran.len(), 1);
+    ws.apply_agent_status(status);
+    runtime_at(ws, (1280., 900.))
+}
+
+fn element_text(rt: &Runtime<Workspace>, key: &str) -> Vec<String> {
+    let elements = rt.elements();
+    let Some(index) = elements.iter().position(|e| e.key.as_deref() == Some(key)) else {
+        return Vec::new();
+    };
+    let mut inside = vec![index];
+    let mut texts = Vec::new();
+    for (i, e) in elements.iter().enumerate().skip(index) {
+        if i != index && !e.parent.is_some_and(|p| inside.contains(&p)) {
+            continue;
+        }
+        inside.push(i);
+        if let Some(t) = &e.text {
+            texts.push(t.clone());
+        }
+    }
+    texts
+}
+
+#[test]
+fn integrations_list_agents_and_preview_changes_before_making_them() {
+    use super::integrations::AgentChange;
+    let mut rt = integrations_open(Ok(SKILL_STATUS.into()));
+    let codex = element_text(&rt, "agent:codex").join(" | ");
+    assert!(codex.contains("Not installed"), "{codex}");
+    assert!(codex.contains("with OpenCode and Pi"), "{codex}");
+    assert!(
+        element_text(&rt, "agent:claude")
+            .join(" ")
+            .contains("Install…")
+    );
+    click(&mut rt, "agent-setup:codex");
+    let preview = rt.state.integrations.ran.last().unwrap().clone();
+    assert!(preview.contains(&"--dry-run".to_owned()));
+    assert!(preview.contains(&"--session-naming=false".to_owned()));
+    let change = AgentChange::Setup {
+        agents: vec!["codex".into()],
+        force: false,
+    };
+    rt.state
+        .show_agent_preview(change.clone(), Ok(SKILL_SETUP_CODEX.into()));
+    let ws = rt.state;
+    let panel = ws.panel.as_ref().unwrap();
+    assert_eq!(panel.title, "Set up Rex for Codex?");
+    assert!(matches!(panel.kind, PanelKind::AgentChange { .. }));
+    let mut rt = runtime_at(ws, (1280., 900.));
+    let lines = rt
+        .elements()
+        .into_iter()
+        .filter_map(|e| e.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    // The shared skill names every agent it affects, not only the one asked for.
+    assert!(
+        lines.contains("Create skill /home/user/.agents/skills/rex · Codex, OpenCode, Pi"),
+        "{lines}"
+    );
+    assert!(
+        lines.contains("shared skill changes for every agent"),
+        "{lines}"
+    );
+    click(&mut rt, "agents-apply");
+    let applied = rt.state.integrations.ran.last().unwrap().clone();
+    assert!(!applied.contains(&"--dry-run".to_owned()));
+    assert_eq!(applied, change.args(false, false));
+    assert!(matches!(
+        rt.state.panel.as_ref().map(|p| &p.kind),
+        Some(PanelKind::Settings)
+    ));
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn a_missing_rex_explains_itself_and_naming_reapplies_to_installed_agents() {
+    let rt = integrations_open(Err(
+        "The rex command isn't installed on this machine.".into()
+    ));
+    let texts = rt
+        .elements()
+        .into_iter()
+        .filter_map(|e| e.text)
+        .collect::<Vec<_>>();
+    assert!(texts.iter().any(|t| t.contains("isn't installed")));
+    std::fs::remove_file(&rt.state.settings_path).ok();
+
+    let installed = SKILL_STATUS.replacen("\"missing\"", "\"current\"", 2);
+    let mut ws = workspace();
+    ws.apply_agent_status(Ok(installed));
+    ws.toggle_session_naming();
+    assert!(ws.settings.agent_session_naming);
+    let preview = ws.integrations.ran.last().unwrap();
+    assert!(
+        preview.contains(&"--agent=claude".to_owned()),
+        "{preview:?}"
+    );
+    assert!(!preview.contains(&"--agent=codex".to_owned()));
+    assert!(preview.contains(&"--session-naming=true".to_owned()));
+    assert!(preview.contains(&"--dry-run".to_owned()));
+    std::fs::remove_file(&ws.settings_path).ok();
+}

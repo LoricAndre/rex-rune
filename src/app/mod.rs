@@ -3,6 +3,7 @@ mod activity;
 mod dialogs;
 mod fonts;
 mod input;
+mod integrations;
 mod keys;
 mod notify;
 mod panel;

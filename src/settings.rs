@@ -65,6 +65,8 @@ pub struct Settings {
     pub ui_scale: f32,
     pub notice_position: NoticePosition,
     pub notifications: NotificationsConfig,
+    /// Passed to `rex skill setup` as `--session-naming`, always explicitly.
+    pub agent_session_naming: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -85,6 +87,7 @@ impl Default for Settings {
             ui_scale: 1.,
             notice_position: NoticePosition::default(),
             notifications: NotificationsConfig::default(),
+            agent_session_naming: false,
         }
     }
 }

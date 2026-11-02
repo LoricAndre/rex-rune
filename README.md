@@ -20,11 +20,12 @@ It is written in Rust on [Rune](https://github.com/anomalyco/rune) (wgpu/winit, 
 - Reconnect handling: a transport failure pauses input on affected panes (input is never replayed) while parsed output survives reconnects and session changes.
 - Program activity on tabs. Programs that report their status with OSC 7501 (coding agents, for example) mark their tab with a word when they need you ("Needs approval", "Question", "Needs sign-in", "Needs input") or fail ("Error"), and with "Done" when they finish in a tab you weren't looking at. Each tab shows its focused pane's program icon (Claude Code, Codex, OpenCode, Pi, Vim, Git, Cargo, SSH; otherwise `>_`). Needs a server with API revision 8.
 - Desktop notifications through the freedesktop notification service when a tab you aren't looking at needs you, fails or finishes, and for notifications programs send themselves (OSC 9 and OSC 777). Clicking one raises the window and shows that tab. Each kind can be turned off in Settings → Notifications.
+- Agent integrations (Settings → Integrations): installs, updates or removes Rex's skill and session hooks for Claude Code, Codex, OpenCode and Pi on this machine with the local `rex skill` command. Every change is previewed with a dry run first, which also shows when Codex, OpenCode and Pi share one skill directory. "Let agents name sessions" is passed to every setup explicitly.
 - Interface zoom (70–150%) and a configurable terminal font and size.
 - Borderless window with its own minimize/maximize/close, edge resizing and drag region.
 - Keys are sent by physical position (Ghostty key names), so non-US layouts work.
 
-**Attachment only.** Rex Linux never starts, stops, replaces or reconfigures a Rex server and does not need a `rex` executable on `PATH`. An unavailable server is shown as disconnected and retried. Closing the client leaves server programs running.
+**Attachment only.** Rex Linux never starts, stops, replaces or reconfigures a Rex server and attaching does not need a `rex` executable on `PATH`. The only place the app runs `rex` is Settings → Integrations, on this machine and always with `--autostart=false`. An unavailable server is shown as disconnected and retried. Closing the client leaves server programs running.
 
 ## Requirements
 
@@ -81,9 +82,9 @@ This installs `dev.shuv.rex-linux.desktop` under `$XDG_DATA_HOME/applications` (
 
 ## Configuration
 
-Preferences are stored as JSON in `$XDG_CONFIG_HOME/rex-linux/workspace.json` (default `~/.config/rex-linux/workspace.json`): saved hosts (label, endpoint, collapsed state, optional default shell), the last host and session per host, sidebar width, terminal font size, interface zoom (`ui_scale`), the corner notices appear in (`notice_position`) and the activity and notification choices (`notifications`). Use `--config <path>` to keep a separate workspace.
+Preferences are stored as JSON in `$XDG_CONFIG_HOME/rex-linux/workspace.json` (default `~/.config/rex-linux/workspace.json`): saved hosts (label, endpoint, collapsed state, optional default shell), the last host and session per host, sidebar width, terminal font size, interface zoom (`ui_scale`), the corner notices appear in (`notice_position`), the activity and notification choices (`notifications`) and whether agents may name sessions (`agent_session_naming`). Use `--config <path>` to keep a separate workspace.
 
-Settings (`Ctrl ,`, or Settings… in Commands) has Interface (zoom, sidebar, notice corner), Terminal (font size, each host's default shell), Notifications (activity in tabs, desktop notifications and which changes send one), Remote Hosts (add, edit or remove saved hosts) and Shortcuts sections. Removing a host only stops this client connecting to it; its sessions keep running on the server. A changed endpoint connects to that server as a new host.
+Settings (`Ctrl ,`, or Settings… in Commands) has Interface (zoom, sidebar, notice corner), Terminal (font size, each host's default shell), Notifications (activity in tabs, desktop notifications and which changes send one), Integrations (Rex's skill and hooks for coding agents on this machine), Remote Hosts (add, edit or remove saved hosts) and Shortcuts sections. Removing a host only stops this client connecting to it; its sessions keep running on the server. A changed endpoint connects to that server as a new host.
 
 A host's default shell (empty means the server user's login shell) is used for every new session, tab and split this client creates on that host. Host endpoints must be `unix://` with an absolute path, or `https://`, `http://`, `wss://` or `ws://` URLs.
 

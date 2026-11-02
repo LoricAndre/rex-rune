@@ -107,14 +107,16 @@ pub enum SettingsSection {
     Interface,
     Terminal,
     Notifications,
+    Integrations,
     Hosts,
     Shortcuts,
 }
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 5] = [
+    pub const ALL: [SettingsSection; 6] = [
         SettingsSection::Interface,
         SettingsSection::Terminal,
         SettingsSection::Notifications,
+        SettingsSection::Integrations,
         SettingsSection::Hosts,
         SettingsSection::Shortcuts,
     ];
@@ -123,6 +125,7 @@ impl SettingsSection {
             SettingsSection::Interface => "Interface",
             SettingsSection::Terminal => "Terminal",
             SettingsSection::Notifications => "Notifications",
+            SettingsSection::Integrations => "Integrations",
             SettingsSection::Hosts => "Remote Hosts",
             SettingsSection::Shortcuts => "Shortcuts",
         }
@@ -132,6 +135,7 @@ impl SettingsSection {
             SettingsSection::Interface => "interface",
             SettingsSection::Terminal => "terminal",
             SettingsSection::Notifications => "notifications",
+            SettingsSection::Integrations => "integrations",
             SettingsSection::Hosts => "hosts",
             SettingsSection::Shortcuts => "shortcuts",
         }
@@ -157,6 +161,11 @@ pub enum PanelKind {
         method: String,
         payload: Value,
         description: String,
+    },
+    /// The preview of a `rex skill` change, waiting for Keep or Apply.
+    AgentChange {
+        change: super::integrations::AgentChange,
+        steps: Vec<super::integrations::Step>,
     },
 }
 
