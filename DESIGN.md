@@ -7,6 +7,7 @@ Rex Linux draws calm, dark chrome around terminals that the server owns. The tok
 - **The terminal is the content.** Chrome frames it and stays out of the way. Terminal text, colours, cursor and split geometry come from the server and are never recoloured. The one exception: the server's default terminal black is replaced by the pane-card colour so panes sit in the surface; explicit colours are preserved.
 - **Chrome moves, content doesn't.** Popups spring open from their anchor and highlights and the sidebar slide; terminal content, pane geometry and cell rendering never animate.
 - **One working row.** Session identity, tabs, commands and the window's own controls share a single toolbar. Navigation (hosts → sessions) opens on demand, with an optional saved sidebar.
+- **Quiet when healthy.** A connected host, a live pane and the active tab carry no status dots or "Connected" labels; names and host icons are enough. Words appear only for trouble ("Offline", "Reconnecting", "input paused"), in `WARNING`, next to the action that fixes it.
 - **Distinct states.** The current session, the keyboard-selected row, a captured pane target and live terminal focus each have a different cue. Keyboard selection is never fill alone.
 - **Name the target.** Creation actions name their host; destructive confirmations name the pane, tab and host and default to **Keep running**; closing the app leaves server programs running.
 
@@ -19,15 +20,14 @@ Rex Linux draws calm, dark chrome around terminals that the server owns. The tok
 | `POPOVER` | `#0d1524` | Popovers, dialogs, raised surfaces (drawn at 95% over a backdrop blur) |
 | `INK` | `#e8eef6` | Primary text and icons |
 | `MUTED` | `#93a3b8` | Secondary text, labels, shortcuts and icons |
-| `FAINT` | `#5d6b80` | Decoration only: separators, idle dots, rims. Never informational text |
 | `ACCENT` | `#7cc4ff` | Focus, selection outline, current-session emphasis, caret |
 | `ACCENT2` | `#a78bfa` | Secondary accent |
-| `LIVE` | `#5eead4` | Connected / success |
+| `LIVE` | `#5eead4` | Kit success colour |
 | `WARNING` | `#f5d48a` | Reconnecting, notices, ownership strips |
 | `DANGER` | `#ff8a8a` | Validation errors and destructive text |
 | `TERMINAL_SELECTION` | `#2f4a6e` | Local terminal text-selection overlay |
 
-Interaction fills are translucent white over the surface: hover 7%, pressed 11%; borders 6–20% white (focus uses `ACCENT`). Connection state also carries a word ("Local", "Connected", "Offline", "Reconnecting"), never colour alone. No light theme is implemented.
+Interaction fills are translucent white over the surface: hover 7%, pressed 11%; borders 6–20% white (focus uses `ACCENT`). Trouble states always carry a word, never colour alone; healthy states show nothing. No light theme is implemented.
 
 ## Typography
 
@@ -36,12 +36,12 @@ Chrome uses Inter (bundled with the kit) in 10–13 pt steps, weights about 450 
 ## Layout and shape
 
 - **Toolbar:** 52 pt chip bar. Controls sit on glassy chips (10 pt radius, 5.5% white fill, gradient hairline border). The empty space moves the window; edges and corners resize it; minimize/maximize/close are at the right end.
-- **Pane cards:** server-defined placements as rounded cards (12 pt radius) with a 30 pt header, 8 pt gutters and 10 pt outer margin on the ground. Terminal text has 8 px padding inside its card. Divider drags preview immediately and send a ratio clamped to 0.1–0.9.
+- **Pane cards:** server-defined placements as rounded cards (12 pt radius) with a 30 pt header (pane name and, when needed, its exception strip), 8 pt gutters and 10 pt outer margin on the ground. Terminal text has 8 px padding inside its card. Divider drags preview immediately and send a ratio clamped to 0.1–0.9.
 - **Sidebar:** optional, hidden on a new install, default 236 pt wide (200–360 pt, drag the edge to resize, double-click to reset). Host rows are 28 pt, session rows 32 pt, groups separated by 12 pt.
 - **Popovers:** session/host menus anchor to the identity; pane menus to the pointer (right-click) or the toolbar; the command menu is centered near the top. Popovers clamp to the viewport; long lists scroll with directional hints that count hidden rows.
 - **Dialogs** (forms, preferences, confirmation) are centered over a dark scrim and sized to their content within the viewport.
-- **Radii:** kit small 8, medium 10; chips 10; cards and popovers 12; dots are circles (5–7 pt).
-- **Icons:** authored strokes on a 20×20 view box, 1.5 stroke, round caps and joins, `currentColor`.
+- **Radii:** kit small 8, medium 10; chips 10; cards and popovers 12.
+- **Icons:** authored strokes on a 20×20 view box, 1.5 stroke, round caps and joins, `currentColor`. Hosts show their kind (a monitor for this machine's Unix socket, a server for a remote endpoint) in the identity chip, sidebar headers and switcher groups; tabs carry a `>_` glyph; the Commands button is ⌘. Magnifying glasses mark search fields only.
 - **Elevation:** the working canvas is flat. Popovers and dialogs get a frosted fill, a lit gradient rim and a deep soft shadow.
 - **Interface zoom:** 70–150% in 10% steps. Zoom above 100% is limited to preserve a 640×480 layout floor where the viewport allows; terminal font size is independent.
 
@@ -61,5 +61,5 @@ Chrome uses Inter (bundled with the kit) in 10–13 pt steps, weights about 450 
 - Do derive overflow cues and hidden-row counts from measured content.
 - Don't recolour terminal output to match the chrome, or animate terminal content.
 - Don't let selecting, copying or navigating claim size ownership.
-- Don't use `FAINT` for text that carries information.
+- Don't add status dots, "Connected" labels, terminal size readouts or keyboard-hint footers.
 - Don't show illustrative sessions, layouts or captures as shipped runtime state.

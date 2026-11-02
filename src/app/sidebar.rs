@@ -19,9 +19,10 @@ fn host_header(s: &Workspace, index: usize) -> El {
     let config = &s.settings.hosts[index];
     let connected = s.hosts[index].model.connected;
     let active = index == s.active;
-    let dot = rgb(if connected { LIVE } else { FAINT });
+    // An offline host dims; its Retry connection row below says why.
+    let tone = rgb(if active && connected { INK } else { MUTED });
     let new_help = format!("New session on {}", config.label);
-    // One step to a new session; offline hosts keep the slot so the state column lines up.
+    // One step to a new session; offline hosts keep the slot so the column lines up.
     let plus = if connected {
         el().key(format!("host-new-session:{index}"))
             .role("button")
@@ -99,20 +100,15 @@ fn host_header(s: &Workspace, index: usize) -> El {
                     s.activate_host(index, tx);
                     tx.blur();
                 })
+                .child(glyph(s.host_icon(index), 13., tone))
                 .child(
                     text(config.label.clone())
                         .font(label_caps())
                         .text_case(rune::TextCase::Uppercase)
-                        .color(rgb(if active { INK } else { MUTED }))
+                        .color(tone)
                         .truncate()
                         .grow(1.)
                         .shrink(),
-                )
-                .child(el().size(6., 6.).radius(3.).fill(dot))
-                .child(
-                    text(s.host_state(index).to_lowercase())
-                        .font(ui(10.5))
-                        .color(rgb(MUTED)),
                 ),
         )
         .child(plus)

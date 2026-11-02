@@ -1,4 +1,5 @@
 //! Popup and dialog state, and the action lists the switcher, Commands and menus show.
+use super::theme::{MONITOR, SERVER};
 use super::workspace::Workspace;
 use rune::TextEdit;
 use serde_json::Value;
@@ -174,6 +175,8 @@ pub struct Entry {
     pub followup: bool,
     pub enabled: bool,
     pub footer: bool,
+    /// Drawn before the group header: the host's kind in the switcher.
+    pub group_icon: Option<&'static rune::Icon>,
 }
 impl Entry {
     pub fn new(
@@ -191,6 +194,7 @@ impl Entry {
             current: false,
             enabled: true,
             footer: false,
+            group_icon: None,
         }
     }
 }
@@ -266,13 +270,12 @@ impl Workspace {
         entries
     }
 
-    pub fn host_state(&self, index: usize) -> &'static str {
-        if !self.hosts[index].model.connected {
-            "Offline"
-        } else if self.settings.hosts[index].endpoint.starts_with("unix://") {
-            "Local"
+    /// This machine (a Unix socket) or a remote server.
+    pub fn host_icon(&self, index: usize) -> &'static rune::Icon {
+        if self.settings.hosts[index].endpoint.starts_with("unix://") {
+            &MONITOR
         } else {
-            "Connected"
+            &SERVER
         }
     }
 
@@ -291,7 +294,7 @@ impl Workspace {
                     let mut e = Entry::new(
                         self.settings.hosts[i].label.clone(),
                         if h.model.connected {
-                            "Connected"
+                            ""
                         } else {
                             "Offline — retry in session menu"
                         },
@@ -407,19 +410,16 @@ impl Workspace {
         if !pane_only && (sessions_only || !query.is_empty()) {
             for (index, host) in self.hosts.iter().enumerate() {
                 let label = &self.settings.hosts[index].label;
-                let state = self.host_state(index);
-                let group = if sessions_only {
-                    format!("{label} · {state}")
-                } else {
+                let group = if !sessions_only {
                     "Sessions · all hosts".into()
+                } else if host.model.connected {
+                    label.clone()
+                } else {
+                    format!("{label} · Offline")
                 };
                 for session in &host.model.sessions {
                     let detail = if sessions_only {
-                        if host.model.connected {
-                            String::new()
-                        } else {
-                            "Offline".into()
-                        }
+                        String::new()
                     } else {
                         format!("{label} · Session")
                     };
@@ -429,6 +429,9 @@ impl Workspace {
                         &group,
                         Intent::Select(index, session.session_id.clone()),
                     );
+                    if sessions_only {
+                        e.group_icon = Some(self.host_icon(index));
+                    }
                     e.current = self.active == index
                         && host.model.selected.as_ref() == Some(&session.session_id);
                     if format!("{} {label}", e.label)
@@ -453,6 +456,7 @@ impl Workspace {
                         Intent::RetryHost(index),
                     );
                     e.enabled = !host.model.connected;
+                    e.group_icon = Some(self.host_icon(index));
                     entries.push(e);
                 }
             }

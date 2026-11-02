@@ -66,19 +66,8 @@ fn header(s: &Workspace, block: &str, width: f32, focused: bool, m: &Metrics) ->
     let label = s.block_label(block);
     let t = s.terminals.get(&key);
     let status = t.map(|t| t.status());
-    let (dot, glow) = match &status {
-        Some(st) if !st.live => (rgb(WARNING), false),
-        Some(_) if focused => (rgb(ACCENT), true),
-        Some(_) => (rgb(LIVE), false),
-        None => (rgb(FAINT), false),
-    };
-    let size = t.and_then(|t| t.frame.as_ref().map(|f| format!("{}×{}", f.cols, f.rows)));
     let id = block.to_owned();
     let menu_id = block.to_owned();
-    let mut dot_el = el().size(6., 6.).radius(3.).fill(dot);
-    if glow {
-        dot_el = dot_el.box_shadow(shadow(0., 0., 8., dot.alpha(0.7)));
-    }
     let mut h = row()
         .key(format!("pane-header:{block}"))
         .w_full()
@@ -98,7 +87,6 @@ fn header(s: &Workspace, block: &str, width: f32, focused: bool, m: &Metrics) ->
         .on_secondary_press(move |s: &mut Workspace, p, _| {
             s.pane_menu(menu_id.clone(), Some((p.x, p.y)))
         })
-        .child(dot_el)
         .child(
             text(label.clone())
                 .font(medium(11.5))
@@ -120,12 +108,6 @@ fn header(s: &Workspace, block: &str, width: f32, focused: bool, m: &Metrics) ->
         };
         (!st.live).then(|| (format!("Reconnecting · input paused{rows}"), "Retry"))
     });
-    if pill_label.is_none()
-        && width >= 260.
-        && let Some(size) = size
-    {
-        h = h.child(text(size).font(ui(10.5)).color(rgb(MUTED)));
-    }
     if let Some((msg, action)) = pill_label {
         let target = key.clone();
         let status_text = status.map(|s| s.status).unwrap_or_default();

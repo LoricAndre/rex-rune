@@ -57,8 +57,6 @@ pub const CARD: u32 = 0x05080e;
 pub const POPOVER: u32 = 0x0d1524;
 pub const INK: u32 = 0xe8eef6;
 pub const MUTED: u32 = 0x93a3b8;
-/// Decoration only (separators, idle dots, rims): never informational text.
-pub const FAINT: u32 = 0x5d6b80;
 pub const ACCENT: u32 = 0x7cc4ff;
 pub const ACCENT2: u32 = 0xa78bfa;
 pub const LIVE: u32 = 0x5eead4;
@@ -218,6 +216,26 @@ icon!(
     "rex-search",
     r#"circle cx="9" cy="9" r="5""#,
     r#"path d="m13 13 3.5 3.5""#
+);
+icon!(
+    COMMAND,
+    "rex-command",
+    r#"path d="M12.5 5v10a2.5 2.5 0 1 0 2.5-2.5H5a2.5 2.5 0 1 0 2.5 2.5V5a2.5 2.5 0 1 0-2.5 2.5h10a2.5 2.5 0 1 0-2.5-2.5""#
+);
+icon!(
+    MONITOR,
+    "rex-monitor",
+    r#"rect x="3" y="4" width="14" height="9.5" rx="2""#,
+    r#"path d="M10 13.5v3""#,
+    r#"path d="M7 16.5h6""#
+);
+icon!(
+    SERVER,
+    "rex-server",
+    r#"rect x="3.5" y="4" width="13" height="5" rx="1.5""#,
+    r#"rect x="3.5" y="11" width="13" height="5" rx="1.5""#,
+    r#"path d="M6.5 6.5h.01""#,
+    r#"path d="M6.5 13.5h.01""#
 );
 icon!(
     SIDEBAR,

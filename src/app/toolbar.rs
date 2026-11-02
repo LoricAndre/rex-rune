@@ -3,7 +3,7 @@
 use super::{
     panel::Intent,
     theme::*,
-    widgets::{app_logo, chrome_button, glyph},
+    widgets::{chrome_button, glyph},
     workspace::Workspace,
 };
 use rune::{Cursor, Cx, El, ScrollPos, Tx, col, el, row, text};
@@ -23,13 +23,12 @@ fn identity(s: &Workspace) -> El {
         .view()
         .and_then(|v| v.label.clone())
         .unwrap_or_else(|| "Choose session".into());
-    let state = if !model.connected {
-        "Reconnecting"
+    // Only trouble is worth words: a healthy host shows just its name.
+    let (detail, tone) = if model.connected {
+        (host.clone(), MUTED)
     } else {
-        s.host_state(s.active)
+        (format!("{host} · Reconnecting"), WARNING)
     };
-    let dot = rgb(if model.connected { LIVE } else { WARNING });
-    let tile = app_logo(s, 22.);
     chip_press(chip(
         row()
             .key("identity")
@@ -47,31 +46,18 @@ fn identity(s: &Workspace) -> El {
                 s.picker(true);
                 tx.blur();
             })
-            .child(tile)
+            .child(el().size(22., 22.).center().child(glyph(
+                s.host_icon(s.active),
+                16.,
+                rgb(MUTED),
+            )))
             .child(
                 col()
                     .grow(1.)
                     .min_w(0.)
                     .gap(1.)
                     .child(text(session).font(strong(12.5)).color(rgb(INK)).truncate())
-                    .child(
-                        row()
-                            .gap(5.)
-                            .center_y()
-                            .child(el().size(6., 6.).radius(3.).fill(dot).box_shadow(shadow(
-                                0.,
-                                0.,
-                                8.,
-                                dot.alpha(0.7),
-                            )))
-                            .child(
-                                text(format!("{host} · {state}"))
-                                    .font(ui(10.5))
-                                    .color(rgb(MUTED))
-                                    .truncate()
-                                    .shrink(),
-                            ),
-                    ),
+                    .child(text(detail).font(ui(10.5)).color(rgb(tone)).truncate()),
             )
             .child(glyph(&CHEVRON, 14., rgb(MUTED))),
     ))
@@ -113,22 +99,21 @@ fn tab_track(s: &Workspace) -> El {
                     s.perform(Intent::RenameWindow(rename_id.clone()), tx);
                 });
             if active {
-                tab_el = tab_el
-                    .child(
-                        el().pin(Some(0.), Some(0.), Some(0.), Some(0.))
-                            .radius(8.)
-                            .continuous_corners()
-                            .fill(white(0.11))
-                            .box_shadow(shadow(0., 1., 3., black(0.35)))
-                            .box_shadow(inset(1., white(0.09)))
-                            .matched(format!("tab-pill:{session}"))
-                            .transition(no_presence())
-                            .motion(SNAPPY),
-                    )
-                    .child(el().size(5., 5.).radius(2.5).fill(rgb(ACCENT)));
+                tab_el = tab_el.child(
+                    el().pin(Some(0.), Some(0.), Some(0.), Some(0.))
+                        .radius(8.)
+                        .continuous_corners()
+                        .fill(white(0.11))
+                        .box_shadow(shadow(0., 1., 3., black(0.35)))
+                        .box_shadow(inset(1., white(0.09)))
+                        .matched(format!("tab-pill:{session}"))
+                        .transition(no_presence())
+                        .motion(SNAPPY),
+                );
             } else {
                 tab_el = tab_el.radius(8.).hover(white(0.05));
             }
+            tab_el = tab_el.child(glyph(&TERMINAL, 13., rgb(if active { INK } else { MUTED })));
             tab_el = tab_el.child(
                 text(label.clone())
                     .font(if active { medium(12.5) } else { ui(12.5) })
@@ -235,7 +220,7 @@ fn search_chip(wide: bool) -> El {
             s.picker(false);
             tx.blur();
         })
-        .child(glyph(&SEARCH, 15., rgb(MUTED)));
+        .child(glyph(&COMMAND, 15., rgb(MUTED)));
     if wide {
         e = e
             .w(240.)

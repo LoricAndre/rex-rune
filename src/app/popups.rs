@@ -4,7 +4,7 @@ use super::{
     input::list_key,
     panel::{Intent, PanelKind},
     theme::*,
-    widgets::{Row, list_row},
+    widgets::{Row, glyph, list_row},
     workspace::Workspace,
 };
 use rune::{El, ScrollSpec, Tx, col, el, row, text};
@@ -101,7 +101,7 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
     let row_height = if commands { 36. } else { 34. };
     let footer_count = entries.iter().filter(|e| e.footer).count();
     let input_height = if panel.inputs.is_empty() { 40. } else { 52. };
-    let list_max = (vh - top - 16. - input_height - footer_count as f32 * 30. - 88.).max(60.);
+    let list_max = (vh - top - 16. - input_height - footer_count as f32 * 30. - 64.).max(60.);
 
     // Rows, with their content spans for the overflow hint.
     let mut list = col().key("results").w_full().pr(8.).gap(2.);
@@ -129,7 +129,9 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
                         .h(HEADER - if first { 6. } else { 0. })
                         .pt(if first { 0. } else { 8. })
                         .px(12.)
+                        .gap(7.)
                         .center_y()
+                        .children(entry.group_icon.map(|i| glyph(i, 13., rgb(MUTED))))
                         .child(
                             text(group.clone())
                                 .font(label_caps())
@@ -328,19 +330,12 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
             .child(el().h(1.).mx(8.).my(4.).fill(white(0.07)))
             .child(footer.px(0.).py(0.));
     }
-    surface = surface.child(
-        row().px(12.).pt(6.).pb(4.).gap(6.).center_y().child(
-            text("↑ ↓ navigate · ↵ choose · esc back")
-                .font(ui(11.))
-                .color(rgb(MUTED)),
-        ),
-    );
     // Keep the whole surface on screen: an estimate of its height bounds the anchor.
     let estimated = input_height
         + view_h
         + if pane { 24. } else { 0. }
         + footer_count as f32 * 30.
-        + 48.
+        + 24.
         + if overflow { 24. } else { 0. };
     let x = ax.clamp(8., (vw - width - 8.).max(8.));
     let y = ay.clamp(8., (vh - estimated - 8.).max(8.));
