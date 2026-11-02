@@ -1050,3 +1050,174 @@ fn escape_walks_back_from_the_host_step_to_the_switcher() {
     press(&mut rt, Key::Escape);
     assert!(rt.state.panel.is_none());
 }
+
+fn record(
+    state: rex_linux::connection::activity::ProgramState,
+    live: bool,
+) -> rex_linux::connection::activity::StatusRecord {
+    rex_linux::connection::activity::StatusRecord {
+        state,
+        app: Some("claude".into()),
+        live,
+        ..Default::default()
+    }
+}
+
+fn set_activity(
+    ws: &mut Workspace,
+    block: &str,
+    records: &[(&str, rex_linux::connection::activity::StatusRecord)],
+) {
+    let model = &mut ws.hosts[0].model;
+    model.activity.remove(block);
+    for (id, r) in records {
+        model
+            .activity
+            .entry(block.into())
+            .or_default()
+            .insert((*id).into(), r.clone());
+    }
+    ws.track_activity(0);
+}
+
+#[test]
+fn a_tab_folds_its_records_by_priority_and_shows_its_program() {
+    use super::activity::{program_icon, tab_activity, tab_word};
+    use rex_linux::connection::activity::{BlockedKind, ProgramState::*};
+    let (mut ws, _rx) = tabbed_workspace("single");
+    let model = &mut ws.hosts[0].model;
+    model.programs.insert("block:a".into(), "nvim".into());
+    model.programs.insert("block:b".into(), "bash".into());
+    let mut blocked = record(Blocked, true);
+    blocked.kind = Some(BlockedKind::Permission);
+    blocked.msg = Some("Run cargo test?".into());
+    model.activity.insert(
+        "block:c".into(),
+        [("".into(), record(Working, true)), ("x".into(), blocked)].into(),
+    );
+    model
+        .activity
+        .insert("block:b".into(), [("".into(), record(Error, true))].into());
+    let view = model.view().unwrap().clone();
+    let single = tab_activity(model, &view.windows[0]);
+    assert_eq!(single.state, Idle);
+    assert_eq!(single.program.as_deref(), Some("nvim"));
+    assert!(std::ptr::eq(program_icon(Some("nvim")), &super::theme::VIM));
+    assert_eq!(tab_word(&single, false), None);
+    let split = tab_activity(model, &view.windows[1]);
+    // Blocked beats Error beats Working, across both panes of the split.
+    assert_eq!(split.state, Blocked);
+    assert_eq!(split.msg.as_deref(), Some("Run cargo test?"));
+    // The focused pane (block:b) reports through claude, which beats its foreground shell.
+    assert_eq!(split.program.as_deref(), Some("claude"));
+    assert_eq!(tab_word(&split, false).map(|w| w.0), Some("Needs approval"));
+    assert!(std::ptr::eq(
+        program_icon(Some("bash")),
+        &super::theme::TERMINAL
+    ));
+    std::fs::remove_file(&ws.settings_path).ok();
+}
+
+#[test]
+fn background_tabs_latch_done_and_notify_only_about_live_changes() {
+    use rex_linux::connection::activity::ProgramState::*;
+    let (mut ws, _rx) = tabbed_workspace("single");
+    ws.track_activity(0);
+    // A query restoring a blocked state isn't news.
+    set_activity(&mut ws, "block:b", &[("", record(Blocked, false))]);
+    assert!(ws.outbox.is_empty());
+    // A live report that it's working again isn't worth a notification by default.
+    set_activity(&mut ws, "block:b", &[("", record(Working, true))]);
+    assert!(ws.outbox.is_empty());
+    // Finishing in a tab the user can't see latches Done and notifies.
+    set_activity(&mut ws, "block:b", &[]);
+    assert!(ws.unseen("split"));
+    assert_eq!(ws.outbox.len(), 1);
+    assert_eq!(ws.outbox[0].summary, "dev · Done");
+    assert_eq!(ws.outbox[0].target.window.as_deref(), Some("split"));
+    // A live error is news too.
+    set_activity(&mut ws, "block:c", &[("", record(Error, true))]);
+    assert_eq!(ws.outbox.len(), 2);
+    assert_eq!(ws.outbox[1].summary, "claude · Error");
+    // The same changes in the tab in front are quiet, and seeing a tab clears its Done.
+    set_activity(&mut ws, "block:a", &[("", record(Working, true))]);
+    set_activity(&mut ws, "block:a", &[("", record(Done, true))]);
+    assert_eq!(ws.outbox.len(), 2);
+    assert!(!ws.unseen("single"));
+    ws.hosts[0]
+        .model
+        .views
+        .get_mut("s")
+        .unwrap()
+        .active_window_id = Some("split".into());
+    ws.track_activity(0);
+    assert!(!ws.unseen("split"));
+    // A reconnect drops activity wholesale; that gap is not programs finishing.
+    set_activity(&mut ws, "block:a", &[("", record(Working, true))]);
+    ws.hosts[0].model.activity.clear();
+    ws.hosts[0].model.activity_epoch += 1;
+    ws.window_focused = false;
+    ws.track_activity(0);
+    assert_eq!(ws.outbox.len(), 2);
+    assert!(!ws.unseen("single"));
+    std::fs::remove_file(&ws.settings_path).ok();
+}
+
+#[test]
+fn notification_settings_gate_what_is_sent() {
+    use rex_linux::connection::activity::{DesktopNotice, ProgramState::*};
+    let (mut ws, _rx) = tabbed_workspace("single");
+    ws.track_activity(0);
+    ws.settings.notifications.done = false;
+    set_activity(&mut ws, "block:b", &[("", record(Working, true))]);
+    set_activity(&mut ws, "block:b", &[]);
+    assert!(ws.outbox.is_empty(), "Done notifications are off");
+    assert!(ws.unseen("split"), "the tab still shows Done");
+    let notice = |block: &str| DesktopNotice {
+        session: "s".into(),
+        block: block.into(),
+        title: String::new(),
+        body: "Build finished".into(),
+    };
+    ws.deliver_program_notices(0, vec![notice("block:a"), notice("block:c")]);
+    assert_eq!(ws.outbox.len(), 1, "the tab in front stays quiet");
+    assert_eq!(ws.outbox[0].summary, "dev");
+    assert_eq!(ws.outbox[0].body, "Build finished\ns-label · test-0");
+    ws.settings.notifications.system_notifications = false;
+    set_activity(&mut ws, "block:c", &[("", record(Error, true))]);
+    ws.deliver_program_notices(0, vec![notice("block:c")]);
+    assert_eq!(ws.outbox.len(), 1);
+    std::fs::remove_file(&ws.settings_path).ok();
+}
+
+#[test]
+fn tab_pills_carry_the_activity_word_and_hide_it_when_turned_off() {
+    use rex_linux::connection::activity::{BlockedKind, ProgramState::*};
+    let pill = |show: bool| {
+        let (mut ws, _rx) = tabbed_workspace("single");
+        ws.settings.notifications.show_in_tabs = show;
+        let mut blocked = record(Blocked, true);
+        blocked.kind = Some(BlockedKind::Question);
+        ws.hosts[0]
+            .model
+            .activity
+            .insert("block:c".into(), [("".into(), blocked)].into());
+        let rt = runtime(ws);
+        let elements = rt.elements();
+        let word = elements
+            .iter()
+            .find(|e| e.key.as_deref() == Some("tab-word:split"))
+            .and_then(|e| e.text.clone());
+        let label = elements
+            .iter()
+            .find(|e| e.key.as_deref() == Some("tab:split"))
+            .and_then(|e| e.label.clone());
+        std::fs::remove_file(&rt.state.settings_path).ok();
+        (word, label)
+    };
+    assert_eq!(
+        pill(true),
+        (Some("Question".into()), Some("dev · Question".into()))
+    );
+    assert_eq!(pill(false), (None, Some("dev".into())));
+}

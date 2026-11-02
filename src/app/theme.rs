@@ -257,3 +257,63 @@ icon!(
     r#"path d="M8 7.5V5.5h6.5V12h-2""#
 );
 icon!(MINUS, "rex-minus", r#"path d="M6 10h8""#);
+
+// Programs a tab can show instead of the terminal glyph (`activity::program_icon`).
+icon!(
+    CLAUDE,
+    "rex-claude",
+    r#"path d="M10 3.5v13""#,
+    r#"path d="M3.5 10h13""#,
+    r#"path d="m5.4 5.4 9.2 9.2""#,
+    r#"path d="m14.6 5.4-9.2 9.2""#
+);
+icon!(
+    CODEX,
+    "rex-codex",
+    r#"path d="M10 2.75 16.25 6.4v7.2L10 17.25 3.75 13.6V6.4Z""#,
+    r#"path d="m8 8 2 2-2 2""#,
+    r#"path d="M11 12.5h1.5""#
+);
+icon!(
+    OPENCODE,
+    "rex-opencode",
+    r#"rect x="4" y="3.5" width="12" height="13" rx="1.5""#,
+    r#"rect x="7.5" y="7" width="5" height="6" rx=".5""#
+);
+icon!(
+    PI,
+    "rex-pi",
+    r#"path d="M4.5 6.5h11""#,
+    r#"path d="M8 6.5v8.5""#,
+    r#"path d="M12.5 6.5v6.75a1.75 1.75 0 0 0 2.5 1.6""#
+);
+icon!(
+    VIM,
+    "rex-vim",
+    r#"path d="m5 5 5 10.5L15 5""#,
+    r#"path d="M3.5 5h4""#,
+    r#"path d="M12.5 5h4""#
+);
+icon!(
+    GIT,
+    "rex-git",
+    r#"circle cx="6.5" cy="5" r="1.75""#,
+    r#"circle cx="6.5" cy="15" r="1.75""#,
+    r#"circle cx="13.5" cy="7" r="1.75""#,
+    r#"path d="M6.5 6.75v6.5""#,
+    r#"path d="M13.5 8.75c0 3-7 2.25-7 4.5""#
+);
+icon!(
+    CRATE,
+    "rex-crate",
+    r#"path d="M10 3 16.25 6.5v7L10 17l-6.25-3.5v-7Z""#,
+    r#"path d="M3.75 6.5 10 10l6.25-3.5""#,
+    r#"path d="M10 10v7""#
+);
+icon!(
+    KEY,
+    "rex-key",
+    r#"circle cx="7" cy="13" r="3""#,
+    r#"path d="m9.2 10.8 6.3-6.3""#,
+    r#"path d="m13.5 6.5 2 2""#
+);

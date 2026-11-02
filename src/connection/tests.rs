@@ -305,3 +305,182 @@ async fn rejected_bundle_gets_fresh_ticket_and_new_socket() {
     host.await.unwrap();
     server.await.unwrap();
 }
+
+const FIXTURE: &str = include_str!("fixtures/block_events.jsonl");
+const FIXTURE_BLOCK: &str = "block:01a19b73-2201-7d4a-9b0b-39967ffa0cd5";
+
+#[test]
+fn captured_block_events_update_activity_programs_and_notices() {
+    use activity::{BlockedKind, ProgramState};
+    let mut model = HostModel::default();
+    for line in FIXTURE.lines() {
+        let payload: Value = serde_json::from_str(line).unwrap();
+        let (block, event) = activity::parse_block_event(&payload).expect("a terminal event");
+        assert_eq!(block, FIXTURE_BLOCK);
+        model.apply_block_event(SESSION, block, event);
+    }
+    let records = &model.activity[FIXTURE_BLOCK];
+    let ids: Vec<_> = records.keys().map(String::as_str).collect();
+    // "kid" reported done, then was removed when the foreground process changed.
+    assert_eq!(ids, ["", "build", "build/test"]);
+    assert_eq!(records[""].state, ProgramState::Working);
+    assert_eq!(records[""].app.as_deref(), Some("claude"));
+    assert_eq!(records["build"].state, ProgramState::Blocked);
+    assert_eq!(records["build"].kind, Some(BlockedKind::Permission));
+    assert_eq!(records["build/test"].state, ProgramState::Error);
+    // The shell's argv0 is "/usr/bin/bash"; only its basename shows.
+    assert_eq!(model.programs[FIXTURE_BLOCK], "bash");
+    let notices: Vec<_> = model
+        .notices
+        .iter()
+        .map(|n| (n.session.as_str(), n.title.as_str(), n.body.as_str()))
+        .collect();
+    assert_eq!(
+        notices,
+        [
+            (SESSION, "", "hello there"),
+            (SESSION, "Title", "Body text")
+        ]
+    );
+}
+
+#[test]
+fn unknown_states_kinds_and_events_stay_quiet() {
+    use activity::{BlockEvent, ProgramState, StatusRecord};
+    let record = StatusRecord::parse(&json!({"state":"sleeping","kind":"coffee","app":"x"}));
+    assert_eq!(record.state, ProgramState::Idle);
+    assert_eq!(record.kind, None);
+    assert_eq!(record.app.as_deref(), Some("x"));
+    let event = |creator: &str, name: &str| json!({"block_id":"b","creator_name":creator,"name":name,"payload":{}});
+    assert!(activity::parse_block_event(&event("other.creator", "process_changed")).is_none());
+    assert!(activity::parse_block_event(&event(activity::TERMINAL, "bell")).is_none());
+    assert_eq!(
+        activity::parse_block_event(&event(activity::TERMINAL, "process_changed")),
+        Some(("b".into(), BlockEvent::Process(None)))
+    );
+    assert!(ProgramState::Blocked > ProgramState::Error);
+    assert!(ProgramState::Error > ProgramState::Working);
+    assert!(ProgramState::Working > ProgramState::Done);
+    assert!(ProgramState::Done > ProgramState::Idle);
+}
+
+#[test]
+fn program_names_prefer_the_script_and_drop_login_dashes() {
+    let name = |v: Value| activity::program_name(&v);
+    assert_eq!(
+        name(json!({"name":"node","script":"/home/u/.bun/bin/pi","argv0":"node"})).as_deref(),
+        Some("pi")
+    );
+    assert_eq!(
+        name(json!({"name":"zsh","argv0":"-zsh"})).as_deref(),
+        Some("zsh")
+    );
+    assert_eq!(name(json!({"name":"nvim"})).as_deref(), Some("nvim"));
+    assert_eq!(name(Value::Null), None);
+}
+
+const OTHER: &str = "session:00000000-0000-0000-0000-000000000002";
+
+async fn reply(ws: &mut WebSocketStream<TcpStream>, request: &Value, seq: u64, payload: Value) {
+    send(
+        ws,
+        json!({"type":"response","id":request["id"],"seq":seq,"payload":payload}),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn activity_follows_every_session_and_queries_the_selected_one() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let mut ws = accept(&listener, "rex.control.v1").await;
+        welcome(&mut ws, 8).await;
+        let request = recv(&mut ws).await;
+        assert_eq!(request["method"], "session.bootstrap");
+        assert_eq!(request["payload"]["event_scope"], "all");
+        let mut boot = serde_json::to_value(boot()).unwrap();
+        boot["attach_all"]["sessions"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"session_id":OTHER,"label":"other"}));
+        boot["selected_session"]["view"]["windows"] = json!([{"window_id":"w",
+            "layers":[{"kind":"tiled","layout":{"block_id":"block:a"},
+                "blocks":[{"block_id":"block:a","creator_name":activity::TERMINAL}]}]}]);
+        reply(&mut ws, &request, 1, boot).await;
+        // Hidden hosts stream nothing, so both questions are asked.
+        let status = recv(&mut ws).await;
+        assert_eq!(status["method"], "com.superlogical.terminal.program_status");
+        assert_eq!(status["payload"]["block_id"], "block:a");
+        reply(
+            &mut ws,
+            &status,
+            2,
+            json!({"records":[{"state":"blocked","kind":"question","app":"codex"}]}),
+        )
+        .await;
+        let process = recv(&mut ws).await;
+        assert_eq!(process["method"], "com.superlogical.terminal.process");
+        reply(
+            &mut ws,
+            &process,
+            3,
+            json!({"foreground":{"name":"node","argv0":"codex"}}),
+        )
+        .await;
+        // attach_all replaces the scope, so after session_created it must still ask for all.
+        send(&mut ws, json!({"type":"event","seq":4,"payload":{"type":"session_created","payload":{"session_id":OTHER}}})).await;
+        let list = recv(&mut ws).await;
+        assert_eq!(list["method"], "session.attach_all");
+        assert_eq!(list["payload"]["event_scope"], "all");
+        reply(
+            &mut ws,
+            &list,
+            5,
+            json!({"sessions":[{"session_id":SESSION,"label":"snapshot"},
+            {"session_id":OTHER,"label":"other"}]}),
+        )
+        .await;
+        // A report from an unattached session: its view is fetched once to place it.
+        let report = |seq: u64| {
+            json!({"type":"event","seq":seq,"payload":{"type":"session_event","payload":{
+            "session_id":OTHER,"event":{"type":"block_event","payload":{"block_id":"block:z",
+                "creator_name":activity::TERMINAL,"name":"program_status_changed",
+                "payload":{"id":"","record":{"state":"working"}}}}}}})
+        };
+        send(&mut ws, report(6)).await;
+        let view = recv(&mut ws).await;
+        assert_eq!(view["method"], "session.view");
+        assert_eq!(view["payload"]["session_id"], OTHER);
+        send(&mut ws, json!({"type":"response","id":view["id"],"error":{"code":"conflict","message":"no","status":409}})).await;
+        send(&mut ws, report(7)).await;
+        // No second session.view: the next message is the client closing.
+        assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
+    });
+    let host = HostConnection::spawn(endpoint, None, None, None, false);
+    tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            {
+                let m = host.model.lock().unwrap();
+                if m.activity.contains_key("block:z") && m.programs.contains_key("block:a") {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    {
+        let m = host.model.lock().unwrap();
+        let a = &m.activity["block:a"][""];
+        assert_eq!(a.state, activity::ProgramState::Blocked);
+        assert_eq!(a.app.as_deref(), Some("codex"));
+        assert_eq!(m.programs["block:a"], "codex");
+        assert_eq!(m.sessions.len(), 2);
+    }
+    // Let the second report land before closing.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    drop(host);
+    server.await.unwrap();
+}

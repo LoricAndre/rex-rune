@@ -1,8 +1,10 @@
 //! The Rune front end.
+mod activity;
 mod dialogs;
 mod fonts;
 mod input;
 mod keys;
+mod notify;
 mod panel;
 mod panes;
 mod popups;

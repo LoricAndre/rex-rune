@@ -6,7 +6,7 @@ use super::{
     widgets::{Pill, glyph, pill},
     workspace::Workspace,
 };
-use rex_linux::settings::NoticePosition;
+use rex_linux::settings::{NoticePosition, NotificationsConfig};
 use rune::{Cursor, El, ScrollSpec, Tx, col, el, row, text};
 use rune_kit::{IconButton, Keybind, SegmentedControl, Switch};
 
@@ -187,6 +187,86 @@ fn interface(s: &Workspace) -> El {
                 .build(k)
                 .key("notice-position"),
         ))
+}
+
+/// Where a notification switch keeps its value.
+type Field = fn(&mut NotificationsConfig) -> &mut bool;
+
+/// A switch for one notification preference, saved as soon as it flips.
+fn notify_switch(key: &str, label: &str, on: bool, disabled: bool, field: Field) -> El {
+    Switch::new(on)
+        .label(label.to_owned())
+        .hide_label()
+        .disabled(disabled)
+        .on_toggle(move |s: &mut Workspace| {
+            let value = field(&mut s.settings.notifications);
+            *value = !*value;
+            s.save();
+        })
+        .build(kit())
+        .key(key.to_owned())
+}
+
+fn notifications(s: &Workspace) -> El {
+    let n = &s.settings.notifications;
+    let off = !n.system_notifications;
+    let mut body = col()
+        .gap(4.)
+        .child(setting(
+            "Activity in tabs",
+            "A word on a tab whose programs need you or failed, and Done on one that finished while you were away.",
+            notify_switch("notify-tabs", "Show activity in tabs", n.show_in_tabs, false, |n| &mut n.show_in_tabs),
+        ))
+        .child(divider())
+        .child(setting(
+            "Desktop notifications",
+            "For tabs you aren't looking at, through your desktop's notification service. Clicking one shows its tab.",
+            notify_switch("notify-system", "Desktop notifications", n.system_notifications, false, |n| &mut n.system_notifications),
+        ))
+        .child(group("Notify when a program"));
+    let states: [(&str, &str, &str, bool, Field); 4] = [
+        (
+            "notify-blocked",
+            "Needs you",
+            "Waiting for approval, an answer or a sign-in.",
+            n.blocked,
+            |n| &mut n.blocked,
+        ),
+        ("notify-error", "Fails", "Reports an error.", n.error, |n| {
+            &mut n.error
+        }),
+        (
+            "notify-done",
+            "Finishes",
+            "Stops working, or reports that it's done.",
+            n.done,
+            |n| &mut n.done,
+        ),
+        ("notify-working", "Starts working", "", n.working, |n| {
+            &mut n.working
+        }),
+    ];
+    for (i, (key, label, detail, on, field)) in states.into_iter().enumerate() {
+        if i > 0 {
+            body = body.child(divider());
+        }
+        body = body.child(setting(
+            label,
+            detail,
+            notify_switch(key, label, on, off, field),
+        ));
+    }
+    body.child(divider()).child(setting(
+        "Messages from programs",
+        "Notifications programs send themselves with OSC 9 or OSC 777.",
+        notify_switch(
+            "notify-messages",
+            "Messages from programs",
+            n.program_messages,
+            off,
+            |n| &mut n.program_messages,
+        ),
+    ))
 }
 
 fn terminal(s: &Workspace) -> El {
@@ -420,6 +500,7 @@ pub fn settings(s: &Workspace, viewport: [f32; 2]) -> El {
     let body = match section {
         SettingsSection::Interface => interface(s),
         SettingsSection::Terminal => terminal(s),
+        SettingsSection::Notifications => notifications(s),
         SettingsSection::Hosts => hosts(s),
         SettingsSection::Shortcuts => shortcuts(),
     };

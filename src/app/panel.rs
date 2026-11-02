@@ -106,13 +106,15 @@ pub enum SettingsSection {
     #[default]
     Interface,
     Terminal,
+    Notifications,
     Hosts,
     Shortcuts,
 }
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 4] = [
+    pub const ALL: [SettingsSection; 5] = [
         SettingsSection::Interface,
         SettingsSection::Terminal,
+        SettingsSection::Notifications,
         SettingsSection::Hosts,
         SettingsSection::Shortcuts,
     ];
@@ -120,6 +122,7 @@ impl SettingsSection {
         match self {
             SettingsSection::Interface => "Interface",
             SettingsSection::Terminal => "Terminal",
+            SettingsSection::Notifications => "Notifications",
             SettingsSection::Hosts => "Remote Hosts",
             SettingsSection::Shortcuts => "Shortcuts",
         }
@@ -128,6 +131,7 @@ impl SettingsSection {
         match self {
             SettingsSection::Interface => "interface",
             SettingsSection::Terminal => "terminal",
+            SettingsSection::Notifications => "notifications",
             SettingsSection::Hosts => "hosts",
             SettingsSection::Shortcuts => "shortcuts",
         }

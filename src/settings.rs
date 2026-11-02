@@ -26,6 +26,34 @@ pub enum NoticePosition {
     BottomRight,
 }
 
+/// What program activity shows in tabs and which changes become desktop notifications.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NotificationsConfig {
+    pub show_in_tabs: bool,
+    pub system_notifications: bool,
+    /// Notify when a background tab's programs move into each state.
+    pub working: bool,
+    pub blocked: bool,
+    pub error: bool,
+    pub done: bool,
+    /// Pass on OSC 9 and OSC 777 notifications that programs send themselves.
+    pub program_messages: bool,
+}
+impl Default for NotificationsConfig {
+    fn default() -> Self {
+        Self {
+            show_in_tabs: true,
+            system_notifications: true,
+            working: false,
+            blocked: true,
+            error: true,
+            done: true,
+            program_messages: true,
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -36,6 +64,7 @@ pub struct Settings {
     pub font_size: f32,
     pub ui_scale: f32,
     pub notice_position: NoticePosition,
+    pub notifications: NotificationsConfig,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -55,6 +84,7 @@ impl Default for Settings {
             font_size: 15.,
             ui_scale: 1.,
             notice_position: NoticePosition::default(),
+            notifications: NotificationsConfig::default(),
         }
     }
 }
@@ -136,6 +166,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(old.notice_position, NoticePosition::TopRight);
+        assert_eq!(old.notifications, NotificationsConfig::default());
+        let partial: Settings =
+            serde_json::from_str(r#"{"notifications":{"done":false}}"#).unwrap();
+        assert!(!partial.notifications.done && partial.notifications.blocked);
         let mut s = old;
         s.notice_position = NoticePosition::BottomRight;
         let json = serde_json::to_value(&s).unwrap();

@@ -1,6 +1,7 @@
 //! The 52pt bar on the window ground: sidebar toggle, identity chip, tab track, drag space,
 //! Commands, and the window's own controls.
 use super::{
+    activity::{program_icon, tab_activity, tab_word},
     panel::Intent,
     theme::*,
     widgets::{chrome_button, glyph},
@@ -78,11 +79,17 @@ fn tab_track(s: &Workspace) -> El {
             };
             let active = view.active_window_id.as_ref() == Some(&id);
             let label = tab.label.clone().unwrap_or_else(|| "Terminal".into());
+            let activity = tab_activity(model, tab);
+            let word = tab_word(&activity, s.unseen(&id))
+                .filter(|_| s.settings.notifications.show_in_tabs);
             let (press_id, rename_id, menu_id) = (id.clone(), id.clone(), id.clone());
             let mut tab_el = row()
                 .key(format!("tab:{id}"))
                 .role("tab")
-                .label(label.clone())
+                .label(match word {
+                    Some((word, _)) => format!("{label} · {word}"),
+                    None => label.clone(),
+                })
                 .h_full()
                 .min_w(96.)
                 .max_w(240.)
@@ -122,7 +129,16 @@ fn tab_track(s: &Workspace) -> El {
             } else {
                 tab_el = tab_el.radius(8.).hover(white(0.05));
             }
-            tab_el = tab_el.child(glyph(&TERMINAL, 13., rgb(if active { INK } else { MUTED })));
+            let program = activity.program.as_deref();
+            let mut icon = el().key(format!("tab-icon:{id}")).child(glyph(
+                program_icon(program),
+                13.,
+                rgb(if active { INK } else { MUTED }),
+            ));
+            if let Some(program) = program {
+                icon = icon.help(program.to_owned());
+            }
+            tab_el = tab_el.child(icon);
             tab_el = tab_el.child(
                 text(label.clone())
                     .font(if active { medium(12.5) } else { ui(12.5) })
@@ -131,6 +147,17 @@ fn tab_track(s: &Workspace) -> El {
                     .help_when_truncated(label)
                     .shrink(),
             );
+            // The label truncates first; the word always stays whole.
+            if let Some((word, tone)) = word {
+                let mut mark = text(word)
+                    .key(format!("tab-word:{id}"))
+                    .font(medium(11.5))
+                    .color(rgb(tone));
+                if let Some(msg) = activity.msg.clone().filter(|_| word != "Done") {
+                    mark = mark.help(msg);
+                }
+                tab_el = tab_el.child(mark);
+            }
             names = names.child(tab_el);
         }
     }

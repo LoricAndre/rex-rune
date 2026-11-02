@@ -1,6 +1,12 @@
 //! Workspace state and behavior: hosts, sessions, tabs, panes, popups and preferences.
 //! Rendering lives in the sibling view modules; nothing here builds elements.
-use super::{panel::*, term::Term, widgets::ScrollFx};
+use super::{
+    activity::TabStates,
+    notify::{Note, Notifier},
+    panel::*,
+    term::Term,
+    widgets::ScrollFx,
+};
 use rex_linux::{
     connection::{Command, HostCommand, HostConnection, HostModel, Options},
     layout::{Divider, shell_layout},
@@ -77,6 +83,14 @@ pub struct Workspace {
     scratch: TextEdit,
     next_host: u64,
     pub settings_section: SettingsSection,
+    /// Each tab's folded activity state when last synced.
+    pub tab_states: TabStates,
+    /// Tabs whose programs finished while the user wasn't looking; they show "Done".
+    pub unseen_done: HashSet<(HostId, String)>,
+    pub activity_epochs: HashMap<HostId, u64>,
+    pub notifier: Option<Notifier>,
+    /// Notifications headless tests would have sent.
+    pub outbox: Vec<Note>,
 }
 
 #[derive(Default)]
@@ -162,6 +176,11 @@ impl Workspace {
             scratch: TextEdit::new(""),
             next_host: 0,
             settings_section: SettingsSection::default(),
+            tab_states: HashMap::new(),
+            unseen_done: HashSet::new(),
+            activity_epochs: HashMap::new(),
+            notifier: None,
+            outbox: Vec::new(),
         };
         for index in 0..this.settings.hosts.len() {
             this.connect_host(index, explicit);
@@ -217,6 +236,9 @@ impl Workspace {
         let id = state.id;
         self.terminals.retain(|(host, _), _| *host != id);
         self.claimed.retain(|(host, _)| *host != id);
+        self.tab_states.retain(|(host, _), _| *host != id);
+        self.unseen_done.retain(|(host, _)| *host != id);
+        self.activity_epochs.remove(&id);
     }
 
     /// Stop connecting to saved host `index` and drop it from the workspace. Its server, its
@@ -291,12 +313,15 @@ impl Workspace {
     pub fn sync(&mut self, index: usize, tx: &mut Tx) {
         let id = self.hosts[index].id;
         let old_session = self.hosts[index].model.selected.clone();
-        let model = self.hosts[index]
-            .connection
-            .model
-            .lock()
-            .expect("host model")
-            .clone();
+        let (model, notices) = {
+            let mut shared = self.hosts[index]
+                .connection
+                .model
+                .lock()
+                .expect("host model");
+            let notices = std::mem::take(&mut shared.notices);
+            (shared.clone(), notices)
+        };
         for (block, connection) in &model.terminals {
             let key = (id, block.clone());
             if !self.terminals.contains_key(&key) {
@@ -329,6 +354,8 @@ impl Workspace {
             );
         }
         self.hosts[index].model = model;
+        self.track_activity(index);
+        self.deliver_program_notices(index, notices);
         if self
             .panel
             .as_ref()
@@ -388,6 +415,7 @@ impl Workspace {
         if focused {
             self.claimed.clear();
             self.claim_visible();
+            self.track_activity(self.active);
         }
     }
 

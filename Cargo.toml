@@ -8,7 +8,7 @@ publish = false
 
 [features]
 default = ["ui"]
-ui = ["dep:rune", "dep:rune-kit", "dep:rune-theme-opencode"]
+ui = ["dep:rune", "dep:rune-kit", "dep:rune-theme-opencode", "dep:zbus"]
 
 [dependencies]
 anyhow = "1"
@@ -28,6 +28,8 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt", "net", "time", "macros", "sync"] }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 url = "2"
+# Desktop notifications over D-Bus, with Rune's own zbus build.
+zbus = { version = "6", default-features = false, features = ["tokio", "proxy"], optional = true }
 unicode-segmentation = "1"
 
 [profile.dev]

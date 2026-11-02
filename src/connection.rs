@@ -4,15 +4,18 @@ use crate::{
     transport::{self, Client},
     wire,
 };
+use activity::{BlockEvent, DesktopNotice, StatusRecord};
 use anyhow::{Context, Result};
 use rexrs::api::session;
 use serde_json::{Value, json};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+
+pub mod activity;
 
 #[derive(Clone, Debug, clap::Parser)]
 #[command(
@@ -126,8 +129,56 @@ pub struct HostModel {
     pub selected: Option<String>,
     pub views: HashMap<String, session::ViewResponse>,
     pub terminals: HashMap<String, Connection>,
+    /// Each terminal block's OSC 7501 records, by record id (empty for the root record).
+    pub activity: HashMap<String, BTreeMap<String, StatusRecord>>,
+    /// Each terminal block's foreground program, when the server named one.
+    pub programs: HashMap<String, String>,
+    /// Program notifications not yet taken by the UI.
+    pub notices: Vec<DesktopNotice>,
+    /// Bumped whenever `activity` is dropped wholesale (on reconnect), so the UI starts its
+    /// before-and-after comparison over instead of reading the gap as programs finishing.
+    pub activity_epoch: u64,
 }
 impl HostModel {
+    pub fn apply_block_event(&mut self, session: &str, block: String, event: BlockEvent) {
+        match event {
+            BlockEvent::StatusChanged { id, record } => {
+                self.activity.entry(block).or_default().insert(id, record);
+            }
+            BlockEvent::StatusRemoved { ids } => {
+                if let Some(records) = self.activity.get_mut(&block) {
+                    for id in ids {
+                        records.remove(&id);
+                    }
+                    if records.is_empty() {
+                        self.activity.remove(&block);
+                    }
+                }
+            }
+            BlockEvent::Process(Some(name)) => {
+                self.programs.insert(block, name);
+            }
+            BlockEvent::Process(None) => {
+                self.programs.remove(&block);
+            }
+            BlockEvent::Notification { title, body } => {
+                // A program spamming notifications can't grow this without bound.
+                if self.notices.len() < 32 {
+                    self.notices.push(DesktopNotice {
+                        session: session.into(),
+                        block,
+                        title,
+                        body,
+                    });
+                }
+            }
+        }
+    }
+    fn forget_block(&mut self, block: &str) {
+        self.activity.remove(block);
+        self.programs.remove(block);
+    }
+
     pub fn view(&self) -> Option<&session::ViewResponse> {
         self.views.get(self.selected.as_ref()?)
     }
@@ -192,6 +243,10 @@ struct ControlState {
     bootstrap_seq: u64,
     list_seq: u64,
     view_seq: HashMap<String, u64>,
+    /// Blocks whose program status (and process, if not streamed) were asked for.
+    queried: HashSet<String>,
+    /// Unattached sessions fetched once with session.view to place their block events.
+    viewed: HashSet<String>,
     // This pool is scoped to the terminal data ref and subprotocol; other sources
     // are filtered out before insertion. It lives only as long as this control socket.
     tickets: HashMap<(String, String), PendingTicket>,
@@ -296,12 +351,11 @@ fn bootstrap_request(
     }
     ids.sort();
     ids.dedup();
-    let request =
-        session::Bootstrap::new("session").data_tickets([session::BootstrapDataTicket::new(
-            "com.superlogical.terminal",
-            "terminal",
-        )
-        .subprotocol(wire::PROTOCOL)]);
+    let request = session::Bootstrap::new("all").data_tickets([session::BootstrapDataTicket::new(
+        "com.superlogical.terminal",
+        "terminal",
+    )
+    .subprotocol(wire::PROTOCOL)]);
     if wanted.is_some() || creating || !ids.is_empty() {
         request.attach_session_ids(ids)
     } else {
@@ -503,7 +557,7 @@ async fn refresh(
 async fn list(control: &mut Client, shared: &Shared, state: &mut ControlState) -> Result<()> {
     let reply = tokio::time::timeout(
         Duration::from_secs(8),
-        control.call_with_seq(session::AttachAll::new("session")),
+        control.call_with_seq(session::AttachAll::new("all")),
     )
     .await??;
     state.list_seq = reply.seq;
@@ -629,6 +683,64 @@ fn reconcile(
     }
 }
 
+fn view_blocks(view: &session::ViewResponse) -> impl Iterator<Item = String> + '_ {
+    view.windows
+        .iter()
+        .flat_map(|w| &w.layers)
+        .flat_map(|l| &l.blocks)
+        .filter(|b| b.creator_name.as_deref() == Some(activity::TERMINAL))
+        .filter_map(|b| b.block_id.clone())
+}
+
+/// Ask once per block of the selected session what its programs last reported, and which
+/// program runs in the blocks that aren't streamed (streams get process_changed anyway).
+/// Revision 8 and later only. A failed query leaves the block without activity; it isn't
+/// retried.
+async fn query_activity(
+    control: &mut Client,
+    shared: &Shared,
+    state: &mut ControlState,
+    workers: &HashMap<String, PaneWorker>,
+) {
+    let (session, blocks) = {
+        let m = shared.model.lock().expect("host model");
+        if m.protocol.api_revision < 8 || !m.connected {
+            return;
+        }
+        let Some(view) = m.view() else { return };
+        let Some(session) = m.selected.clone() else {
+            return;
+        };
+        let blocks: Vec<_> = view_blocks(view)
+            .filter(|b| !state.queried.contains(b))
+            .collect();
+        (session, blocks)
+    };
+    for block in blocks {
+        state.queried.insert(block.clone());
+        let target = json!({"session_id":session, "block_id":block, "args":{}});
+        let method = format!("{}.program_status", activity::TERMINAL);
+        if let Ok(reply) = request(control, &method, target.clone()).await {
+            let records = activity::parse_status(&reply);
+            shared.update(|m| {
+                m.activity.remove(&block);
+                if !records.is_empty() {
+                    m.activity
+                        .insert(block.clone(), records.into_iter().collect());
+                }
+            });
+        }
+        if workers.contains_key(&block) {
+            continue;
+        }
+        let method = format!("{}.process", activity::TERMINAL);
+        if let Ok(reply) = request(control, &method, target).await {
+            let name = activity::program_name(&reply["foreground"]);
+            shared.update(|m| m.apply_block_event(&session, block, BlockEvent::Process(name)));
+        }
+    }
+}
+
 fn remove_session(shared: &Shared, workers: &mut HashMap<String, PaneWorker>, id: &str) {
     let blocks: Vec<_> = workers
         .iter()
@@ -640,7 +752,11 @@ fn remove_session(shared: &Shared, workers: &mut HashMap<String, PaneWorker>, id
     }
     shared.update(|m| {
         m.sessions.retain(|s| s.session_id != id);
-        m.views.remove(id);
+        if let Some(view) = m.views.remove(id) {
+            for block in view_blocks(&view) {
+                m.forget_block(&block);
+            }
+        }
         for block in blocks {
             m.terminals.remove(&block);
         }
@@ -734,6 +850,7 @@ async fn handle_event(
                 }
                 shared.update(|m| {
                     m.terminals.remove(block);
+                    m.forget_block(block);
                 });
             }
             if let Some(id) = event.session_id.as_deref()
@@ -745,6 +862,24 @@ async fn handle_event(
                     .contains_key(id)
             {
                 refresh(control, shared, state, id).await?;
+            }
+        }
+        "block_event" => {
+            let (Some(id), Some((block, change))) = (
+                event.session_id.as_deref(),
+                activity::parse_block_event(&event.payload),
+            ) else {
+                return Ok(());
+            };
+            let unplaced = {
+                let m = shared.model.lock().expect("host model");
+                !m.views.contains_key(id) && m.sessions.iter().any(|s| s.session_id == id)
+            };
+            shared.update(|m| m.apply_block_event(id, block, change));
+            // Read-only, and allowed for any session once attach_all is active. Once per
+            // connection: a failure leaves that session's tabs without activity.
+            if unplaced && state.viewed.insert(id.to_owned()) {
+                let _ = refresh(control, shared, state, id).await;
             }
         }
         "block_owner_changed" => {
@@ -784,6 +919,10 @@ async fn run_host(
                 m.client_id = identity.id.clone();
                 m.protocol.api_revision = control.welcome().api_revision;
                 m.views.clear();
+                // Reports made while disconnected were missed; queries refill what's shown.
+                m.activity.clear();
+                m.programs.clear();
+                m.activity_epoch += 1;
             });
             let mut state = ControlState::default();
             if control.welcome().api_revision >= 8 {
@@ -843,6 +982,7 @@ async fn run_host(
                 if let Some((cols, rows, w, h)) = worker.size { resize(&mut control, &worker.session, block, cols, rows, w, h).await?; }
             }
             reconcile(&endpoint, shared, &sender, &mut workers);
+            query_activity(&mut control, shared, &mut state, &workers).await;
             retry = 0;
             loop {
                 tokio::select! {
@@ -850,6 +990,7 @@ async fn run_host(
                         handle_event(event?, &mut control, shared, &mut workers, &mut state).await?;
                         state.prune(&shared.model.lock().expect("host model"));
                         reconcile(&endpoint, shared, &sender, &mut workers);
+                        query_activity(&mut control, shared, &mut state, &workers).await;
                     }
                     command = commands.recv_async() => {
                         let Ok(command) = command else { control.close().await?; return Ok(true); };
@@ -863,6 +1004,7 @@ async fn run_host(
                         }
                         state.prune(&shared.model.lock().expect("host model"));
                         reconcile(&endpoint, shared, &sender, &mut workers);
+                        query_activity(&mut control, shared, &mut state, &workers).await;
                     }
                 }
             }
