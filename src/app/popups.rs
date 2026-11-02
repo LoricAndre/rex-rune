@@ -10,7 +10,7 @@ use super::{
 use rune::{El, ScrollSpec, Tx, col, el, row, text};
 use rune_kit::TextInput;
 
-const HEADER: f32 = 32.;
+const HEADER: f32 = 26.;
 
 #[derive(Clone)]
 enum Hidden {
@@ -78,11 +78,11 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
     let commands = matches!(panel.kind, PanelKind::Picker(false));
     let [vw, vh] = viewport;
     let width = (if pane {
-        300.
+        260.
     } else if sessions {
-        440.
+        340.
     } else {
-        520.
+        460.
     } as f32)
         .min(vw - 16.);
     let top = if sessions || pane {
@@ -103,14 +103,14 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
         top,
     ));
     let entries = s.entries();
-    let row_height = if commands { 36. } else { 34. };
+    let row_height = if commands { 30. } else { 28. };
     let footer_count = entries.iter().filter(|e| e.footer).count();
-    let input_height = if panel.inputs.is_empty() { 40. } else { 52. };
-    let list_max = (vh - top - 16. - input_height - footer_count as f32 * 30. - 64.).max(60.);
+    let input_height = if panel.inputs.is_empty() { 32. } else { 40. };
+    let list_max = (vh - top - 16. - input_height - footer_count as f32 * 29. - 56.).max(60.);
 
     // Rows, with their content spans for the overflow hint.
-    let mut list = col().key("results").w_full().pr(8.).gap(2.);
-    let mut footer = col().w_full().px(6.).py(4.).gap(2.);
+    let mut list = col().key("results").w_full().pr(4.).gap(1.);
+    let mut footer = col().w_full().gap(1.);
     let surface_id = match panel.kind {
         PanelKind::Picker(true) => "switcher",
         PanelKind::Picker(false) => "commands",
@@ -132,9 +132,9 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
                 list = list.child(
                     row()
                         .w_full()
-                        .h(HEADER - if first { 6. } else { 0. })
-                        .pt(if first { 0. } else { 8. })
-                        .px(12.)
+                        .h(HEADER - if first { 4. } else { 0. })
+                        .pt(if first { 0. } else { 6. })
+                        .px(10.)
                         .gap(7.)
                         .center_y()
                         .children(entry.group_icon.map(|i| glyph(i, 13., rgb(MUTED))))
@@ -167,7 +167,7 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
                                 .child(glyph(&PLUS, 13., rgb(MUTED)))
                         })),
                 );
-                y += HEADER - if first { 6. } else { 0. } + 2.;
+                y += HEADER - if first { 4. } else { 0. } + 1.;
             }
         }
         let action = entry.action.clone();
@@ -178,7 +178,7 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
                 surface: surface_id,
                 label: &entry.label,
                 detail: &entry.detail,
-                height: if entry.footer { 32. } else { row_height },
+                height: if entry.footer { 28. } else { row_height },
                 check: (sessions || entry.current).then_some(entry.current),
                 followup: entry.followup,
                 enabled,
@@ -190,7 +190,7 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
         if entry.footer {
             footer = footer.child(r);
         } else {
-            let h = row_height + 2.;
+            let h = row_height + 1.;
             spans.push((
                 y,
                 y + h,
@@ -293,19 +293,19 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
             .role("menu")
             .w(width)
             .max_h(vh - 16.)
-            .padding(6.)
-            .gap(2.)
+            .padding(5.)
+            .gap(1.)
             .preserve_focus_on_press(true),
-        14.,
+        12.,
         true,
     )
-    .clip_rounded(14.)
+    .clip_rounded(12.)
     .transition(pop_in());
     if panel.inputs.is_empty() {
         surface = surface.child(
-            row().h(30.).px(12.).center_y().child(
+            row().h(26.).px(10.).center_y().child(
                 text(panel.title.clone())
-                    .font(medium(12.))
+                    .font(medium(11.5))
                     .color(rgb(MUTED))
                     .truncate(),
             ),
@@ -319,20 +319,20 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
         surface = surface.child(
             row()
                 .w_full()
-                .h(42.)
-                .mb(4.)
-                .px(4.)
+                .h(34.)
+                .mb(3.)
+                .px(2.)
                 .center_y()
-                .radius(10.)
+                .radius(8.)
                 .continuous_corners()
                 .fill(white(0.045))
                 .child(
                     TextInput::new(&panel.inputs[0])
                         .placeholder(placeholder)
                         .leading_icon(&SEARCH)
-                        .leading_icon_size(16.)
-                        .text_style(ui(14.))
-                        .height(40.)
+                        .leading_icon_size(14.)
+                        .text_style(ui(13.))
+                        .height(32.)
                         .plain()
                         .trailing(text("esc").font(medium(10.5)).color(rgb(MUTED)))
                         .on_edit(|s: &mut Workspace| s.edit_input(0))
@@ -355,15 +355,15 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
     }
     if footer_count > 0 {
         surface = surface
-            .child(el().h(1.).mx(8.).my(4.).fill(white(0.07)))
+            .child(el().h(1.).mx(8.).my(3.).fill(white(0.07)))
             .child(footer.px(0.).py(0.));
     }
     // Keep the whole surface on screen: an estimate of its height bounds the anchor.
     let estimated = input_height
         + view_h
         + if pane { 24. } else { 0. }
-        + footer_count as f32 * 30.
-        + 24.
+        + footer_count as f32 * 29.
+        + 18.
         + if overflow { 24. } else { 0. };
     let x = ax.clamp(8., (vw - width - 8.).max(8.));
     let y = ay.clamp(8., (vh - estimated - 8.).max(8.));

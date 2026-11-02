@@ -156,12 +156,12 @@ pub fn list_row(
         .label(r.label.to_owned())
         .w_full()
         .h(r.height)
-        .px(10.)
-        .gap(10.)
+        .px(9.)
+        .gap(8.)
         .center_y()
         .help_when_truncated(format!("{} · {}", r.label, r.detail));
     if r.selected {
-        e = e.child(highlight(&format!("sel:{}", r.surface), 9.));
+        e = e.child(highlight(&format!("sel:{}", r.surface), 7.));
     }
     if r.enabled {
         e = e

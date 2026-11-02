@@ -132,7 +132,7 @@ fn tab_track(s: &Workspace) -> El {
             let program = activity.program.as_deref();
             let mut icon = el().key(format!("tab-icon:{id}")).child(glyph(
                 program_icon(program),
-                13.,
+                15.,
                 rgb(if active { INK } else { MUTED }),
             ));
             if let Some(program) = program {

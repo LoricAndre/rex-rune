@@ -275,19 +275,6 @@ icon!(
     r#"path d="M11 12.5h1.5""#
 );
 icon!(
-    OPENCODE,
-    "rex-opencode",
-    r#"rect x="4" y="3.5" width="12" height="13" rx="1.5""#,
-    r#"rect x="7.5" y="7" width="5" height="6" rx=".5""#
-);
-icon!(
-    PI,
-    "rex-pi",
-    r#"path d="M4.5 6.5h11""#,
-    r#"path d="M8 6.5v8.5""#,
-    r#"path d="M12.5 6.5v6.75a1.75 1.75 0 0 0 2.5 1.6""#
-);
-icon!(
     VIM,
     "rex-vim",
     r#"path d="m5 5 5 10.5L15 5""#,
@@ -316,4 +303,27 @@ icon!(
     r#"circle cx="7" cy="13" r="3""#,
     r#"path d="m9.2 10.8 6.3-6.3""#,
     r#"path d="m13.5 6.5 2 2""#
+);
+
+/// Solid marks drawn in `currentColor`, for logos that outlines make unrecognisable.
+macro_rules! mark {
+    ($name:ident, $id:literal, $body:literal) => {
+        pub static $name: Icon = Icon {
+            name: $id,
+            view: 20.0,
+            body: $body,
+        };
+    };
+}
+// Pi: a rounded tile with a block P and dot cut out of it.
+mark!(
+    PI,
+    "rex-pi",
+    r#"<path fill="currentColor" fill-rule="evenodd" d="M5.5 2.5h9a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3h-9a3 3 0 0 1-3-3v-9a3 3 0 0 1 3-3ZM6 5.5h7v5.5H9v3.5H6ZM9 7.5h1.75v1.5H9ZM13 12h2v2.5h-2Z"/>"#
+);
+// OpenCode: a heavy block O whose lower counter is shaded.
+mark!(
+    OPENCODE,
+    "rex-opencode",
+    r#"<path fill="currentColor" fill-rule="evenodd" d="M4 2.5h12v15H4ZM7.5 6v8h5V6Z"/><path fill="currentColor" fill-opacity=".45" d="M7.5 10h5v4h-5Z"/>"#
 );
