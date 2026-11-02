@@ -4,7 +4,7 @@ use super::{panel::*, term::Term, widgets::ScrollFx};
 use rex_linux::{
     connection::{Command, HostCommand, HostConnection, HostModel, Options},
     layout::{Divider, shell_layout},
-    settings::{Host, Settings, validate_host},
+    settings::{Host, NoticePosition, Settings, validate_host},
 };
 use rune::{AppHandle, PhysicalKeyCode, TextEdit, Tx};
 use serde_json::{Value, json};
@@ -13,7 +13,13 @@ use std::{
     path::PathBuf,
 };
 
+/// A host's identity for this run. Indices shift when a host is removed; ids never repeat,
+/// so a late wake or a stored terminal can't land on another host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct HostId(pub u64);
+
 pub struct HostState {
+    pub id: HostId,
     pub connection: HostConnection,
     pub model: HostModel,
 }
@@ -41,7 +47,7 @@ pub struct Workspace {
     pub settings_path: PathBuf,
     pub hosts: Vec<HostState>,
     pub active: usize,
-    pub terminals: HashMap<(usize, String), Term>,
+    pub terminals: HashMap<(HostId, String), Term>,
     pub panel: Option<Panel>,
     pub notices: Vec<Notice>,
     next_notice: u64,
@@ -50,7 +56,7 @@ pub struct Workspace {
     /// Physical keys whose press went to a terminal; only their releases follow.
     pub forwarded: HashSet<PhysicalKeyCode>,
     /// Panes this window has taken size ownership of since it last came forward.
-    pub claimed: HashSet<(usize, String)>,
+    pub claimed: HashSet<(HostId, String)>,
     pub handle: AppHandle<Workspace>,
     pub window_focused: bool,
     /// The pane area in window points, for divider drags and target outlines.
@@ -69,6 +75,8 @@ pub struct Workspace {
     pub switcher_fx: ScrollFx,
     pub sidebar_drag_start: Option<f32>,
     scratch: TextEdit,
+    next_host: u64,
+    pub settings_section: SettingsSection,
 }
 
 #[derive(Default)]
@@ -152,6 +160,8 @@ impl Workspace {
             switcher_fx: ScrollFx::default(),
             sidebar_drag_start: None,
             scratch: TextEdit::new(""),
+            next_host: 0,
+            settings_section: SettingsSection::default(),
         };
         for index in 0..this.settings.hosts.len() {
             this.connect_host(index, explicit);
@@ -160,6 +170,12 @@ impl Workspace {
     }
 
     fn connect_host(&mut self, index: usize, explicit: bool) {
+        let state = self.spawn_host(index, explicit);
+        self.hosts.push(state);
+    }
+
+    /// A connection to saved host `index` under a fresh id, with its wake thread.
+    fn spawn_host(&mut self, index: usize, explicit: bool) -> HostState {
         let host = &self.settings.hosts[index];
         let cli = explicit && index == self.active;
         let preferred = if cli {
@@ -176,21 +192,104 @@ impl Workspace {
             cli.then(|| self.options.block.clone()).flatten(),
             index == self.active,
         );
+        let id = HostId(self.next_host);
+        self.next_host += 1;
         let receiver = connection.wake.clone();
         let handle = self.handle.clone();
         std::thread::Builder::new()
-            .name(format!("rex-host-{index}"))
+            .name(format!("rex-host-{}", id.0))
             .spawn(move || {
                 while receiver.recv().is_ok() {
-                    handle.update(move |s, tx| s.sync(index, tx));
+                    handle.update(move |s, tx| s.sync_host(id, tx));
                 }
             })
             .expect("host wake thread");
         let model = connection.model.lock().expect("host model").clone();
-        self.hosts.push(HostState { connection, model });
+        HostState {
+            id,
+            connection,
+            model,
+        }
+    }
+
+    /// Forget a host's terminals and claims; dropping its `HostState` shuts its worker down.
+    fn forget_host(&mut self, state: HostState) {
+        let id = state.id;
+        self.terminals.retain(|(host, _), _| *host != id);
+        self.claimed.retain(|(host, _)| *host != id);
+    }
+
+    /// Stop connecting to saved host `index` and drop it from the workspace. Its server, its
+    /// sessions and their programs are untouched. The last host can't be removed.
+    pub fn remove_host(&mut self, index: usize, tx: &mut Tx) {
+        if self.settings.hosts.len() <= 1 || index >= self.hosts.len() {
+            return;
+        }
+        let state = self.hosts.remove(index);
+        self.forget_host(state);
+        let host = self.settings.hosts.remove(index);
+        self.settings.sessions.remove(&host.endpoint);
+        // Menus and drags name hosts by position, which just shifted.
+        self.panel = None;
+        self.drag = None;
+        if self.active == index {
+            self.active = 0;
+        } else if self.active > index {
+            self.active -= 1;
+        }
+        self.update_visibility();
+        self.save();
+        self.update_title(tx);
+        self.inform(format!(
+            "Removed {}. Its sessions keep running there.",
+            host.label
+        ));
+    }
+
+    /// Rename a host or change its default shell in place. A new endpoint is another server:
+    /// the old connection is dropped and the host reconnects under a new id.
+    pub fn edit_host(
+        &mut self,
+        index: usize,
+        label: String,
+        endpoint: String,
+        shell: Option<String>,
+    ) {
+        let host = &mut self.settings.hosts[index];
+        host.label = label;
+        host.shell = shell;
+        if host.endpoint != endpoint {
+            let old = std::mem::replace(&mut host.endpoint, endpoint);
+            self.settings.sessions.remove(&old);
+            let state = self.spawn_host(index, false);
+            let old = std::mem::replace(&mut self.hosts[index], state);
+            self.forget_host(old);
+            if self.active == index {
+                self.drag = None;
+            }
+            self.update_visibility();
+        }
+        self.save();
+    }
+
+    pub fn host_index(&self, id: HostId) -> Option<usize> {
+        self.hosts.iter().position(|h| h.id == id)
+    }
+
+    /// The key of `block`'s terminal on the active host.
+    pub fn term_key(&self, block: &str) -> (HostId, String) {
+        (self.hosts[self.active].id, block.to_owned())
+    }
+
+    /// A host worker's wake: nothing when its host has been removed since.
+    pub fn sync_host(&mut self, id: HostId, tx: &mut Tx) {
+        if let Some(index) = self.host_index(id) {
+            self.sync(index, tx);
+        }
     }
 
     pub fn sync(&mut self, index: usize, tx: &mut Tx) {
+        let id = self.hosts[index].id;
         let old_session = self.hosts[index].model.selected.clone();
         let model = self.hosts[index]
             .connection
@@ -199,7 +298,7 @@ impl Workspace {
             .expect("host model")
             .clone();
         for (block, connection) in &model.terminals {
-            let key = (index, block.clone());
+            let key = (id, block.clone());
             if !self.terminals.contains_key(&key) {
                 let receiver = connection.wake.clone();
                 let handle = self.handle.clone();
@@ -217,7 +316,7 @@ impl Workspace {
             }
         }
         self.terminals
-            .retain(|(host, block), _| *host != index || model.terminals.contains_key(block));
+            .retain(|(host, block), _| *host != id || model.terminals.contains_key(block));
         let changed_session = self
             .settings
             .sessions
@@ -248,7 +347,7 @@ impl Workspace {
         self.claim_visible();
         let (font, family) = (self.settings.font_size, self.terminal_family);
         for ((host, _), term) in self.terminals.iter_mut() {
-            if *host == index {
+            if *host == id {
                 term.resize_if_owner(font, family);
             }
         }
@@ -267,18 +366,19 @@ impl Workspace {
             return;
         };
         let Some(window) = model.window() else { return };
+        let id = self.hosts[self.active].id;
         let blocks: Vec<String> = window
             .layers
             .iter()
             .flat_map(|l| &l.blocks)
             .filter_map(|b| b.block_id.clone())
-            .filter(|b| !self.claimed.contains(&(self.active, b.clone())))
+            .filter(|b| !self.claimed.contains(&(id, b.clone())))
             .collect();
         if blocks.is_empty() {
             return;
         }
         for b in &blocks {
-            self.claimed.insert((self.active, b.clone()));
+            self.claimed.insert((id, b.clone()));
         }
         self.send(self.active, HostCommand::Claim { session, blocks });
     }
@@ -291,7 +391,7 @@ impl Workspace {
         }
     }
 
-    pub fn refresh_terminal(&mut self, key: &(usize, String)) {
+    pub fn refresh_terminal(&mut self, key: &(HostId, String)) {
         let font = self.settings.font_size;
         if let Some(term) = self.terminals.get_mut(key) {
             term.refresh();
@@ -420,11 +520,11 @@ impl Workspace {
     }
 
     pub fn active_terminal(&self) -> Option<&Term> {
-        self.terminals.get(&(self.active, self.focused_block()?))
+        self.terminals.get(&self.term_key(&self.focused_block()?))
     }
 
     pub fn active_terminal_mut(&mut self) -> Option<&mut Term> {
-        let key = (self.active, self.focused_block()?);
+        let key = self.term_key(&self.focused_block()?);
         self.terminals.get_mut(&key)
     }
 
@@ -453,7 +553,7 @@ impl Workspace {
         self.settings.hosts[host].shell.as_deref()
     }
 
-    pub fn terminal_command(&mut self, key: &(usize, String), command: Command) {
+    pub fn terminal_command(&mut self, key: &(HostId, String), command: Command) {
         if let Some(term) = self.terminals.get_mut(key) {
             term.send(command);
         }
@@ -570,8 +670,24 @@ impl Workspace {
             Intent::Sidebar => self.toggle_sidebar(),
             Intent::Settings => {
                 let back = self.panel.take();
-                self.panel = Some(Panel::new(PanelKind::Settings, "Workspace preferences", &[]));
+                self.panel = Some(Panel::new(PanelKind::Settings, "Settings", &[]));
                 self.panel.as_mut().unwrap().target = back.and_then(|p| p.target);
+            }
+            Intent::EditHost(host) => {
+                let h = self.settings.hosts[host].clone();
+                self.open_panel(
+                    PanelKind::Form(Form::EditHost(host)),
+                    &format!("Edit {}", h.label),
+                    &[
+                        ("Host name", "my-host", &h.label),
+                        ("Endpoint", "https://host.example.ts.net or unix:///path", &h.endpoint),
+                        ("Default shell", "Server default — e.g. zsh or /bin/zsh", h.shell.as_deref().unwrap_or("")),
+                    ],
+                );
+            }
+            Intent::RemoveHost(host) => {
+                let label = self.settings.hosts[host].label.clone();
+                self.open_panel(PanelKind::RemoveHost(host), &format!("Remove {label}?"), &[]);
             }
             Intent::Retry => self.send(self.active, HostCommand::Reconnect),
         }
@@ -841,7 +957,8 @@ impl Workspace {
                 self.panel.as_mut().unwrap().target = Some(target);
             }
             PaneAction::Reconnect => {
-                self.terminal_command(&(target.host, target.block), Command::Reconnect);
+                let key = (self.hosts[target.host].id, target.block);
+                self.terminal_command(&key, Command::Reconnect);
             }
         }
     }
@@ -901,7 +1018,12 @@ impl Workspace {
     pub fn open_panel(&mut self, kind: PanelKind, title: &str, fields: &[(&str, &str, &str)]) {
         let previous = self.panel.take();
         let target = previous.as_ref().and_then(|p| p.target.clone());
-        let keep_back = matches!(kind, PanelKind::Hosts(_));
+        // Forms and confirmations opened from Settings go back to it.
+        let keep_back = matches!(kind, PanelKind::Hosts(_))
+            || (matches!(kind, PanelKind::Form(_) | PanelKind::RemoveHost(_))
+                && previous
+                    .as_ref()
+                    .is_some_and(|p| matches!(p.kind, PanelKind::Settings)));
         let mut panel = Panel::new(kind, title, fields);
         panel.target = target;
         panel.back = if keep_back {
@@ -912,6 +1034,22 @@ impl Workspace {
         self.panel = Some(panel);
         if let Some(first) = self.entries().iter().position(|e| e.enabled) {
             self.panel.as_mut().unwrap().selected = first;
+        }
+    }
+
+    /// The Settings panel a form or confirmation was opened from, to return to after it.
+    fn settings_back(&mut self) -> Option<Panel> {
+        self.panel
+            .as_mut()
+            .and_then(|p| p.back.take())
+            .filter(|b| matches!(b.kind, PanelKind::Settings))
+            .map(|b| *b)
+    }
+
+    pub fn set_notice_position(&mut self, position: NoticePosition) {
+        if self.settings.notice_position != position {
+            self.settings.notice_position = position;
+            self.save();
         }
     }
 
@@ -1005,7 +1143,11 @@ impl Workspace {
                         .then(|| "Enter one shell name or path, without arguments.".to_owned())
                 } else if values.first().is_none_or(|s| s.is_empty()) {
                     Some("Enter a name".to_owned())
-                } else if let Form::AddHost = form {
+                } else if let Form::AddHost | Form::EditHost(_) = form {
+                    let editing = match form {
+                        Form::EditHost(i) => Some(i),
+                        _ => None,
+                    };
                     validate_host(&values[0], &values[1])
                         .err()
                         .map(|e| e.to_string())
@@ -1013,8 +1155,19 @@ impl Workspace {
                             self.settings
                                 .hosts
                                 .iter()
-                                .any(|h| h.endpoint == values[1])
+                                .enumerate()
+                                .any(|(i, h)| Some(i) != editing && h.endpoint == values[1])
                                 .then(|| "This endpoint is already in the workspace".to_owned())
+                        })
+                        .or_else(|| {
+                            values
+                                .get(2)
+                                .is_some_and(|v| {
+                                    v.chars().any(|c| c.is_whitespace() || c.is_control())
+                                })
+                                .then(|| {
+                                    "Enter one shell name or path, without arguments.".to_owned()
+                                })
                         })
                 } else {
                     None
@@ -1024,6 +1177,7 @@ impl Workspace {
                     return;
                 }
                 let target = self.panel.as_ref().and_then(|p| p.target.clone());
+                let back = self.settings_back();
                 self.close_panel(tx);
                 match form {
                     Form::HostShell(host) => {
@@ -1060,8 +1214,18 @@ impl Workspace {
                         self.update_visibility();
                         self.save();
                     }
+                    Form::EditHost(host) => {
+                        let shell = values.get(2).filter(|v| !v.is_empty()).cloned();
+                        self.edit_host(host, values[0].clone(), values[1].clone(), shell);
+                    }
                 }
                 self.update_title(tx);
+                self.panel = back.or(self.panel.take());
+            }
+            PanelKind::RemoveHost(host) => {
+                let back = self.settings_back();
+                self.remove_host(host, tx);
+                self.panel = back;
             }
             PanelKind::Confirm {
                 method, payload, ..

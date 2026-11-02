@@ -43,6 +43,18 @@ fn letter(ev: &KeyEvent, tx: &Tx, c: char) -> bool {
     }
 }
 
+/// Ctrl , by the character the key types, falling back to its position.
+fn comma(ev: &KeyEvent, tx: &Tx) -> bool {
+    let typed = match &ev.key {
+        Key::Command(c) => *c == ',',
+        Key::Text(t) => t == ",",
+        _ => false,
+    };
+    typed
+        || (tx.key_base().is_none_or(|b| !b.is_ascii_punctuation())
+            && tx.physical_key() == Some(Code::Comma))
+}
+
 fn space(ev: &KeyEvent, tx: &Tx) -> bool {
     tx.physical_key() == Some(Code::Space)
         || ev.is_command(' ')
@@ -119,6 +131,8 @@ fn shortcut(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
     if ctrl(ev) && !m.shift && !m.alt && letter(ev, tx, 'k') {
         s.picker(true);
+    } else if ctrl(ev) && !m.shift && !m.alt && comma(ev, tx) {
+        s.perform(Intent::Settings, tx);
     } else if ctrl(ev) && m.alt && !m.shift && letter(ev, tx, 'd') {
         s.perform(Intent::Split("vertical"), tx);
     } else if m.alt

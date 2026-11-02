@@ -17,6 +17,15 @@ pub struct Host {
     pub shell: Option<String>,
 }
 
+/// The window corner in-app notices stack in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoticePosition {
+    #[default]
+    TopRight,
+    BottomRight,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -26,6 +35,7 @@ pub struct Settings {
     pub sidebar_width: f32,
     pub font_size: f32,
     pub ui_scale: f32,
+    pub notice_position: NoticePosition,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -44,6 +54,7 @@ impl Default for Settings {
             sidebar_width: 236.,
             font_size: 15.,
             ui_scale: 1.,
+            notice_position: NoticePosition::default(),
         }
     }
 }
@@ -112,4 +123,24 @@ pub fn validate_host(label: &str, endpoint: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn older_files_load_and_the_notice_corner_round_trips() {
+        let old: Settings = serde_json::from_str(
+            r#"{"hosts":[{"label":"a","endpoint":"unix:///run/rex.sock"}],"font_size":14}"#,
+        )
+        .unwrap();
+        assert_eq!(old.notice_position, NoticePosition::TopRight);
+        let mut s = old;
+        s.notice_position = NoticePosition::BottomRight;
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["notice_position"], "bottom_right");
+        let back: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(back.notice_position, NoticePosition::BottomRight);
+    }
 }

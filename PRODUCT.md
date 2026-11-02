@@ -23,4 +23,4 @@ Saved hosts, sessions, tabs, authoritative splits, snapshot restoration, live ou
 
 ## Out of scope for now
 
-Terminal-content search, complete Kitty graphics, host editing/removal, accessibility (AT-SPI) and distribution packages. See the README for the current list of unvalidated areas.
+Terminal-content search, complete Kitty graphics, accessibility (AT-SPI) and distribution packages. See the README for the current list of unvalidated areas.

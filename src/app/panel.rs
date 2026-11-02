@@ -27,6 +27,8 @@ pub enum Intent {
     Sidebar,
     Settings,
     AddHost,
+    EditHost(usize),
+    RemoveHost(usize),
     Retry,
 }
 impl Intent {
@@ -42,6 +44,8 @@ impl Intent {
                 | Intent::CloseWindow(_)
                 | Intent::Settings
                 | Intent::AddHost
+                | Intent::EditHost(_)
+                | Intent::RemoveHost(_)
                 | Intent::Pane(_, PaneAction::Rename | PaneAction::Close)
                 | Intent::Session(_, SessionAction::Rename | SessionAction::Close)
         )
@@ -92,6 +96,42 @@ pub enum Form {
     RenameWindow(String),
     RenamePane(String),
     AddHost,
+    /// A host's name, endpoint and default shell, from Settings.
+    EditHost(usize),
+}
+
+/// The sections of Settings, in the order its sidebar lists them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SettingsSection {
+    #[default]
+    Interface,
+    Terminal,
+    Hosts,
+    Shortcuts,
+}
+impl SettingsSection {
+    pub const ALL: [SettingsSection; 4] = [
+        SettingsSection::Interface,
+        SettingsSection::Terminal,
+        SettingsSection::Hosts,
+        SettingsSection::Shortcuts,
+    ];
+    pub fn title(self) -> &'static str {
+        match self {
+            SettingsSection::Interface => "Interface",
+            SettingsSection::Terminal => "Terminal",
+            SettingsSection::Hosts => "Remote Hosts",
+            SettingsSection::Shortcuts => "Shortcuts",
+        }
+    }
+    pub fn key(self) -> &'static str {
+        match self {
+            SettingsSection::Interface => "interface",
+            SettingsSection::Terminal => "terminal",
+            SettingsSection::Hosts => "hosts",
+            SettingsSection::Shortcuts => "shortcuts",
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -107,6 +147,8 @@ pub enum PanelKind {
     Window(String),
     Form(Form),
     Settings,
+    /// Confirm forgetting a saved host; its server and programs are untouched.
+    RemoveHost(usize),
     Confirm {
         method: String,
         payload: Value,
@@ -354,7 +396,7 @@ impl Workspace {
                     Intent::Sidebar,
                 ),
                 ("Default shell…", "", Intent::HostShell(self.active)),
-                ("Preferences…", "", Intent::Settings),
+                ("Settings…", "Ctrl ,", Intent::Settings),
                 ("Add host…", "", Intent::AddHost),
                 ("Reconnect host", "", Intent::Retry),
             ] {

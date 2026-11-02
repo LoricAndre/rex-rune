@@ -79,7 +79,9 @@ This installs `dev.shuv.rex-linux.desktop` under `$XDG_DATA_HOME/applications` (
 
 ## Configuration
 
-Preferences are stored as JSON in `$XDG_CONFIG_HOME/rex-linux/workspace.json` (default `~/.config/rex-linux/workspace.json`): saved hosts (label, endpoint, collapsed state, optional default shell), the last host and session per host, sidebar width, terminal font size and interface zoom (`ui_scale`). Use `--config <path>` to keep a separate workspace.
+Preferences are stored as JSON in `$XDG_CONFIG_HOME/rex-linux/workspace.json` (default `~/.config/rex-linux/workspace.json`): saved hosts (label, endpoint, collapsed state, optional default shell), the last host and session per host, sidebar width, terminal font size, interface zoom (`ui_scale`) and the corner notices appear in (`notice_position`). Use `--config <path>` to keep a separate workspace.
+
+Settings (`Ctrl ,`, or Settings… in Commands) has Interface (zoom, sidebar, notice corner), Terminal (font size, each host's default shell), Remote Hosts (add, edit or remove saved hosts) and Shortcuts sections. Removing a host only stops this client connecting to it; its sessions keep running on the server. A changed endpoint connects to that server as a new host.
 
 A host's default shell (empty means the server user's login shell) is used for every new session, tab and split this client creates on that host. Host endpoints must be `unix://` with an absolute path, or `https://`, `http://`, `wss://` or `ws://` URLs.
 
@@ -96,6 +98,7 @@ A host's default shell (empty means the server user's login shell) is used for e
 | Ctrl Shift Enter | Zoom / restore the focused pane |
 | Ctrl Shift Space | Focused-pane actions |
 | Ctrl Shift W | Close the focused pane, or the tab when it has one pane (asks first) |
+| Ctrl , | Settings |
 | Ctrl Shift B | Collapse / restore the sidebar |
 | Ctrl Shift C / V | Copy selection / paste (bracketed-paste aware) |
 | Ctrl Shift R | Resume the focused terminal's data stream |
@@ -145,7 +148,7 @@ Each patch is meant to be dropped once the corresponding upstream release has eq
 
 Still needing hands-on validation: physical Wayland pointer gestures (move, edge resize, double-click, window menu), minimize on Wayland, multi-seat Wayland desktops, actual IME input, and sustained daily use. On X11, winit has no window-menu request, so right-clicking the drag region does nothing there.
 
-Not implemented: terminal-content search, complete Kitty graphics, host editing/removal, accessibility (AT-SPI) and distribution packages.
+Not implemented: terminal-content search, complete Kitty graphics, accessibility (AT-SPI) and distribution packages.
 
 ## Third-party software and assets
 

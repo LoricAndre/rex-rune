@@ -90,9 +90,13 @@ def run():
                                block_id=block, args={"format": "text", "trim": True, "unwrap": True})["content"]
             assert "X11_NATIVE_INPUT_OK" in before_clear.splitlines(), before_clear
             assert "X11_CLIPBOARD_OK" in before_clear.splitlines(), before_clear
-            command("Preferences")
+            key("ctrl+comma")  # Settings, focused on its section list
             original_size = json.loads(config.read_text())["font_size"]
+            key("Down")
+            key("Return")  # Terminal
             key("Tab")
+            key("Tab")
+            key("Tab")  # Close, font smaller, font larger
             key("Return")
             assert json.loads(config.read_text())["font_size"] == original_size + 1
             key("shift+Tab")

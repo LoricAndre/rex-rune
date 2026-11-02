@@ -6,6 +6,7 @@ mod keys;
 mod panel;
 mod panes;
 mod popups;
+mod settings_view;
 mod sidebar;
 mod stats;
 mod term;

@@ -1,29 +1,28 @@
-//! Modal forms, the destructive confirmation, Preferences and notices.
+//! Modal forms, the destructive confirmations and notices.
 use super::widgets::{Pill, glyph, pill};
 use super::{
-    panel::{Form, Intent, PanelKind},
+    panel::{Form, PanelKind},
     popups::target_outline,
     theme::*,
     workspace::Workspace,
 };
+use rex_linux::settings::NoticePosition;
 use rune::{Cursor, El, Tx, col, el, row, text};
-use rune_kit::{IconButton, Keybind, Switch, TextField};
+use rune_kit::TextField;
 
 fn modal(s: &Workspace, viewport: [f32; 2], body: El) -> El {
-    let width = 520f32.min(viewport[0] * 0.9);
-    let panel = glass(
-        col()
-            .key("dialog")
-            .role("dialog")
-            .w(width)
-            .max_h(viewport[1] * 0.85)
-            .padding(22.)
-            .gap(14.),
-        16.,
-        true,
-    )
-    .transition(pop_in())
-    .child(body);
+    let panel = col()
+        .w(520f32.min(viewport[0] * 0.9))
+        .max_h(viewport[1] * 0.85)
+        .padding(22.)
+        .gap(14.)
+        .child(body);
+    modal_frame(s, panel)
+}
+
+/// A centered dialog surface over a dark scrim; `surface` sets its own size and padding.
+pub fn modal_frame(s: &Workspace, surface: El) -> El {
+    let panel = glass(surface.key("dialog").role("dialog"), 16., true).transition(pop_in());
     let mut layer = el()
         .key("modal")
         .pin(Some(0.), Some(0.), Some(0.), Some(0.))
@@ -74,6 +73,14 @@ fn form(s: &Workspace, form: &Form) -> El {
                 .key("form-error"),
         );
     }
+    if let Form::EditHost(_) = form {
+        body = body.child(
+            text("A new endpoint connects to a different server; sessions on the old one keep running. The shell applies to new sessions, tabs and splits.")
+                .font(ui(12.))
+                .color(rgb(MUTED))
+                .wrap(),
+        );
+    }
     if let Form::HostShell(_) = form {
         body = body.child(
             text("Used for new sessions, tabs and splits on this host. Running terminals are unchanged.")
@@ -104,6 +111,15 @@ fn form(s: &Workspace, form: &Form) -> El {
 }
 
 fn confirm(panel_title: &str, description: &str) -> El {
+    confirm_with(
+        panel_title,
+        description,
+        "Keep running",
+        "Close and end programs",
+    )
+}
+
+fn confirm_with(panel_title: &str, description: &str, keep: &str, danger: &str) -> El {
     col()
         .gap(12.)
         .child(title(panel_title))
@@ -118,145 +134,19 @@ fn confirm(panel_title: &str, description: &str) -> El {
                 .gap(8.)
                 .justify_end()
                 .child(
-                    pill(
-                        "cancel-close",
-                        "Keep running",
-                        Pill::Neutral,
-                        32.,
-                        |s, tx| s.close_panel(tx),
-                    )
+                    pill("cancel-close", keep, Pill::Neutral, 32., |s, tx| {
+                        s.cancel_panel(tx)
+                    })
                     .default_button()
                     .tab_index(1),
                 )
                 .child(
-                    pill(
-                        "confirm-close",
-                        "Close and end programs",
-                        Pill::Danger,
-                        32.,
-                        |s, tx| s.submit(tx),
-                    )
+                    pill("confirm-close", danger, Pill::Danger, 32., |s, tx| {
+                        s.submit(tx)
+                    })
                     .tab_index(2),
                 ),
         )
-}
-
-fn preferences(s: &Workspace) -> El {
-    let k = kit();
-    let shortcuts: &[(&[&str], &str)] = &[
-        (&["Ctrl", "Shift", "C"], "Copy"),
-        (&["Ctrl", "Shift", "V"], "Paste"),
-        (&["Ctrl", "K"], "Switch session"),
-        (&["Ctrl", "Shift", "P"], "Commands"),
-        (&["Ctrl", "PageUp"], "Previous tab"),
-        (&["Ctrl", "PageDown"], "Next tab"),
-        (&["Alt", "Arrows"], "Move pane focus"),
-        (&["Ctrl", "Shift", "D"], "Split right"),
-        (&["Ctrl", "Alt", "D"], "Split down"),
-        (&["Ctrl", "Shift", "Enter"], "Zoom pane"),
-        (&["Ctrl", "Shift", "Space"], "Pane actions"),
-        (&["Ctrl", "Shift", "W"], "Close pane or tab"),
-        (&["Ctrl", "Shift", "B"], "Toggle sidebar"),
-    ];
-    let mut table = col().gap(6.);
-    for (keys, label) in shortcuts {
-        table = table.child(
-            row()
-                .gap(12.)
-                .center_y()
-                .child(el().w(200.).child(Keybind::new(keys).build(k)))
-                .child(text(*label).font(ui(12.)).color(rgb(MUTED))),
-        );
-    }
-    let font = s.terminal_family.unwrap_or("IBM Plex Mono (bundled)");
-    col()
-        .gap(14.)
-        .child(
-            row()
-                .justify_between()
-                .center_y()
-                .child(title("Workspace preferences"))
-                .child(
-                    IconButton::new(&CLOSE)
-                        .label("Close")
-                        .on_press_tx(|s: &mut Workspace, tx: &mut Tx| s.close_panel(tx))
-                        .build(k)
-                        .tab_index(4)
-                        .key("close-preferences"),
-                ),
-        )
-        .child(
-            row()
-                .gap(12.)
-                .center_y()
-                .child(
-                    text("Terminal font size")
-                        .font(ui(13.))
-                        .color(rgb(INK))
-                        .grow(1.),
-                )
-                .child(
-                    IconButton::new(&MINUS)
-                        .label("Smaller")
-                        .on_press(|s: &mut Workspace| s.change_font(-1.))
-                        .build(k)
-                        .key("font-smaller")
-                        .tab_index(1),
-                )
-                .child(
-                    text(format!("{} pt", s.settings.font_size))
-                        .font(ui(13.))
-                        .color(rgb(INK)),
-                )
-                .child(
-                    IconButton::new(&PLUS)
-                        .label("Larger")
-                        .on_press(|s: &mut Workspace| s.change_font(1.))
-                        .build(k)
-                        .key("font-larger")
-                        .tab_index(2),
-                ),
-        )
-        .child(
-            Switch::new(s.sidebar.is_open())
-                .label("Show session sidebar")
-                .on_toggle_tx(|s: &mut Workspace, tx: &mut Tx| {
-                    s.perform(Intent::Sidebar, tx);
-                })
-                .build(k)
-                .key("sidebar-switch")
-                .tab_index(3),
-        )
-        .child(
-            text(format!(
-                "Font: {font}\nPreferences: {}",
-                s.settings_path.display()
-            ))
-            .font(ui(11.))
-            .color(rgb(MUTED))
-            .wrap()
-            .selectable(true),
-        )
-        .child(table)
-        // Return acts on the focused control here, as Space does: these are steppers, and
-        // there is no default button to compete with.
-        .on_key(|s: &mut Workspace, ev: &rune::KeyEvent, tx: &mut Tx| {
-            if ev.key != rune::Key::Enter {
-                return false;
-            }
-            match tx
-                .focused()
-                .map(|f| f.rsplit('/').next().unwrap_or(f).to_owned())
-                .as_deref()
-            {
-                Some("font-smaller") => s.change_font(-1.),
-                Some("font-larger") => s.change_font(1.),
-                Some("sidebar-switch") => s.perform(Intent::Sidebar, tx),
-                Some("close-preferences") => s.close_panel(tx),
-                _ => return false,
-            }
-            true
-        })
 }
 
 pub fn dialog(s: &Workspace, viewport: [f32; 2]) -> Option<El> {
@@ -264,7 +154,18 @@ pub fn dialog(s: &Workspace, viewport: [f32; 2]) -> Option<El> {
     let body = match &panel.kind {
         PanelKind::Form(f) => form(s, f),
         PanelKind::Confirm { description, .. } => confirm(&panel.title, description),
-        PanelKind::Settings => preferences(s),
+        PanelKind::Settings => return Some(super::settings_view::settings(s, viewport)),
+        PanelKind::RemoveHost(host) => {
+            let label = &s.settings.hosts[*host].label;
+            confirm_with(
+                &panel.title,
+                &format!(
+                    "Rex Linux stops connecting to {label} and forgets it. Its sessions and programs keep running on that server, and you can add it again later."
+                ),
+                "Keep host",
+                "Remove host",
+            )
+        }
         _ => return None,
     };
     Some(modal(s, viewport, body))
@@ -321,12 +222,11 @@ pub fn toasts(s: &Workspace) -> Option<El> {
     if s.notices.is_empty() && host.is_none() {
         return None;
     }
-    let mut region = col()
-        .key("toasts")
-        .role("status")
-        .pin(None, Some(TOOLBAR + 4.), Some(MARGIN + 6.), None)
-        .w(340.)
-        .gap(8.);
+    let region = col().key("toasts").role("status").w(340.).gap(8.);
+    let mut region = match s.settings.notice_position {
+        NoticePosition::TopRight => region.pin(None, Some(TOOLBAR + 4.), Some(MARGIN + 6.), None),
+        NoticePosition::BottomRight => region.pin(None, None, Some(MARGIN + 6.), Some(MARGIN + 6.)),
+    };
     if let Some(text) = host {
         let active = s.active;
         region = region.child(toast(

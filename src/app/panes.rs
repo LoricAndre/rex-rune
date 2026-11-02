@@ -82,7 +82,7 @@ fn header(s: &Workspace, block: &str, width: f32, focused: bool, m: &Metrics) ->
         .preserve_focus_on_press(true)
         .on_press_tx(move |s: &mut Workspace, tx: &mut Tx| {
             if s.focused_block().as_deref() != Some(id.as_str())
-                && let Some(t) = s.terminals.get(&(s.active, id.clone()))
+                && let Some(t) = s.terminals.get(&s.term_key(&id))
             {
                 let _ = t.connection.commands.focus();
             }
@@ -108,7 +108,7 @@ fn header(s: &Workspace, block: &str, width: f32, focused: bool, m: &Metrics) ->
 
 /// The exception strip for a pane that is reconnecting, with its Retry action.
 fn strip(s: &Workspace, block: &str, width: f32, m: &Metrics) -> Option<El> {
-    let key = (s.active, block.to_owned());
+    let key = s.term_key(block);
     let t = s.terminals.get(&key);
     let status = t.map(|t| t.status());
     let pill_label = status.as_ref().and_then(|st| {
@@ -175,7 +175,7 @@ fn card(
     input: bool,
     bleed: bool,
 ) -> El {
-    let key = (s.active, block.to_owned());
+    let key = s.term_key(block);
     let id = block.to_owned();
     let focused = matches!(state, CardState::Focused);
     let mut c = col()

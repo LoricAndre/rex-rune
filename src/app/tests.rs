@@ -867,7 +867,7 @@ fn close_confirmation_opens_on_keep_running_and_return_keeps_it_running() {
 }
 
 #[test]
-fn forms_focus_their_first_field_and_preferences_start_on_the_font_stepper() {
+fn forms_focus_their_first_field_and_settings_start_on_its_section_list() {
     let mut ws = workspace();
     ws.open_panel(
         PanelKind::Form(Form::RenameSession(None)),
@@ -881,12 +881,139 @@ fn forms_focus_their_first_field_and_preferences_start_on_the_font_stepper() {
         "rename focuses its field, not {path}"
     );
 
-    let mut ws = workspace();
+    let mut rt = runtime(workspace());
+    rt.key(KeyEvent {
+        key: Key::Text(",".into()),
+        mods: Mods {
+            ctrl: true,
+            ..Mods::default()
+        },
+    });
+    for _ in 0..3 {
+        rt.frame(1. / 60.);
+    }
+    assert!(matches!(
+        rt.state.panel.as_ref().map(|p| &p.kind),
+        Some(PanelKind::Settings)
+    ));
+    let path = focused(&rt).expect("a focused control");
+    assert!(
+        path.ends_with("settings-section:interface"),
+        "settings focus {path}"
+    );
+    // The keyboard path scripts/x11-smoke.py takes to the font stepper.
+    press(&mut rt, Key::Down);
+    press(&mut rt, Key::Enter);
+    assert_eq!(
+        rt.state.settings_section,
+        super::panel::SettingsSection::Terminal
+    );
+    let font = rt.state.settings.font_size;
+    for _ in 0..3 {
+        press(&mut rt, Key::Tab);
+    }
+    let path = focused(&rt).expect("a focused control");
+    assert!(path.ends_with("font-larger"), "Tab reached {path}");
+    press(&mut rt, Key::Enter);
+    assert_eq!(rt.state.settings.font_size, font + 1.);
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn settings_sections_and_their_forms_return_to_settings() {
+    let mut ws = workspace_hosts(2);
     let mut tx = rune::Tx::default();
     ws.perform(Intent::Settings, &mut tx);
-    let rt = runtime(ws);
-    let path = focused(&rt).expect("a focused control");
-    assert!(path.ends_with("font-smaller"), "preferences focus {path}");
+    let mut rt = runtime(ws);
+    click(&mut rt, "settings-section:hosts");
+    assert!(has(&rt, "host-row:0") && has(&rt, "host-row:1"));
+    click(&mut rt, "host-edit:1");
+    let panel = rt.state.panel.as_ref().expect("the edit form");
+    assert!(matches!(panel.kind, PanelKind::Form(Form::EditHost(1))));
+    assert_eq!(panel.inputs[0].text, "test-1");
+    press(&mut rt, Key::Escape);
+    assert!(
+        matches!(
+            rt.state.panel.as_ref().map(|p| &p.kind),
+            Some(PanelKind::Settings)
+        ),
+        "Escape goes back to Settings"
+    );
+    click(&mut rt, "host-remove:1");
+    assert!(matches!(
+        rt.state.panel.as_ref().map(|p| &p.kind),
+        Some(PanelKind::RemoveHost(1))
+    ));
+    click(&mut rt, "confirm-close");
+    assert_eq!(rt.state.settings.hosts.len(), 1);
+    assert!(
+        matches!(
+            rt.state.panel.as_ref().map(|p| &p.kind),
+            Some(PanelKind::Settings)
+        ),
+        "back in Settings after removing"
+    );
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn removing_a_host_keeps_the_others_and_ignores_its_late_wakes() {
+    let mut ws = workspace_hosts(3);
+    let ids: Vec<_> = ws.hosts.iter().map(|h| h.id).collect();
+    ws.active = 2;
+    for (id, block) in ids.iter().zip(["a", "b", "c"]) {
+        ws.claimed.insert((*id, block.to_owned()));
+    }
+    let mut tx = rune::Tx::default();
+    ws.remove_host(1, &mut tx);
+    let labels: Vec<_> = ws.settings.hosts.iter().map(|h| h.label.as_str()).collect();
+    assert_eq!(labels, ["test-0", "test-2"]);
+    assert_eq!(
+        ws.hosts.iter().map(|h| h.id).collect::<Vec<_>>(),
+        [ids[0], ids[2]]
+    );
+    assert_eq!(ws.active, 1, "the active host keeps being active");
+    assert!(ws.claimed.contains(&(ids[0], "a".into())));
+    assert!(ws.claimed.contains(&(ids[2], "c".into())));
+    assert!(!ws.claimed.iter().any(|(id, _)| *id == ids[1]));
+    // A wake the removed host's worker sent before it stopped lands nowhere.
+    ws.sync_host(ids[1], &mut tx);
+    assert_eq!(ws.hosts.len(), 2);
+
+    ws.remove_host(0, &mut tx);
+    ws.remove_host(0, &mut tx);
+    assert_eq!(ws.settings.hosts.len(), 1, "the last host stays");
+    std::fs::remove_file(&ws.settings_path).ok();
+}
+
+#[test]
+fn a_new_endpoint_reconnects_under_a_new_id_and_a_rename_does_not() {
+    let mut ws = workspace_hosts(2);
+    let id = ws.hosts[1].id;
+    ws.claimed.insert((id, "b".into()));
+    ws.edit_host(
+        1,
+        "renamed".into(),
+        ws.settings.hosts[1].endpoint.clone(),
+        Some("zsh".into()),
+    );
+    assert_eq!(ws.hosts[1].id, id);
+    assert_eq!(ws.settings.hosts[1].label, "renamed");
+    assert_eq!(ws.settings.hosts[1].shell.as_deref(), Some("zsh"));
+
+    ws.edit_host(
+        1,
+        "renamed".into(),
+        "unix:///nonexistent/elsewhere.sock".into(),
+        None,
+    );
+    assert_ne!(ws.hosts[1].id, id);
+    assert_eq!(
+        ws.settings.hosts[1].endpoint,
+        "unix:///nonexistent/elsewhere.sock"
+    );
+    assert!(ws.claimed.is_empty(), "the old server's claims are dropped");
+    std::fs::remove_file(&ws.settings_path).ok();
 }
 
 #[test]
