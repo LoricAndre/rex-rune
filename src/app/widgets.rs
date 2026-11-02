@@ -1,0 +1,255 @@
+//! Building blocks on the Midnight tokens: chrome icon buttons, pill buttons, list rows with a
+//! sliding highlight, scroll thumbs and hint lines.
+use super::{theme::*, workspace::Workspace};
+use rune::{Color, Cursor, El, Icon, Live, LiveText, ScrollPos, Tx, el, icon, row, text};
+
+pub fn glyph(i: &'static Icon, size: f32, color: Color) -> El {
+    icon(i, size).color(color)
+}
+
+/// Official artwork, shared by the identity chip and empty state. Keep the same
+/// footprint while the image worker decodes; the parent supplies its semantics.
+pub fn app_logo(s: &Workspace, size: f32) -> El {
+    let element = el().size(size, size);
+    if let Some(image) = &s.logo {
+        element.pixels(image.pixels())
+    } else {
+        element
+    }
+}
+
+/// A round icon control in the bar or a card: never keeps Rune focus, so the next key still
+/// reaches the terminal, and never sits in the Tab order.
+pub fn chrome_button(
+    key: impl Into<String>,
+    i: &'static Icon,
+    help: &str,
+    size: f32,
+    f: impl Fn(&mut Workspace, &mut Tx) + 'static,
+) -> El {
+    row()
+        .key(key.into())
+        .role("button")
+        .label(help.split(" · ").next().unwrap_or(help).to_owned())
+        .size(size, size)
+        .center()
+        .radius(9.)
+        .continuous_corners()
+        .cursor(Cursor::Pointer)
+        .hover(white(0.08))
+        .press(white(0.12))
+        .preserve_focus_on_press(true)
+        .tab_index(-1)
+        .help(help.to_owned())
+        .on_press_tx(move |s: &mut Workspace, tx: &mut Tx| {
+            f(s, tx);
+            tx.blur();
+        })
+        .child(glyph(i, 16., rgb(MUTED)))
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum Pill {
+    Primary,
+    Neutral,
+    Danger,
+    Warning,
+}
+
+/// A pill button: accent gradient (primary), chip (neutral) or tinted (danger, warning). Shows a
+/// 2pt accent focus ring outside its shape when focused from the keyboard.
+pub fn pill(
+    key: &str,
+    label: &str,
+    kind: Pill,
+    height: f32,
+    f: impl Fn(&mut Workspace, &mut Tx) + 'static,
+) -> El {
+    let (ink, e) = match kind {
+        Pill::Primary => (
+            rgb(0x061220),
+            row()
+                .linear_gradient(
+                    1.9,
+                    [(0., rgb(ACCENT)), (1., rgb(mix(ACCENT2, ACCENT, 0.55)))],
+                )
+                .box_shadow(shadow(0., 6., 18., rgb(ACCENT).alpha(0.25)))
+                .box_shadow(inset(1., white(0.35))),
+        ),
+        Pill::Neutral => (rgb(INK), chip(row()).hover(white(0.09))),
+        Pill::Danger => (
+            rgb(DANGER),
+            row()
+                .fill(rgb(DANGER).alpha(0.1))
+                .border(1., rgb(DANGER).alpha(0.35))
+                .hover(rgb(DANGER).alpha(0.16)),
+        ),
+        Pill::Warning => (
+            rgb(WARNING),
+            row()
+                .fill(rgb(WARNING).alpha(0.1))
+                .border(1., rgb(WARNING).alpha(0.4))
+                .hover(rgb(WARNING).alpha(0.18)),
+        ),
+    };
+    e.key(key.to_owned())
+        .role("button")
+        .label(label.to_owned())
+        .h(height)
+        .px(if height < 28. { 10. } else { 14. })
+        .center()
+        .radius(height / 2.)
+        .continuous_corners()
+        .cursor(Cursor::Pointer)
+        .focusable(true)
+        .focus_ring(2., 2., rgb(ACCENT))
+        .on_press_tx(f)
+        .child(
+            text(label.to_owned())
+                .font(medium(if height < 28. { 11.5 } else { 13. }))
+                .color(ink),
+        )
+}
+
+pub struct Row<'a> {
+    pub key: String,
+    /// The surface's own highlight id, so it slides within one list only.
+    pub surface: &'a str,
+    pub label: &'a str,
+    pub detail: &'a str,
+    pub height: f32,
+    pub check: Option<bool>,
+    pub followup: bool,
+    pub enabled: bool,
+    pub selected: bool,
+}
+
+/// The sliding selection: a childless background that flies to the next selected row, with no
+/// entrance or exit of its own (so two never show). Fill **and** outline, never fill alone.
+pub fn highlight(id: &str, radius: f32) -> El {
+    el().pin(Some(0.), Some(0.), Some(0.), Some(0.))
+        .radius(radius)
+        .continuous_corners()
+        .fill(rgb(ACCENT).alpha(0.16))
+        .border(1., rgb(ACCENT).alpha(0.55))
+        .box_shadow(shadow(0., 0., 16., rgb(ACCENT).alpha(0.18)))
+        .matched(id.to_owned())
+        .transition(no_presence())
+        .motion(SNAPPY)
+}
+
+/// A list row. The keyboard highlight follows the pointer, so exactly one row is lit.
+pub fn list_row(
+    r: Row<'_>,
+    index: usize,
+    on_press: impl Fn(&mut Workspace, &mut Tx) + 'static,
+) -> El {
+    let ink = rgb(if r.enabled { INK } else { MUTED });
+    let detail = if r.selected {
+        rgb(INK).alpha(0.75)
+    } else {
+        rgb(MUTED)
+    };
+    let mut e = row()
+        .key(r.key)
+        .role("menuitem")
+        .label(r.label.to_owned())
+        .w_full()
+        .h(r.height)
+        .px(10.)
+        .gap(10.)
+        .center_y()
+        .help_when_truncated(format!("{} · {}", r.label, r.detail));
+    if r.selected {
+        e = e.child(highlight(&format!("sel:{}", r.surface), 9.));
+    }
+    if r.enabled {
+        e = e
+            .cursor(Cursor::Pointer)
+            .on_hover(move |s: &mut Workspace| {
+                if let Some(p) = &mut s.panel {
+                    p.selected = index;
+                }
+            })
+            .on_press_tx(on_press);
+    }
+    if let Some(current) = r.check {
+        e = e.child(el().w(14.).center().child(if current {
+            glyph(&CHECK, 14., rgb(ACCENT))
+        } else {
+            el()
+        }));
+    }
+    e.child(
+        text(r.label.to_owned())
+            .font(if r.selected { medium(13.) } else { ui(13.) })
+            .color(ink)
+            .truncate()
+            .grow(1.)
+            .shrink(),
+    )
+    .child(text(r.detail.to_owned()).font(ui(11.)).color(detail))
+    .child(el().w(14.).child(if r.followup {
+        glyph(&RIGHT, 13., rgb(MUTED))
+    } else {
+        el()
+    }))
+}
+
+/// A list's scroll thumb and its direction-aware hint, both driven from the scroll offset
+/// without rebuilding the view.
+#[derive(Clone)]
+pub struct ScrollFx {
+    pub thumb: Live<[f32; 4]>,
+    pub hint: LiveText,
+}
+impl Default for ScrollFx {
+    fn default() -> Self {
+        Self {
+            thumb: Live::new([0.; 4]),
+            hint: LiveText::new(""),
+        }
+    }
+}
+
+impl ScrollFx {
+    pub fn watch(
+        &self,
+        width: f32,
+        viewport: f32,
+        hint: impl Fn(f32, f32) -> String + 'static,
+    ) -> impl Fn(ScrollPos) + 'static {
+        let (thumb, label) = (self.thumb.clone(), self.hint.clone());
+        move |p: ScrollPos| {
+            let content = viewport + p.max[1];
+            let h = (viewport * viewport / content.max(1.))
+                .max(16.)
+                .min(viewport);
+            let y = if p.max[1] > 0. {
+                p.offset[1] / p.max[1] * (viewport - h)
+            } else {
+                0.
+            };
+            thumb.set([width - 6., y, 4., h]);
+            label.set(hint(p.offset[1], p.max[1]));
+        }
+    }
+
+    pub fn thumb_el(&self) -> El {
+        el().absolute(0., 0.)
+            .size(4., 16.)
+            .radius(2.)
+            .fill(white(0.22))
+            .live_rect(&self.thumb)
+    }
+
+    pub fn hint_el(&self) -> El {
+        row().h(24.).px(12.).center_y().child(
+            text("More sessions and hosts below")
+                .live_text(&self.hint)
+                .font(ui(11.))
+                .color(rgb(MUTED))
+                .grow(1.),
+        )
+    }
+}

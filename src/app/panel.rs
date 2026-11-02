@@ -1,0 +1,518 @@
+//! Popup and dialog state, and the action lists the switcher, Commands and menus show.
+use super::workspace::Workspace;
+use rune::TextEdit;
+use serde_json::Value;
+
+#[derive(Clone, Debug)]
+pub enum Intent {
+    Select(usize, String),
+    Tab(String),
+    Switcher,
+    /// Create a session on a host at once, named when a switcher query gave a name.
+    CreateOn(usize, Option<String>),
+    ChooseHost(String),
+    RetryHost(usize),
+    /// The default shell form for a host.
+    HostShell(usize),
+    Pane(PaneTarget, PaneAction),
+    Session(SessionTarget, SessionAction),
+    NewSession,
+    NewWindow,
+    Split(&'static str),
+    RenameSession,
+    RenameWindow(String),
+    CloseWindow(String),
+    Zoom,
+    Sidebar,
+    Settings,
+    AddHost,
+    Retry,
+}
+impl Intent {
+    /// Actions that open another panel instead of closing the current one.
+    pub fn opens_followup(&self) -> bool {
+        matches!(
+            self,
+            Intent::Switcher
+                | Intent::ChooseHost(_)
+                | Intent::HostShell(_)
+                | Intent::RenameSession
+                | Intent::RenameWindow(_)
+                | Intent::CloseWindow(_)
+                | Intent::Settings
+                | Intent::AddHost
+                | Intent::Pane(_, PaneAction::Rename | PaneAction::Close)
+                | Intent::Session(_, SessionAction::Rename | SessionAction::Close)
+        )
+    }
+}
+
+/// The sidebar session a session menu, its rename form or its close confirm acts on: any
+/// host's, not only the selected one, so every request names it explicitly.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SessionTarget {
+    pub host: usize,
+    pub session: String,
+    pub label: String,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum SessionAction {
+    Rename,
+    MoveUp,
+    MoveDown,
+    Close,
+}
+
+#[derive(Clone, Debug)]
+pub struct PaneTarget {
+    pub host: usize,
+    pub session: String,
+    pub block: String,
+    pub label: String,
+    pub tab: String,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum PaneAction {
+    Split(&'static str),
+    Zoom,
+    Rename,
+    Close,
+    Reconnect,
+}
+
+#[derive(Clone, Debug)]
+pub enum Form {
+    /// A host's default shell for new terminals.
+    HostShell(usize),
+    /// `None`: the selected session (Commands); `Some`: a sidebar row's session.
+    RenameSession(Option<SessionTarget>),
+    RenameWindow(String),
+    RenamePane(String),
+    AddHost,
+}
+
+#[derive(Clone, Debug)]
+pub enum PanelKind {
+    /// `true`: the session switcher; `false`: Commands.
+    Picker(bool),
+    Hosts(String),
+    Pane,
+    Session,
+    /// A sidebar host header's right-click menu.
+    Host(usize),
+    Form(Form),
+    Settings,
+    Confirm {
+        method: String,
+        payload: Value,
+        description: String,
+    },
+}
+
+pub struct Panel {
+    pub kind: PanelKind,
+    pub title: String,
+    pub inputs: Vec<TextEdit>,
+    /// (label, placeholder) for each input.
+    pub fields: Vec<(String, String)>,
+    pub selected: usize,
+    /// Scroll the keyboard selection into view on the next commit.
+    pub reveal: bool,
+    pub error: Option<String>,
+    pub target: Option<PaneTarget>,
+    pub session: Option<SessionTarget>,
+    pub back: Option<Box<Panel>>,
+    pub anchor: Option<(f32, f32)>,
+}
+
+impl Panel {
+    pub fn new(kind: PanelKind, title: &str, fields: &[(&str, &str, &str)]) -> Self {
+        let mut inputs: Vec<TextEdit> = fields
+            .iter()
+            .map(|(_, _, text)| TextEdit::new(*text))
+            .collect();
+        if let Some(first) = inputs.first_mut() {
+            first.focused = true;
+        }
+        Self {
+            kind,
+            title: title.into(),
+            inputs,
+            fields: fields
+                .iter()
+                .map(|(l, p, _)| ((*l).into(), (*p).into()))
+                .collect(),
+            selected: 0,
+            reveal: false,
+            error: None,
+            target: None,
+            session: None,
+            back: None,
+            anchor: None,
+        }
+    }
+    pub fn is_list(&self) -> bool {
+        matches!(
+            self.kind,
+            PanelKind::Picker(_)
+                | PanelKind::Hosts(_)
+                | PanelKind::Pane
+                | PanelKind::Session
+                | PanelKind::Host(_)
+        )
+    }
+}
+
+pub struct Entry {
+    pub label: String,
+    pub detail: String,
+    pub action: Intent,
+    pub group: String,
+    pub current: bool,
+    pub followup: bool,
+    pub enabled: bool,
+    pub footer: bool,
+}
+impl Entry {
+    pub fn new(
+        label: impl Into<String>,
+        detail: impl Into<String>,
+        group: impl Into<String>,
+        action: Intent,
+    ) -> Self {
+        Self {
+            label: label.into(),
+            detail: detail.into(),
+            group: group.into(),
+            followup: action.opens_followup(),
+            action,
+            current: false,
+            enabled: true,
+            footer: false,
+        }
+    }
+}
+
+impl Workspace {
+    /// A sidebar session's menu: Switch (unless current), Rename, Move up and down within its
+    /// host, and Close. An offline host keeps Switch and offers Retry in place of the rest.
+    fn session_entries(&self, target: &SessionTarget) -> Vec<Entry> {
+        let host = &self.hosts[target.host].model;
+        let current = self.active == target.host && host.selected.as_ref() == Some(&target.session);
+        let position = host
+            .sessions
+            .iter()
+            .position(|s| s.session_id == target.session);
+        let mut entries = Vec::new();
+        if !current {
+            entries.push(Entry::new(
+                "Switch to session",
+                "",
+                "",
+                Intent::Select(target.host, target.session.clone()),
+            ));
+        }
+        for (label, action, enabled) in [
+            ("Rename session…", SessionAction::Rename, true),
+            (
+                "Move up",
+                SessionAction::MoveUp,
+                position.is_some_and(|p| p > 0),
+            ),
+            (
+                "Move down",
+                SessionAction::MoveDown,
+                position.is_some_and(|p| p + 1 < host.sessions.len()),
+            ),
+            ("Close session…", SessionAction::Close, true),
+        ] {
+            let mut entry = Entry::new(label, "", "", Intent::Session(target.clone(), action));
+            entry.enabled = enabled && host.connected;
+            entries.push(entry);
+        }
+        if !host.connected {
+            entries.push(Entry::new(
+                "Retry connection",
+                "",
+                "",
+                Intent::RetryHost(target.host),
+            ));
+        }
+        entries
+    }
+
+    /// A sidebar host header's menu: New session, Default shell…, and Retry while offline.
+    fn host_entries(&self, host: usize) -> Vec<Entry> {
+        let connected = self.hosts[host].model.connected;
+        let mut create = Entry::new("New session", "", "", Intent::CreateOn(host, None));
+        create.enabled = connected;
+        let shell = Entry::new(
+            "Default shell…",
+            self.shell(host).unwrap_or_default(),
+            "",
+            Intent::HostShell(host),
+        );
+        let mut entries = vec![create, shell];
+        if !connected {
+            entries.push(Entry::new(
+                "Retry connection",
+                "",
+                "",
+                Intent::RetryHost(host),
+            ));
+        }
+        entries
+    }
+
+    pub fn host_state(&self, index: usize) -> &'static str {
+        if !self.hosts[index].model.connected {
+            "Offline"
+        } else if self.settings.hosts[index].endpoint.starts_with("unix://") {
+            "Local"
+        } else {
+            "Connected"
+        }
+    }
+
+    pub fn entries(&self) -> Vec<Entry> {
+        let Some(panel) = &self.panel else {
+            return vec![];
+        };
+        let query = self.query();
+        let lower = query.to_lowercase();
+        if let PanelKind::Hosts(name) = &panel.kind {
+            return self
+                .hosts
+                .iter()
+                .enumerate()
+                .map(|(i, h)| {
+                    let mut e = Entry::new(
+                        self.settings.hosts[i].label.clone(),
+                        if h.model.connected {
+                            "Connected"
+                        } else {
+                            "Offline — retry in session menu"
+                        },
+                        "",
+                        Intent::CreateOn(i, (!name.is_empty()).then(|| name.clone())),
+                    );
+                    e.enabled = h.model.connected;
+                    e
+                })
+                .collect();
+        }
+        if let (PanelKind::Session, Some(target)) = (&panel.kind, &panel.session) {
+            return self.session_entries(target);
+        }
+        if let PanelKind::Host(host) = panel.kind {
+            return self.host_entries(host);
+        }
+        let sessions_only = matches!(panel.kind, PanelKind::Picker(true));
+        let pane_only = matches!(panel.kind, PanelKind::Pane);
+        if !matches!(panel.kind, PanelKind::Picker(_) | PanelKind::Pane) {
+            return vec![];
+        }
+        let mut entries = Vec::new();
+        let model = self.model();
+        let host_name = &self.settings.hosts[self.active].label;
+        if !sessions_only && !pane_only {
+            for (label, detail, action) in [
+                ("Switch session…", "Ctrl K", Intent::Switcher),
+                ("New session", "Ctrl Shift N", Intent::NewSession),
+                ("New tab", "Ctrl Shift T", Intent::NewWindow),
+                ("Rename session…", "", Intent::RenameSession),
+                (
+                    if self.sidebar.is_open() {
+                        "Hide sidebar"
+                    } else {
+                        "Show sidebar"
+                    },
+                    "Ctrl Shift B",
+                    Intent::Sidebar,
+                ),
+                ("Default shell…", "", Intent::HostShell(self.active)),
+                ("Preferences…", "", Intent::Settings),
+                ("Add host…", "", Intent::AddHost),
+                ("Reconnect host", "", Intent::Retry),
+            ] {
+                let mut entry = Entry::new(label, detail, "Workspace", action);
+                if matches!(entry.action, Intent::NewSession) {
+                    entry.label = format!("New session on {host_name}");
+                    entry.enabled = model.connected;
+                }
+                if matches!(entry.action, Intent::HostShell(_)) {
+                    entry.label = format!("Default shell for {host_name}…");
+                    entry.detail = self.shell(self.active).unwrap_or_default().to_owned();
+                }
+                if matches!(entry.action, Intent::NewWindow | Intent::RenameSession) {
+                    entry.enabled = model.connected && model.view().is_some();
+                }
+                entries.push(entry);
+            }
+            if let Some(id) = model.window().and_then(|w| w.window_id.clone()) {
+                entries.push(Entry::new(
+                    "Rename tab…",
+                    "",
+                    "Workspace",
+                    Intent::RenameWindow(id.clone()),
+                ));
+                entries.push(Entry::new(
+                    "Close tab…",
+                    "",
+                    "Workspace",
+                    Intent::CloseWindow(id),
+                ));
+            }
+        }
+        if !sessions_only
+            && let Some(target) = panel
+                .target
+                .clone()
+                .or_else(|| self.focused_block().and_then(|b| self.target(&b)))
+        {
+            let group = if pane_only {
+                String::new()
+            } else {
+                format!("Pane · {}", target.label)
+            };
+            let zoomed = model
+                .window()
+                .is_some_and(|w| w.zoomed_block_id.as_ref() == Some(&target.block));
+            for (label, key, action) in [
+                (
+                    "Split right",
+                    "Ctrl Shift D",
+                    PaneAction::Split("horizontal"),
+                ),
+                ("Split down", "Ctrl Alt D", PaneAction::Split("vertical")),
+                (
+                    if zoomed { "Restore pane" } else { "Zoom pane" },
+                    "Ctrl Shift Enter",
+                    PaneAction::Zoom,
+                ),
+                ("Rename pane…", "", PaneAction::Rename),
+                ("Reconnect terminal", "Ctrl Shift R", PaneAction::Reconnect),
+                ("Close pane…", "", PaneAction::Close),
+            ] {
+                entries.push(Entry::new(
+                    label,
+                    key,
+                    &group,
+                    Intent::Pane(target.clone(), action),
+                ));
+            }
+        }
+        if !pane_only && (sessions_only || !query.is_empty()) {
+            for (index, host) in self.hosts.iter().enumerate() {
+                let label = &self.settings.hosts[index].label;
+                let state = self.host_state(index);
+                let group = if sessions_only {
+                    format!("{label} · {state}")
+                } else {
+                    "Sessions · all hosts".into()
+                };
+                for session in &host.model.sessions {
+                    let detail = if sessions_only {
+                        if host.model.connected {
+                            String::new()
+                        } else {
+                            "Offline".into()
+                        }
+                    } else {
+                        format!("{label} · Session")
+                    };
+                    let mut e = Entry::new(
+                        &session.label,
+                        detail,
+                        &group,
+                        Intent::Select(index, session.session_id.clone()),
+                    );
+                    e.current = self.active == index
+                        && host.model.selected.as_ref() == Some(&session.session_id);
+                    if format!("{} {label}", e.label)
+                        .to_lowercase()
+                        .contains(&lower)
+                    {
+                        entries.push(e);
+                    }
+                }
+                if sessions_only
+                    && (query.is_empty() || label.to_lowercase().contains(&lower))
+                    && (!host.model.connected || host.model.sessions.is_empty())
+                {
+                    let mut e = Entry::new(
+                        if host.model.connected {
+                            "No sessions yet"
+                        } else {
+                            "Retry connection"
+                        },
+                        "",
+                        group,
+                        Intent::RetryHost(index),
+                    );
+                    e.enabled = !host.model.connected;
+                    entries.push(e);
+                }
+            }
+        }
+        if !sessions_only
+            && !pane_only
+            && !query.is_empty()
+            && let Some(view) = model.view()
+        {
+            for tab in &view.windows {
+                if let Some(id) = &tab.window_id {
+                    let mut e = Entry::new(
+                        tab.label.clone().unwrap_or_else(|| "Terminal".into()),
+                        "Tab",
+                        format!(
+                            "Tabs · {host_name} / {}",
+                            view.label.as_deref().unwrap_or("Session")
+                        ),
+                        Intent::Tab(id.clone()),
+                    );
+                    e.current = view.active_window_id.as_ref() == Some(id);
+                    entries.push(e);
+                }
+            }
+        }
+        if !sessions_only {
+            entries.retain(|e| {
+                format!("{} {} {}", e.label, e.detail, e.group)
+                    .to_lowercase()
+                    .contains(&lower)
+            });
+        }
+        if sessions_only {
+            // A typed query names the new session, and the rows say so.
+            let named = (!query.is_empty()).then(|| query.clone());
+            let (create, elsewhere, key) = match &named {
+                Some(name) => (
+                    format!("New session \"{name}\" on {host_name}"),
+                    format!("Create \"{name}\" on another host…"),
+                    "",
+                ),
+                None => (
+                    format!("New session on {host_name}"),
+                    "Create on another host…".into(),
+                    "Ctrl Shift N",
+                ),
+            };
+            for (label, key, action) in [
+                (create, key, Intent::CreateOn(self.active, named)),
+                (elsewhere, "", Intent::ChooseHost(query.clone())),
+                ("Add host…".into(), "", Intent::AddHost),
+            ] {
+                let mut e = Entry::new(label, key, "", action);
+                e.footer = true;
+                if matches!(e.action, Intent::CreateOn(..)) {
+                    e.enabled = model.connected;
+                }
+                entries.push(e);
+            }
+        }
+        entries
+    }
+}

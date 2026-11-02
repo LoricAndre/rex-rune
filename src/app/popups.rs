@@ -1,0 +1,355 @@
+//! List popups: the session switcher, the host step, Commands and the pane menu. No scrim;
+//! an outside press dismisses and is consumed.
+use super::{
+    input::list_key,
+    panel::{Intent, PanelKind},
+    theme::*,
+    widgets::{Row, list_row},
+    workspace::Workspace,
+};
+use rune::{El, ScrollSpec, Tx, col, el, row, text};
+use rune_kit::TextInput;
+
+const HEADER: f32 = 32.;
+
+#[derive(Clone)]
+enum Hidden {
+    Session,
+    Offline(String),
+    Other,
+}
+
+/// A transparent full-window layer that eats presses outside the popup and closes it.
+fn dismiss_layer() -> El {
+    el().key("popup-dismiss")
+        .pin(Some(0.), Some(0.), Some(0.), Some(0.))
+        .preserve_focus_on_press(true)
+        .on_press_tx(|s: &mut Workspace, tx: &mut Tx| s.close_panel(tx))
+        .on_secondary_press(|s: &mut Workspace, _, tx| s.close_panel(tx))
+}
+
+/// The captured pane's outline, in window points, above any scrim and below the panel.
+pub fn target_outline(s: &Workspace) -> Option<El> {
+    let panel = s.panel.as_ref()?;
+    // A session's menu, rename or confirm outlines its sidebar row instead.
+    if panel.session.is_some() {
+        return None;
+    }
+    if !matches!(
+        panel.kind,
+        PanelKind::Pane
+            | PanelKind::Form(super::panel::Form::RenamePane(_))
+            | PanelKind::Confirm { .. }
+    ) {
+        return None;
+    }
+    let target = panel.target.as_ref()?;
+    let current = s.model().window()?;
+    let placement = rex_linux::layout::placements(current, None)
+        .0
+        .into_iter()
+        .find(|p| p.block == target.block)?;
+    let [ax, ay, _, _] = s.area;
+    let [x, y, w, h] = super::panes::card_rect(s, placement.rect);
+    Some(
+        el().key("target-outline")
+            .absolute(ax + x, ay + y)
+            .size(w, h)
+            .radius(CARD_RADIUS)
+            .continuous_corners()
+            .border(1.5, rgb(ACCENT)),
+    )
+}
+
+pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
+    let k = kit();
+    let panel = s.panel.as_ref().expect("list panel");
+    let sessions = matches!(panel.kind, PanelKind::Picker(true) | PanelKind::Hosts(_));
+    // Context menus (a pane's, a sidebar session's) share one shape.
+    let pane = matches!(
+        panel.kind,
+        PanelKind::Pane | PanelKind::Session | PanelKind::Host(_)
+    );
+    let commands = matches!(panel.kind, PanelKind::Picker(false));
+    let [vw, vh] = viewport;
+    let width = (if pane {
+        300.
+    } else if sessions {
+        440.
+    } else {
+        520.
+    } as f32)
+        .min(vw - 16.);
+    let top = if sessions || pane {
+        TOOLBAR - 4.
+    } else if vh < 750. {
+        60.
+    } else {
+        76.
+    };
+    let (ax, ay) = panel.anchor.unwrap_or((
+        if sessions {
+            MARGIN + 38.
+        } else if pane {
+            vw - 450.
+        } else {
+            (vw - width) / 2.
+        },
+        top,
+    ));
+    let entries = s.entries();
+    let row_height = if commands { 36. } else { 34. };
+    let footer_count = entries.iter().filter(|e| e.footer).count();
+    let input_height = if panel.inputs.is_empty() { 40. } else { 52. };
+    let list_max = (vh - top - 16. - input_height - footer_count as f32 * 30. - 88.).max(60.);
+
+    // Rows, with their content spans for the overflow hint.
+    let mut list = col().key("results").w_full().pr(8.).gap(2.);
+    let mut footer = col().w_full().px(6.).py(4.).gap(2.);
+    let surface_id = match panel.kind {
+        PanelKind::Picker(true) => "switcher",
+        PanelKind::Picker(false) => "commands",
+        PanelKind::Hosts(_) => "hosts",
+        PanelKind::Session => "session-menu",
+        PanelKind::Host(_) => "host-menu",
+        _ => "pane-menu",
+    };
+    let mut spans: Vec<(f32, f32, Hidden)> = Vec::new();
+    let mut y = 0.;
+    let mut group = String::new();
+    let mut list_rows = 0;
+    for (i, entry) in entries.iter().enumerate() {
+        if !entry.footer && entry.group != group {
+            group = entry.group.clone();
+            if !group.is_empty() {
+                let first = y == 0.;
+                list = list.child(
+                    row()
+                        .w_full()
+                        .h(HEADER - if first { 6. } else { 0. })
+                        .pt(if first { 0. } else { 8. })
+                        .px(12.)
+                        .center_y()
+                        .child(
+                            text(group.clone())
+                                .font(label_caps())
+                                .text_case(rune::TextCase::Uppercase)
+                                .color(rgb(MUTED)),
+                        ),
+                );
+                y += HEADER - if first { 6. } else { 0. } + 2.;
+            }
+        }
+        let action = entry.action.clone();
+        let enabled = entry.enabled;
+        let r = list_row(
+            Row {
+                key: format!("entry:{i}"),
+                surface: surface_id,
+                label: &entry.label,
+                detail: &entry.detail,
+                height: if entry.footer { 32. } else { row_height },
+                check: (sessions || entry.current).then_some(entry.current),
+                followup: entry.followup,
+                enabled,
+                selected: i == panel.selected && enabled,
+            },
+            i,
+            move |s: &mut Workspace, tx: &mut Tx| s.perform(action.clone(), tx),
+        );
+        if entry.footer {
+            footer = footer.child(r);
+        } else {
+            let h = row_height + 2.;
+            spans.push((
+                y,
+                y + h,
+                match &entry.action {
+                    Intent::Select(..) => Hidden::Session,
+                    Intent::RetryHost(host) => {
+                        Hidden::Offline(s.settings.hosts[*host].label.clone())
+                    }
+                    _ => Hidden::Other,
+                },
+            ));
+            y += h;
+            list = list.child(r);
+            list_rows += 1;
+        }
+    }
+    if list_rows == 0 {
+        list = list.child(
+            row().px(12.).py(16.).child(
+                text("No matches. Try another name or create a session.")
+                    .font(ui(13.))
+                    .color(rgb(MUTED)),
+            ),
+        );
+        y += 52.;
+    }
+    let content = y;
+    let overflow = content > list_max + 1.;
+    let view_h = content.min(list_max);
+    let fx = &s.switcher_fx;
+    let mut scroller = col()
+        .key("results-scroll")
+        .w_full()
+        .max_h(list_max)
+        .scroll(ScrollSpec {
+            stick_bottom: false,
+        })
+        .child(list);
+    if overflow {
+        let switcher = matches!(panel.kind, PanelKind::Picker(true));
+        scroller = scroller.on_scroll_offset(fx.watch(width - 6., view_h, move |offset, max| {
+            if offset >= max - 1. {
+                return if sessions {
+                    "Earlier sessions above"
+                } else {
+                    "Earlier results above"
+                }
+                .into();
+            }
+            if !switcher {
+                return if sessions {
+                    "More sessions below"
+                } else {
+                    "More results below"
+                }
+                .into();
+            }
+            let bottom = offset + view_h;
+            let hidden: Vec<&Hidden> = spans
+                .iter()
+                .filter(|(_, b, _)| *b > bottom + 1.)
+                .map(|(_, _, h)| h)
+                .collect();
+            let sessions_below = hidden
+                .iter()
+                .filter(|h| matches!(h, Hidden::Session))
+                .count();
+            let offline: Vec<&String> = hidden
+                .iter()
+                .filter_map(|h| {
+                    if let Hidden::Offline(l) = h {
+                        Some(l)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let mut parts = Vec::new();
+            if sessions_below > 0 {
+                parts.push(format!(
+                    "{sessions_below} more session{}",
+                    if sessions_below == 1 { "" } else { "s" }
+                ));
+            }
+            match offline.len() {
+                0 => {}
+                1 => parts.push(format!("{} offline", offline[0])),
+                n => parts.push(format!("{n} offline hosts below")),
+            }
+            if parts.is_empty() {
+                "More sessions below".into()
+            } else {
+                parts.join(" · ")
+            }
+        }));
+    }
+    let mut surface = glass(
+        col()
+            .key("menu-surface")
+            .role("menu")
+            .w(width)
+            .max_h(vh - 16.)
+            .padding(6.)
+            .gap(2.)
+            .preserve_focus_on_press(true),
+        14.,
+        true,
+    )
+    .clip_rounded(14.)
+    .transition(pop_in());
+    if panel.inputs.is_empty() {
+        surface = surface.child(
+            row().h(30.).px(12.).center_y().child(
+                text(panel.title.clone())
+                    .font(medium(12.))
+                    .color(rgb(MUTED))
+                    .truncate(),
+            ),
+        );
+    } else {
+        let placeholder = panel
+            .fields
+            .first()
+            .map(|f| f.1.clone())
+            .unwrap_or_default();
+        surface = surface.child(
+            row()
+                .w_full()
+                .h(42.)
+                .mb(4.)
+                .px(4.)
+                .center_y()
+                .radius(10.)
+                .continuous_corners()
+                .fill(white(0.045))
+                .child(
+                    TextInput::new(&panel.inputs[0])
+                        .placeholder(placeholder)
+                        .leading_icon(&SEARCH)
+                        .leading_icon_size(16.)
+                        .text_style(ui(14.))
+                        .height(40.)
+                        .plain()
+                        .trailing(text("esc").font(medium(10.5)).color(rgb(MUTED)))
+                        .on_edit(|s: &mut Workspace| s.edit_input(0))
+                        .on_change(|s: &mut Workspace, _: &mut Tx| s.query_changed())
+                        .on_key(list_key)
+                        .width(None)
+                        .build(k)
+                        .key("popup-search")
+                        .w_full(),
+                ),
+        );
+    }
+    let mut results = el().w_full().min_h(0.).child(scroller);
+    if overflow {
+        results = results.child(fx.thumb_el());
+    }
+    surface = surface.child(results);
+    if overflow {
+        surface = surface.child(fx.hint_el().w_full());
+    }
+    if footer_count > 0 {
+        surface = surface
+            .child(el().h(1.).mx(8.).my(4.).fill(white(0.07)))
+            .child(footer.px(0.).py(0.));
+    }
+    surface = surface.child(
+        row().px(12.).pt(6.).pb(4.).gap(6.).center_y().child(
+            text("↑ ↓ navigate · ↵ choose · esc back")
+                .font(ui(11.))
+                .color(rgb(MUTED)),
+        ),
+    );
+    // Keep the whole surface on screen: an estimate of its height bounds the anchor.
+    let estimated = input_height
+        + view_h
+        + if pane { 24. } else { 0. }
+        + footer_count as f32 * 30.
+        + 48.
+        + if overflow { 24. } else { 0. };
+    let x = ax.clamp(8., (vw - width - 8.).max(8.));
+    let y = ay.clamp(8., (vh - estimated - 8.).max(8.));
+    let mut layer = el()
+        .key("popup-layer")
+        .pin(Some(0.), Some(0.), Some(0.), Some(0.))
+        .child(dismiss_layer());
+    if let Some(outline) = target_outline(s) {
+        layer = layer.child(outline);
+    }
+    layer.child(surface.absolute(x, y))
+}

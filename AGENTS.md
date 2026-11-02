@@ -1,0 +1,65 @@
+# Contributor and agent guide
+
+Rex Linux is a native Linux client for Rex terminal servers, written in Rust on Rune. See [README.md](README.md) for what it does and how to run it, [PRODUCT.md](PRODUCT.md) for product principles and [DESIGN.md](DESIGN.md) for the design system.
+
+## Build and test
+
+```sh
+cargo build --locked --release --bin rex-linux          # the app
+cargo test --locked --all-features                      # unit and headless UI tests
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+
+# Protocol-only binaries (no UI libraries needed):
+cargo run --locked --no-default-features --bin rex-probe
+cargo run --locked --no-default-features --bin rex-workspace-probe
+
+# Vendored SDK tests:
+cargo test --manifest-path vendor/rexrs/Cargo.toml --all-features
+```
+
+Requirements are listed in the README (Rust 1.96+, Zig 0.17.x for `ghostty-vt`, Linux graphics and input libraries). `Cargo.lock` is committed; keep `--locked` working.
+
+Some probes and Python scripts in `scripts/` connect to the configured Rex server and create sessions there; others start their own server. Run them only against a disposable server or socket you control, and check each script's requirements in its docstring. Anything that exercises the UI against real input (`x11-smoke.py`, `rune-acceptance-x11.py`, `wayland-seat-smoke.py`) needs a built binary and the tools it names.
+
+## Code layout
+
+- Protocol and model library (`src/lib.rs`, no UI dependency):
+  - `transport.rs`, `wire.rs`: Unix/HTTPS WebSockets, data tickets, snapshot framing.
+  - `connection.rs` (and `connection/`): one control connection per host, block-keyed terminal streams, the `Options` CLI definition.
+  - `terminal.rs`: Ghostty decoding and render frames.
+  - `layout.rs`: split placement. `settings.rs`: local configuration.
+- `src/main.rs` and `src/app/`: the Rune front end (behind the default `ui` feature).
+  - `workspace.rs`: workspace state and behavior (hosts, sessions, tabs, panes, requests, preferences, notices). Host and terminal workers wake the UI through `rune::AppHandle::update`.
+  - `panel.rs`: popup and dialog state and the switcher, Commands and pane-menu lists.
+  - `input.rs`, `keys.rs`: workspace shortcuts first, then every other key to the focused pane's PTY; Rune key events to Rex `client.key` payloads; IME.
+  - `term.rs`: one pane's view state and cell grid. Rows are text segments placed at `column × cell width`; a character joins a segment only if it advances exactly one cell; ligatures and kerning are off; rows are memoized by content.
+  - `toolbar.rs`, `sidebar.rs`, `panes.rs`, `popups.rs`, `dialogs.rs`, `widgets.rs`: views on rune-kit, with design tokens pinned onto the kit in `theme.rs`.
+  - `tests.rs`: headless UI tests.
+- `src/bin/`: `rex-probe` and `rex-workspace-probe`, live protocol probes.
+- `examples/`: `chrome_spike` (borderless window chrome).
+- `scripts/`: integration and acceptance checks, and the desktop installer. `tools/`: small helpers for test scripts.
+- `resources/`: desktop entry and icons.
+- `vendor/`: patched copies of Rune and rexrs.
+
+## Conventions
+
+- Match the surrounding style; run `cargo fmt` and keep clippy clean with `-D warnings`.
+- Terminal content, colours and split geometry are server-owned. Do not recolour output or invent layout.
+- Ordinary attachment must never start, stop or reconfigure a Rex server, and must never create or destroy a session. Creation is always an explicit user action.
+- Failed input is never replayed automatically; a transport failure pauses affected panes.
+- Workspace shortcuts are reserved by the client; keep every other key flowing to the focused terminal, including key releases only when their press was sent.
+- Terminal content never animates; chrome motion uses the springs in `theme.rs`.
+- UI changes should follow [DESIGN.md](DESIGN.md). Prefer verifying them in a rendered build (for example with Rune's `-- --snap out.png`) rather than by reading code.
+- Add tests for protocol and state-machine changes; headless UI tests in `src/app/tests.rs` cover focus and dialog behavior.
+- Keep the README's claims honest: don't document features that aren't implemented or checked.
+
+## Vendored patches
+
+`vendor/rune` and `vendor/rexrs` are upstream snapshots plus small, documented patches, wired in through `[patch]` in `Cargo.toml`. Rules:
+
+- Keep each patch minimal and describe it in the vendor directory's README (`vendor/rune/README.md`, `vendor/rexrs/REX-LINUX.md`).
+- Do not mix unrelated edits into vendored code; changes that could go upstream should.
+- Preserve upstream license files and attribution. When bumping a pinned revision, update `Cargo.toml`, the vendored copy and its README together, then re-run the tests above.
+- Remove a patch once upstream provides an equivalent.
+- Regenerate rexrs types with `python3 codegen/generate.py` (from `vendor/rexrs`) rather than editing generated files by hand.

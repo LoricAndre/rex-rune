@@ -1,0 +1,117 @@
+use anyhow::{Context, Result, ensure};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Host {
+    pub label: String,
+    pub endpoint: String,
+    #[serde(default)]
+    pub collapsed: bool,
+    /// The shell new terminals on this host start (`zsh`, `/bin/zsh`); none uses the server
+    /// user's login shell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Settings {
+    pub hosts: Vec<Host>,
+    pub last_host: Option<String>,
+    pub sessions: HashMap<String, String>,
+    pub sidebar: bool,
+    pub sidebar_width: f32,
+    pub font_size: f32,
+    pub ui_scale: f32,
+}
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            hosts: vec![Host {
+                label: std::fs::read_to_string("/etc/hostname")
+                    .unwrap_or_else(|_| "Local".into())
+                    .trim()
+                    .to_owned(),
+                endpoint: crate::transport::local_endpoint(),
+                collapsed: false,
+                shell: None,
+            }],
+            last_host: None,
+            sessions: HashMap::new(),
+            sidebar: false,
+            sidebar_width: 236.,
+            font_size: 15.,
+            ui_scale: 1.,
+        }
+    }
+}
+impl Settings {
+    fn config_dir() -> PathBuf {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
+            })
+    }
+    pub fn path() -> PathBuf {
+        Self::config_dir().join("rex-linux/workspace.json")
+    }
+    pub fn load_default() -> Result<(Self, PathBuf)> {
+        let path = Self::path();
+        let settings = Self::load(&path)?;
+        Ok((settings, path))
+    }
+    pub fn load(path: &Path) -> Result<Self> {
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let mut settings: Self = serde_json::from_slice(&std::fs::read(path)?)
+            .with_context(|| format!("Unable to read {}", path.display()))?;
+        for host in &settings.hosts {
+            validate_host(&host.label, &host.endpoint)?;
+        }
+        ensure!(
+            !settings.hosts.is_empty(),
+            "workspace needs at least one host"
+        );
+        settings.font_size = settings.font_size.clamp(8., 48.);
+        settings.sidebar_width = settings.sidebar_width.clamp(200., 360.);
+        settings.ui_scale = normalize_ui_scale(settings.ui_scale);
+        Ok(settings)
+    }
+    pub fn save(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent)?;
+        }
+        let temporary = path.with_extension("json.tmp");
+        std::fs::write(&temporary, serde_json::to_vec_pretty(self)?)?;
+        std::fs::rename(temporary, path)?;
+        Ok(())
+    }
+}
+
+pub fn normalize_ui_scale(scale: f32) -> f32 {
+    if scale.is_finite() {
+        (scale * 10.).round().clamp(7., 15.) / 10.
+    } else {
+        1.
+    }
+}
+pub fn validate_host(label: &str, endpoint: &str) -> Result<()> {
+    ensure!(!label.trim().is_empty(), "Enter a host name");
+    if let Some(path) = endpoint.strip_prefix("unix://") {
+        ensure!(path.starts_with('/'), "Unix socket paths must be absolute");
+    } else {
+        let url =
+            url::Url::parse(endpoint).context("Use an https://, http:// or unix:// endpoint")?;
+        ensure!(
+            matches!(url.scheme(), "https" | "http" | "ws" | "wss") && url.host_str().is_some(),
+            "Use an https://, http:// or unix:// endpoint"
+        );
+    }
+    Ok(())
+}

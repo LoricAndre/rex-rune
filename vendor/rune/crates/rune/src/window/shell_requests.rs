@@ -1,0 +1,49 @@
+//! What handlers and updates ask of the window itself, carried out by `Host::shell`:
+//! minimizing it and showing the title they set.
+use super::*;
+
+fn minimize_ignored(what: &str) {
+    if cfg!(debug_assertions) { eprintln!("rune: minimize ignored: {what} can't minimize"); }
+}
+
+impl<S: 'static> Host<S> {
+    /// `Tx::minimize` and `AppHandle::minimize`: miniaturize on macOS, `set_minimized`
+    /// elsewhere. A hidden window, a panel or launcher, and a window that can't minimize
+    /// ignore it.
+    pub(super) fn minimize(&mut self) {
+        #[cfg(target_os = "macos")]
+        let launcher = self.launcher();
+        let Some(w) = self.win.as_mut().filter(|w| w.visible) else { return minimize_ignored("a hidden window") };
+        #[cfg(target_os = "macos")]
+        if w.panel.is_some() || launcher { return minimize_ignored("a panel"); }
+        // Off macOS winit reports a minimize button on a borderless window too, and a borderless
+        // window that draws its own controls minimizes through the window manager.
+        if (self.options.borderless && cfg!(target_os = "macos")) || !w.window.enabled_buttons().contains(winit::window::WindowButtons::MINIMIZE) {
+            return minimize_ignored("a window without a minimize button");
+        }
+        #[cfg(target_os = "macos")]
+        { w.prime = 0; }
+        w.window.set_minimized(true);
+    }
+
+    /// `Tx::toggle_maximize` and `Tx::show_window_menu`, in the order handlers asked.
+    pub(super) fn window_ops(&mut self) {
+        let ops = std::mem::take(&mut self.rt.window_ops);
+        let Some(w) = self.win.as_ref().filter(|w| w.visible) else { return };
+        for op in ops {
+            match op {
+                crate::el_tx::WindowOp::ToggleMaximize => w.window.set_maximized(!w.window.is_maximized()),
+                crate::el_tx::WindowOp::Menu(x, y) => {
+                    let scale = w.window.scale_factor();
+                    w.window.show_window_menu(winit::dpi::PhysicalPosition::new(x as f64 * scale, y as f64 * scale));
+                }
+            }
+        }
+    }
+
+    /// `Tx::set_title`: shows a title set since the window last showed one, hidden or covered
+    /// as it may be. A window created later opens with the current title (`try_create`).
+    pub(super) fn show_title(&mut self) {
+        if let Some(title) = self.rt.window_title.take_change() && let Some(w) = &self.win { w.window.set_title(title); }
+    }
+}

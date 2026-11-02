@@ -1,0 +1,749 @@
+//! Headless focus and key-routing checks on Rune's runtime (no server: the one host is a
+//! socket that does not exist).
+use super::{
+    panel::{Form, Intent, PanelKind, SessionAction},
+    placeholder, view,
+    workspace::Workspace,
+};
+use clap::Parser;
+use rex_linux::{
+    connection::{HostCommand, HostConnection, Options},
+    settings::{Host, Settings},
+};
+use rune::{AppSpec, Env, Key, KeyEvent, Mods, Runtime};
+
+fn workspace() -> Workspace {
+    workspace_hosts(1)
+}
+
+fn workspace_hosts(count: usize) -> Workspace {
+    let endpoint = "unix:///nonexistent/rex-test.sock";
+    let options = Options::parse_from(["rex-linux", "--endpoint", endpoint]);
+    let settings = Settings {
+        hosts: (0..count)
+            .map(|i| Host {
+                label: format!("test-{i}"),
+                endpoint: if i == 0 {
+                    endpoint.into()
+                } else {
+                    format!("unix:///nonexistent/rex-test-{i}.sock")
+                },
+                collapsed: false,
+                shell: None,
+            })
+            .collect(),
+        ..Settings::default()
+    };
+    let handle = rune::App::new(AppSpec::new("Rex", (1024., 700.), placeholder, view)).handle();
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "rex-linux-test-{}-{}.json",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    Workspace::new(options, settings, path, handle, None)
+}
+
+fn click(rt: &mut Runtime<Workspace>, key: &str) {
+    let r = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some(key))
+        .unwrap_or_else(|| panic!("missing {key}"))
+        .rect;
+    let (x, y) = (r[0] + r[2] / 2., r[1] + r[3] / 2.);
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    for _ in 0..4 {
+        rt.frame(1. / 60.);
+    }
+}
+
+/// Every session a host was asked to create, as (label, shell).
+fn creates(rx: &flume::Receiver<HostCommand>) -> Vec<(Option<String>, Option<String>)> {
+    rx.try_iter()
+        .filter_map(|c| match c {
+            HostCommand::CreateSession { label, shell } => Some((label, shell)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn has(rt: &Runtime<Workspace>, key: &str) -> bool {
+    rt.elements().iter().any(|e| e.key.as_deref() == Some(key))
+}
+
+#[test]
+fn host_plus_creates_on_its_own_host_at_once_with_its_shell() {
+    let mut ws = workspace_hosts(3);
+    ws.sidebar.toggle();
+    let active = capture_host(&mut ws, 0);
+    let other = capture_host(&mut ws, 1);
+    let offline = capture_host(&mut ws, 2);
+    ws.hosts[0].model.connected = true;
+    ws.hosts[0].model.sessions = vec![session("cur")];
+    ws.hosts[0].model.selected = Some("cur".into());
+    ws.hosts[1].model.connected = true;
+    ws.hosts[1].model.sessions = vec![session("b")];
+    ws.hosts[2].model.sessions = vec![session("away")];
+    ws.settings.hosts[1].shell = Some("zsh".into());
+    ws.settings.hosts[1].collapsed = true;
+    let mut rt = runtime(ws);
+    assert!(has(&rt, "host-new-session:0") && has(&rt, "host-new-session:1"));
+    assert!(!has(&rt, "host-new-session:2"), "offline hosts have no +");
+    assert!(has(&rt, "host-new-session-slot:2"), "but keep its slot");
+
+    click(&mut rt, "host-new-session:1");
+    assert_eq!(creates(&other), [(None, Some("zsh".to_owned()))]);
+    assert!(
+        creates(&active).is_empty(),
+        "nothing goes to the active host"
+    );
+    assert_eq!(rt.state.active, 1);
+    assert!(rt.state.panel.is_none());
+    assert!(
+        !rt.state.settings.hosts[1].collapsed,
+        "a collapsed host expands"
+    );
+    assert_eq!(focused(&rt), None, "the next key goes to the terminal");
+
+    let mut tx = rune::Tx::default();
+    rt.state.create_session(2, None, &mut tx);
+    assert!(creates(&offline).is_empty(), "offline hosts create nothing");
+    assert_eq!(rt.state.active, 1);
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn host_menu_rows_online_and_offline() {
+    let mut ws = workspace_hosts(2);
+    ws.sidebar.toggle();
+    let other = capture_host(&mut ws, 0);
+    ws.hosts[0].model.connected = true;
+    ws.hosts[0].model.sessions = vec![session("cur")];
+    ws.settings.hosts[0].shell = Some("zsh".into());
+    let mut rt = runtime(ws);
+    let rows = |rt: &Runtime<Workspace>| -> Vec<(String, String, bool)> {
+        rt.state
+            .entries()
+            .into_iter()
+            .map(|e| (e.label, e.detail, e.enabled))
+            .collect()
+    };
+
+    // A right-click on the + opens the menu; it never creates.
+    secondary_click(&mut rt, "host-new-session:0");
+    let panel = rt.state.panel.as_ref().expect("host menu");
+    assert!(matches!(panel.kind, PanelKind::Host(0)));
+    assert_eq!(panel.title, "test-0");
+    assert!(creates(&other).is_empty());
+    assert_eq!(
+        rows(&rt),
+        [
+            ("New session".to_owned(), String::new(), true),
+            ("Default shell…".to_owned(), "zsh".to_owned(), true),
+        ]
+    );
+    press(&mut rt, Key::Escape);
+
+    secondary_click(&mut rt, "host:1");
+    assert_eq!(rt.state.panel.as_ref().unwrap().title, "test-1 · Offline");
+    assert_eq!(
+        rows(&rt),
+        [
+            ("New session".to_owned(), String::new(), false),
+            ("Default shell…".to_owned(), String::new(), true),
+            ("Retry connection".to_owned(), String::new(), true),
+        ]
+    );
+    assert_eq!(rt.state.panel.as_ref().unwrap().selected, 1);
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn the_empty_host_row_collapses_with_its_host() {
+    let mut ws = workspace_hosts(2);
+    ws.sidebar.toggle();
+    capture_host(&mut ws, 1);
+    ws.hosts[1].model.connected = true;
+    let mut rt = runtime(ws);
+    assert!(has(&rt, "new-session-on:1"));
+    click(&mut rt, "host-disclosure:1");
+    // Let the leaving row finish its exit.
+    for _ in 0..90 {
+        rt.frame(1. / 60.);
+    }
+    assert!(rt.state.settings.hosts[1].collapsed);
+    assert!(!has(&rt, "new-session-on:1"), "collapsing hides the row");
+    assert!(has(&rt, "host-new-session:1"), "the header + stays");
+    click(&mut rt, "host-disclosure:1");
+    assert!(has(&rt, "new-session-on:1"), "expanding brings it back");
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn empty_host_row_creates_in_one_step() {
+    let mut ws = workspace_hosts(2);
+    ws.sidebar.toggle();
+    let other = capture_host(&mut ws, 1);
+    ws.hosts[1].model.connected = true;
+    let mut rt = runtime(ws);
+    assert!(!has(&rt, "new-session-on:0"), "offline hosts keep retry");
+    click(&mut rt, "new-session-on:1");
+    assert_eq!(creates(&other), [(None, None)]);
+    assert_eq!(rt.state.active, 1);
+    assert!(rt.state.panel.is_none());
+    assert_eq!(focused(&rt), None);
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn only_a_switcher_query_names_the_new_session() {
+    let mut ws = workspace_hosts(2);
+    let active = capture_host(&mut ws, 0);
+    let other = capture_host(&mut ws, 1);
+    ws.hosts[0].model.connected = true;
+    ws.hosts[1].model.connected = true;
+    let mut tx = rune::Tx::default();
+
+    ws.picker(true);
+    ws.panel.as_mut().unwrap().inputs[0] = rune::TextEdit::new("api");
+    let footer: Vec<_> = ws.entries().into_iter().filter(|e| e.footer).collect();
+    assert_eq!(footer[0].label, "New session \"api\" on test-0");
+    assert_eq!(footer[0].detail, "", "no shortcut hint for a named create");
+    assert_eq!(footer[1].label, "Create \"api\" on another host…");
+    ws.perform(footer[0].action.clone(), &mut tx);
+    assert_eq!(creates(&active), [(Some("api".to_owned()), None)]);
+    assert!(ws.panel.is_none());
+
+    // Another host via the chooser keeps the name and says so.
+    ws.picker(true);
+    ws.panel.as_mut().unwrap().inputs[0] = rune::TextEdit::new("api");
+    ws.perform(Intent::ChooseHost("api".into()), &mut tx);
+    assert_eq!(ws.panel.as_ref().unwrap().title, "Create \"api\" on…");
+    let host = ws.entries().remove(1);
+    ws.perform(host.action, &mut tx);
+    assert_eq!(creates(&other), [(Some("api".to_owned()), None)]);
+
+    // Commands' query is a search, never a name.
+    ws.picker(false);
+    ws.panel.as_mut().unwrap().inputs[0] = rune::TextEdit::new("new ses");
+    let entry = ws
+        .entries()
+        .into_iter()
+        .find(|e| e.label.starts_with("New session on"))
+        .expect("Commands create");
+    assert_eq!(entry.label, "New session on test-1");
+    ws.perform(entry.action, &mut tx);
+    assert_eq!(creates(&other), [(None, None)]);
+    assert!(creates(&active).is_empty());
+    std::fs::remove_file(&ws.settings_path).ok();
+}
+
+#[test]
+fn default_shell_form_trims_clears_and_rejects_arguments() {
+    let mut ws = workspace_hosts(2);
+    let mut tx = rune::Tx::default();
+    let set = |ws: &mut Workspace, text: &str| {
+        ws.perform(Intent::HostShell(1), &mut rune::Tx::default());
+        let panel = ws.panel.as_mut().unwrap();
+        assert!(matches!(panel.kind, PanelKind::Form(Form::HostShell(1))));
+        panel.inputs[0] = rune::TextEdit::new(text);
+        ws.submit(&mut rune::Tx::default());
+    };
+    set(&mut ws, "  zsh ");
+    assert_eq!(ws.settings.hosts[1].shell.as_deref(), Some("zsh"));
+    assert!(ws.settings.hosts[0].shell.is_none(), "only that host");
+    for bad in ["zsh -l", "zsh\u{7}"] {
+        set(&mut ws, bad);
+        assert_eq!(
+            ws.panel.as_ref().unwrap().error.as_deref(),
+            Some("Enter one shell name or path, without arguments.")
+        );
+        ws.cancel_panel(&mut tx);
+        assert_eq!(ws.settings.hosts[1].shell.as_deref(), Some("zsh"));
+    }
+    ws.perform(Intent::HostShell(1), &mut tx);
+    assert_eq!(
+        ws.panel.as_ref().unwrap().inputs[0].text,
+        "zsh",
+        "prefilled"
+    );
+    ws.cancel_panel(&mut tx);
+    set(&mut ws, "");
+    assert!(ws.settings.hosts[1].shell.is_none(), "empty clears it");
+    let saved = std::fs::read_to_string(&ws.settings_path).unwrap();
+    assert!(!saved.contains("\"shell\""), "no shell key once cleared");
+    std::fs::remove_file(&ws.settings_path).ok();
+}
+
+#[test]
+fn tabs_and_splits_start_the_right_hosts_shell() {
+    let mut ws = workspace_hosts(2);
+    let active = capture_host(&mut ws, 0);
+    let other = capture_host(&mut ws, 1);
+    ws.hosts[0].model.connected = true;
+    ws.hosts[0].model.selected = Some("cur".into());
+    ws.settings.hosts[0].shell = Some("zsh".into());
+    ws.settings.hosts[1].shell = Some("fish".into());
+    let mut tx = rune::Tx::default();
+    ws.perform(Intent::NewWindow, &mut tx);
+    let sent = requests(&active);
+    assert_eq!(sent[0].0, "session.new_window");
+    assert_eq!(sent[0].2["layout"]["block"]["options"]["shell"], "zsh");
+    let target = super::panel::PaneTarget {
+        host: 1,
+        session: "b".into(),
+        block: "block:1".into(),
+        label: "shell".into(),
+        tab: "Shell".into(),
+    };
+    ws.hosts[1].model.views.insert(
+        "b".into(),
+        serde_json::from_value(serde_json::json!({
+            "revision": 1,
+            "session_id": "b",
+            "windows": [{"window_id": "w", "layers": [{"kind": "tiled", "blocks": [{"block_id": "block:1"}]}]}]
+        }))
+        .expect("a view"),
+    );
+    ws.perform(
+        Intent::Pane(target, super::panel::PaneAction::Split("horizontal")),
+        &mut tx,
+    );
+    let sent = requests(&other);
+    assert_eq!(sent[0].0, "session.new_split");
+    assert_eq!(sent[0].2["layout"]["block"]["options"]["shell"], "fish");
+    std::fs::remove_file(&ws.settings_path).ok();
+}
+
+fn session(id: &str) -> rexrs::api::session::Session {
+    rexrs::api::session::Session {
+        session_id: id.into(),
+        label: format!("{id}-label"),
+    }
+}
+
+/// Swap host `index`'s worker for a channel the test reads.
+fn capture_host(ws: &mut Workspace, index: usize) -> flume::Receiver<HostCommand> {
+    let (commands, receiver) = flume::unbounded();
+    let (_, wake) = flume::unbounded();
+    ws.hosts[index].connection = HostConnection {
+        model: Default::default(),
+        commands,
+        wake,
+    };
+    receiver
+}
+
+/// Every request a host was sent, as (method, session_id, payload).
+fn requests(rx: &flume::Receiver<HostCommand>) -> Vec<(String, String, serde_json::Value)> {
+    rx.try_iter()
+        .filter_map(|c| match c {
+            HostCommand::Request { method, payload } => {
+                Some((method, payload["session_id"].as_str()?.to_owned(), payload))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn secondary_click(rt: &mut Runtime<Workspace>, key: &str) {
+    let r = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some(key))
+        .unwrap_or_else(|| panic!("missing {key}"))
+        .rect;
+    let (x, y) = (r[0] + r[2] / 2., r[1] + r[3] / 2.);
+    rt.secondary_down(x, y);
+    rt.secondary_up(x, y);
+    for _ in 0..4 {
+        rt.frame(1. / 60.);
+    }
+}
+
+#[test]
+fn session_menu_acts_on_its_row_not_the_current_session() {
+    let mut ws = workspace_hosts(2);
+    ws.sidebar.toggle();
+    let current = capture_host(&mut ws, 0);
+    let other = capture_host(&mut ws, 1);
+    ws.hosts[0].model.connected = true;
+    ws.hosts[0].model.sessions = vec![session("cur")];
+    ws.hosts[0].model.selected = Some("cur".into());
+    ws.hosts[1].model.connected = true;
+    ws.hosts[1].model.sessions = vec![session("a"), session("b"), session("c")];
+    ws.hosts[1].model.selected = Some("a".into());
+    let mut rt = runtime(ws);
+
+    secondary_click(&mut rt, "session:1:b");
+    let panel = rt.state.panel.as_ref().expect("session menu");
+    assert!(matches!(panel.kind, PanelKind::Session));
+    assert_eq!(panel.title, "test-1 · b-label");
+    assert!(
+        rt.elements()
+            .iter()
+            .any(|e| e.key.as_deref() == Some("session-target:1:b")),
+        "the targeted row is outlined"
+    );
+    let labels: Vec<_> = rt
+        .state
+        .entries()
+        .into_iter()
+        .map(|e| (e.label, e.enabled))
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            ("Switch to session".to_owned(), true),
+            ("Rename session…".to_owned(), true),
+            ("Move up".to_owned(), true),
+            ("Move down".to_owned(), true),
+            ("Close session…".to_owned(), true),
+        ]
+    );
+
+    // Close → confirm → submit destroys b on host 1, and nothing on the current host.
+    let target = rt.state.panel.as_ref().unwrap().session.clone().unwrap();
+    let mut tx = rune::Tx::default();
+    rt.state.perform(
+        Intent::Session(target.clone(), SessionAction::Close),
+        &mut tx,
+    );
+    let panel = rt.state.panel.as_ref().expect("confirm");
+    assert_eq!(panel.title, "Close b-label?");
+    rt.state.submit(&mut tx);
+    let sent = requests(&other);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        (sent[0].0.as_str(), sent[0].1.as_str()),
+        ("session.destroy", "b")
+    );
+    assert!(
+        requests(&current).is_empty(),
+        "the current session is untouched"
+    );
+
+    // Rename names b on host 1 too.
+    rt.state.perform(
+        Intent::Session(target.clone(), SessionAction::Rename),
+        &mut tx,
+    );
+    rt.state.panel.as_mut().unwrap().inputs[0] = rune::TextEdit::new("renamed");
+    rt.state.submit(&mut tx);
+    let sent = requests(&other);
+    assert_eq!(
+        (sent[0].0.as_str(), sent[0].1.as_str(), &sent[0].2["label"]),
+        ("session.set_label", "b", &serde_json::json!("renamed"))
+    );
+
+    // Up goes before a; down from the next-to-last row goes to the end.
+    rt.state.perform(
+        Intent::Session(target.clone(), SessionAction::MoveUp),
+        &mut tx,
+    );
+    rt.state
+        .perform(Intent::Session(target, SessionAction::MoveDown), &mut tx);
+    let sent = requests(&other);
+    assert_eq!(sent[0].2["before_session_id"], "a");
+    assert!(sent[1].2.get("before_session_id").is_none());
+    assert!(requests(&current).is_empty());
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn session_menu_on_an_edge_row_and_an_offline_host() {
+    let mut ws = workspace_hosts(2);
+    ws.sidebar.toggle();
+    ws.hosts[0].model.connected = true;
+    ws.hosts[0].model.sessions = vec![session("cur"), session("next")];
+    ws.hosts[0].model.selected = Some("cur".into());
+    ws.hosts[1].model.sessions = vec![session("away")];
+    let mut rt = runtime(ws);
+
+    secondary_click(&mut rt, "session:0:cur");
+    let entries: Vec<_> = rt
+        .state
+        .entries()
+        .into_iter()
+        .map(|e| (e.label, e.enabled))
+        .collect();
+    assert_eq!(
+        entries[0],
+        ("Rename session…".to_owned(), true),
+        "no Switch on the current row"
+    );
+    assert_eq!(entries[1], ("Move up".to_owned(), false));
+    assert_eq!(entries[2], ("Move down".to_owned(), true));
+    press(&mut rt, Key::Escape);
+    assert!(rt.state.panel.is_none());
+
+    secondary_click(&mut rt, "session:1:away");
+    let panel = rt.state.panel.as_ref().expect("offline session menu");
+    assert_eq!(panel.title, "test-1 · away-label · Offline");
+    let entries: Vec<_> = rt
+        .state
+        .entries()
+        .into_iter()
+        .map(|e| (e.label, e.enabled))
+        .collect();
+    assert_eq!(
+        entries,
+        [
+            ("Switch to session".to_owned(), true),
+            ("Rename session…".to_owned(), false),
+            ("Move up".to_owned(), false),
+            ("Move down".to_owned(), false),
+            ("Close session…".to_owned(), false),
+            ("Retry connection".to_owned(), true),
+        ]
+    );
+    assert_eq!(panel.selected, 0);
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+/// Shift+right-click over a mouse-tracking program opens the pane menu, so the grid's
+/// secondary handler must see Shift.
+#[test]
+fn a_secondary_press_handler_sees_held_shift() {
+    struct S {
+        shift: Option<bool>,
+    }
+    fn v(_: &S, _: &mut rune::Cx<S>) -> rune::El {
+        rune::el().w_full().h_full().child(
+            rune::el()
+                .key("target")
+                .size(100., 100.)
+                .on_secondary_press(|s: &mut S, _, tx: &mut rune::Tx| {
+                    s.shift = Some(tx.mods().shift)
+                }),
+        )
+    }
+    let mut rt = Runtime::new(S { shift: None }, v, (200., 200.), Env::new(true, 1.));
+    rt.frame(1. / 60.);
+    rt.physical_input(rune::PhysicalInput::Modifiers(Mods {
+        shift: true,
+        ..Mods::default()
+    }));
+    rt.secondary_down(50., 50.);
+    rt.secondary_up(50., 50.);
+    rt.frame(1. / 60.);
+    assert_eq!(rt.state.shift, Some(true));
+}
+
+#[test]
+fn ui_zoom_reflows_the_root_and_preserves_a_focused_forms_text() {
+    let mut ws = workspace();
+    ws.open_panel(
+        PanelKind::Form(Form::RenameSession(None)),
+        "Rename session",
+        &[("Session name", "", "keep-me")],
+    );
+    let mut rt = runtime_at(ws, (1200., 800.));
+    let focus = focused(&rt);
+    let mods = Mods {
+        ctrl: true,
+        cmd: true,
+        ..Mods::default()
+    };
+    for _ in 0..8 {
+        rt.key(KeyEvent {
+            key: Key::Command('+'),
+            mods,
+        });
+        rt.frame(1. / 60.);
+    }
+    assert_eq!(rt.state.settings.ui_scale, 1.5);
+    assert_eq!(focused(&rt), focus);
+    assert_eq!(rt.state.panel.as_ref().unwrap().inputs[0].text, "keep-me");
+    assert!((rt.state.area[2] - 1200. / 1.5).abs() < 1.);
+    for _ in 0..10 {
+        rt.key(KeyEvent {
+            key: Key::Command('-'),
+            mods,
+        });
+        rt.frame(1. / 60.);
+    }
+    assert_eq!(rt.state.settings.ui_scale, 0.7);
+    rt.key(KeyEvent {
+        key: Key::Command('0'),
+        mods,
+    });
+    rt.frame(1. / 60.);
+    assert_eq!(rt.state.settings.ui_scale, 1.);
+    assert_eq!(focused(&rt), focus);
+    assert_eq!(rt.state.panel.as_ref().unwrap().inputs[0].text, "keep-me");
+    let saved = Settings::load(&rt.state.settings_path).unwrap();
+    assert_eq!(saved.ui_scale, 1.);
+    std::fs::remove_file(&rt.state.settings_path).unwrap();
+}
+
+fn runtime(ws: Workspace) -> Runtime<Workspace> {
+    runtime_at(ws, (1024., 700.))
+}
+
+#[test]
+fn scaled_pointer_hits_and_sidebar_drag_use_window_deltas_once() {
+    let mut ws = workspace_hosts(2);
+    ws.sidebar.toggle();
+    ws.settings.ui_scale = 1.5;
+    ws.hosts[1].model.connected = true;
+    let mut rt = runtime_at(ws, (1200., 800.));
+    click(&mut rt, "new-session-on:1");
+    assert_eq!(rt.state.active, 1, "the scaled press hit the row");
+    let edge = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("sidebar-edge"))
+        .unwrap()
+        .rect;
+    let x = edge[0] + edge[2] / 2.;
+    let y = edge[1] + 120.;
+    let before = rt.state.sidebar.width();
+    rt.pointer_down(x, y);
+    rt.pointer_move(x + 30., y);
+    rt.pointer_up(x + 30., y);
+    for _ in 0..4 {
+        rt.frame(1. / 60.);
+    }
+    assert!(
+        (rt.state.sidebar.width() - before - 20.).abs() < 1.,
+        "30 window points = 20 layout points at 150%"
+    );
+    std::fs::remove_file(&rt.state.settings_path).unwrap();
+}
+
+#[test]
+fn zoom_in_a_query_keeps_text_and_small_windows_keep_their_layout_floor() {
+    let mut ws = workspace();
+    ws.picker(true);
+    ws.panel.as_mut().unwrap().inputs[0] = rune::TextEdit::new("keep-query");
+    let mut rt = runtime_at(ws, (640., 480.));
+    let focus = focused(&rt);
+    rt.key(KeyEvent {
+        key: Key::Command('='),
+        mods: Mods {
+            ctrl: true,
+            cmd: true,
+            ..Mods::default()
+        },
+    });
+    rt.frame(1. / 60.);
+    assert_eq!(rt.state.settings.ui_scale, 1.1);
+    assert_eq!(rt.state.ui_scale(), 1.);
+    assert_eq!(
+        rt.state.panel.as_ref().unwrap().inputs[0].text,
+        "keep-query"
+    );
+    assert_eq!(focused(&rt), focus);
+    assert!((rt.state.area[2] - 640.).abs() < 1.);
+    std::fs::remove_file(&rt.state.settings_path).unwrap();
+}
+
+fn runtime_at(ws: Workspace, size: (f32, f32)) -> Runtime<Workspace> {
+    let mut rt = Runtime::new(ws, view, size, Env::new(true, 1.));
+    rt.on_key = Some(super::input::on_key);
+    for _ in 0..4 {
+        rt.frame(1. / 60.);
+    }
+    rt
+}
+
+fn focused(rt: &Runtime<Workspace>) -> Option<String> {
+    rt.elements()
+        .into_iter()
+        .find(|e| e.focused)
+        .map(|e| e.path)
+}
+
+fn press(rt: &mut Runtime<Workspace>, key: Key) {
+    rt.key(KeyEvent {
+        key,
+        mods: Mods::default(),
+    });
+    for _ in 0..3 {
+        rt.frame(1. / 60.);
+    }
+}
+
+#[test]
+fn close_confirmation_opens_on_keep_running_and_return_keeps_it_running() {
+    let mut ws = workspace();
+    ws.panel = Some(super::panel::Panel::new(
+        PanelKind::Confirm {
+            method: "session.close_window".into(),
+            payload: serde_json::json!({}),
+            description: "Ends programs.".into(),
+        },
+        "Close this tab?",
+        &[],
+    ));
+    let mut rt = runtime(ws);
+    let path = focused(&rt).expect("a focused control");
+    assert!(path.ends_with("cancel-close"), "focus starts on {path}");
+    press(&mut rt, Key::Enter);
+    assert!(
+        rt.state.panel.is_none(),
+        "Return pressed Keep running and closed the dialog"
+    );
+    assert!(rt.state.notices.is_empty(), "no request failed");
+}
+
+#[test]
+fn forms_focus_their_first_field_and_preferences_start_on_the_font_stepper() {
+    let mut ws = workspace();
+    ws.open_panel(
+        PanelKind::Form(Form::RenameSession(None)),
+        "Rename session",
+        &[("Session name", "", "work")],
+    );
+    let rt = runtime(ws);
+    let path = focused(&rt).expect("a focused field");
+    assert!(
+        path.contains("field:0"),
+        "rename focuses its field, not {path}"
+    );
+
+    let mut ws = workspace();
+    let mut tx = rune::Tx::default();
+    ws.perform(Intent::Settings, &mut tx);
+    let rt = runtime(ws);
+    let path = focused(&rt).expect("a focused control");
+    assert!(path.ends_with("font-smaller"), "preferences focus {path}");
+}
+
+#[test]
+fn terminal_keys_are_not_taken_by_focus_traversal_or_activation() {
+    let mut rt = runtime(workspace());
+    for key in [
+        Key::Tab,
+        Key::Text(" ".into()),
+        Key::Enter,
+        Key::Escape,
+        Key::ContextMenu,
+    ] {
+        press(&mut rt, key.clone());
+        assert_eq!(focused(&rt), None, "{key:?} moved focus off the terminal");
+        assert!(rt.state.panel.is_none(), "{key:?} opened a panel");
+    }
+}
+
+#[test]
+fn escape_walks_back_from_the_host_step_to_the_switcher() {
+    let mut ws = workspace();
+    ws.picker(true);
+    ws.panel.as_mut().unwrap().inputs[0] = rune::TextEdit::new("proj");
+    let mut tx = rune::Tx::default();
+    ws.perform(Intent::ChooseHost("proj".into()), &mut tx);
+    let mut rt = runtime(ws);
+    press(&mut rt, Key::Escape);
+    let panel = rt.state.panel.as_ref().expect("the switcher");
+    assert!(
+        matches!(panel.kind, PanelKind::Picker(true)),
+        "Escape on the host step returns to the switcher"
+    );
+    assert_eq!(panel.inputs[0].text, "proj", "with its query intact");
+    press(&mut rt, Key::Escape);
+    assert!(rt.state.panel.is_none());
+}
