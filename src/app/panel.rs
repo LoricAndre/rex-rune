@@ -177,6 +177,8 @@ pub struct Entry {
     pub footer: bool,
     /// Drawn before the group header: the host's kind in the switcher.
     pub group_icon: Option<&'static rune::Icon>,
+    /// A create button at the right of the group header, with its help text.
+    pub group_create: Option<(Intent, String)>,
 }
 impl Entry {
     pub fn new(
@@ -195,6 +197,7 @@ impl Entry {
             enabled: true,
             footer: false,
             group_icon: None,
+            group_create: None,
         }
     }
 }
@@ -407,9 +410,17 @@ impl Workspace {
                 ));
             }
         }
+        // A typed switcher query names a new session wherever it is created.
+        let named = (!query.is_empty()).then(|| query.clone());
         if !pane_only && (sessions_only || !query.is_empty()) {
             for (index, host) in self.hosts.iter().enumerate() {
                 let label = &self.settings.hosts[index].label;
+                let create = (sessions_only && host.model.connected).then(|| {
+                    (
+                        Intent::CreateOn(index, named.clone()),
+                        format!("New session on {label}"),
+                    )
+                });
                 let group = if !sessions_only {
                     "Sessions · all hosts".into()
                 } else if host.model.connected {
@@ -431,6 +442,7 @@ impl Workspace {
                     );
                     if sessions_only {
                         e.group_icon = Some(self.host_icon(index));
+                        e.group_create = create.clone();
                     }
                     e.current = self.active == index
                         && host.model.selected.as_ref() == Some(&session.session_id);
@@ -445,18 +457,21 @@ impl Workspace {
                     && (query.is_empty() || label.to_lowercase().contains(&lower))
                     && (!host.model.connected || host.model.sessions.is_empty())
                 {
-                    let mut e = Entry::new(
-                        if host.model.connected {
-                            "No sessions yet"
-                        } else {
-                            "Retry connection"
-                        },
-                        "",
-                        group,
-                        Intent::RetryHost(index),
-                    );
-                    e.enabled = !host.model.connected;
+                    let mut e = if host.model.connected {
+                        Entry::new(
+                            match &named {
+                                Some(name) => format!("New session \"{name}\""),
+                                None => "New session".into(),
+                            },
+                            "",
+                            group,
+                            Intent::CreateOn(index, named.clone()),
+                        )
+                    } else {
+                        Entry::new("Retry connection", "", group, Intent::RetryHost(index))
+                    };
                     e.group_icon = Some(self.host_icon(index));
+                    e.group_create = create;
                     entries.push(e);
                 }
             }
@@ -490,8 +505,6 @@ impl Workspace {
             });
         }
         if sessions_only {
-            // A typed query names the new session, and the rows say so.
-            let named = (!query.is_empty()).then(|| query.clone());
             let (create, elsewhere, key) = match &named {
                 Some(name) => (
                     format!("New session \"{name}\" on {host_name}"),

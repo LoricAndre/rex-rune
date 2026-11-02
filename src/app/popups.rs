@@ -136,8 +136,30 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
                             text(group.clone())
                                 .font(label_caps())
                                 .text_case(rune::TextCase::Uppercase)
-                                .color(rgb(MUTED)),
-                        ),
+                                .color(rgb(MUTED))
+                                .truncate()
+                                .grow(1.)
+                                .shrink(),
+                        )
+                        .children(entry.group_create.clone().map(|(action, help)| {
+                            el().key(format!("group-create:{i}"))
+                                .role("button")
+                                .label(help.clone())
+                                .help(help)
+                                .size(22., 22.)
+                                .mr(-4.)
+                                .center()
+                                .radius(6.)
+                                .hover(white(0.08))
+                                .press(white(0.12))
+                                .cursor(rune::Cursor::Pointer)
+                                .preserve_focus_on_press(true)
+                                .tab_index(-1)
+                                .on_press_tx(move |s: &mut Workspace, tx: &mut Tx| {
+                                    s.perform(action.clone(), tx)
+                                })
+                                .child(glyph(&PLUS, 13., rgb(MUTED)))
+                        })),
                 );
                 y += HEADER - if first { 6. } else { 0. } + 2.;
             }

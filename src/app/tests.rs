@@ -241,6 +241,53 @@ fn only_a_switcher_query_names_the_new_session() {
 }
 
 #[test]
+fn every_connected_host_offers_a_new_session_in_the_switcher() {
+    let mut ws = workspace_hosts(2);
+    capture_host(&mut ws, 0);
+    let other = capture_host(&mut ws, 1);
+    ws.hosts[0].model.connected = true;
+    ws.hosts[1].model.connected = true;
+    let mut tx = rune::Tx::default();
+
+    ws.picker(true);
+    let rows: Vec<_> = ws.entries().into_iter().filter(|e| !e.footer).collect();
+    for host in 0..2 {
+        let row = rows
+            .iter()
+            .find(|e| matches!(e.action, Intent::CreateOn(h, None) if h == host))
+            .expect("an empty host has a New session row");
+        assert_eq!(row.label, "New session");
+        assert!(row.enabled);
+        assert!(
+            matches!(&row.group_create, Some((Intent::CreateOn(h, None), help))
+                if *h == host && help == &format!("New session on test-{host}")),
+            "the host header carries a create button"
+        );
+    }
+    let row = rows
+        .into_iter()
+        .find(|e| matches!(e.action, Intent::CreateOn(1, _)))
+        .unwrap();
+    ws.perform(row.action, &mut tx);
+    assert_eq!(creates(&other), [(None, None)]);
+
+    // A typed name carries into both the row and the header button.
+    ws.picker(true);
+    ws.panel.as_mut().unwrap().inputs[0] = rune::TextEdit::new("test-1");
+    let row = ws
+        .entries()
+        .into_iter()
+        .find(|e| matches!(e.action, Intent::CreateOn(1, _)) && !e.footer)
+        .unwrap();
+    assert_eq!(row.label, "New session \"test-1\"");
+    assert!(matches!(
+        &row.group_create,
+        Some((Intent::CreateOn(1, Some(name)), _)) if name == "test-1"
+    ));
+    std::fs::remove_file(&ws.settings_path).ok();
+}
+
+#[test]
 fn default_shell_form_trims_clears_and_rejects_arguments() {
     let mut ws = workspace_hosts(2);
     let mut tx = rune::Tx::default();
