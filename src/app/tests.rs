@@ -540,10 +540,10 @@ fn secondary_click(rt: &mut Runtime<Workspace>, key: &str) {
 }
 
 #[test]
-fn switcher_rows_and_the_session_chip_open_the_session_menu() {
+fn switcher_rows_rename_in_place_and_the_session_chip_opens_the_session_menu() {
     let mut ws = workspace_hosts(2);
     let _current = capture_host(&mut ws, 0);
-    let _other = capture_host(&mut ws, 1);
+    let other = capture_host(&mut ws, 1);
     ws.hosts[0].model.connected = true;
     ws.hosts[0].model.sessions = vec![session("cur")];
     ws.hosts[0].model.selected = Some("cur".into());
@@ -552,19 +552,62 @@ fn switcher_rows_and_the_session_chip_open_the_session_menu() {
     let mut rt = runtime(ws);
 
     click(&mut rt, "identity");
-    let row = rt
-        .elements()
-        .into_iter()
-        .find(|e| {
-            e.label.as_deref() == Some("b-label")
-                && e.key.as_deref().is_some_and(|k| k.starts_with("entry:"))
-        })
-        .and_then(|e| e.key)
-        .expect("b's switcher row");
+    let b_row = |rt: &Runtime<Workspace>| {
+        rt.elements()
+            .into_iter()
+            .find(|e| {
+                e.label.as_deref() == Some("b-label")
+                    && e.key.as_deref().is_some_and(|k| k.starts_with("entry:"))
+            })
+            .and_then(|e| e.key)
+            .expect("b's switcher row")
+    };
+    let row = b_row(&rt);
+    let index: usize = row["entry:".len()..].parse().unwrap();
+
+    // Right-click renames the row in place; Esc goes back to browsing, not out.
     secondary_click(&mut rt, &row);
-    let panel = rt.state.panel.as_ref().expect("session menu");
-    assert!(matches!(panel.kind, PanelKind::Session));
-    assert_eq!(panel.title, "test-1 · b-label");
+    let panel = rt.state.panel.as_ref().expect("switcher");
+    assert!(matches!(panel.kind, PanelKind::Picker(true)));
+    assert_eq!(panel.rename.as_ref().unwrap().1.text, "b-label");
+    assert!(
+        rt.elements()
+            .iter()
+            .any(|e| e.key.as_deref() == Some("session-rename"))
+    );
+    press(&mut rt, Key::Escape);
+    let panel = rt.state.panel.as_ref().expect("switcher stays open");
+    assert!(panel.rename.is_none());
+
+    // F2 on the highlighted row, then typing over the selected name and Enter saves it.
+    rt.state.panel.as_mut().unwrap().selected = index;
+    press(&mut rt, Key::Function(2));
+    assert!(rt.state.panel.as_ref().unwrap().rename.is_some());
+    for c in "renamed".chars() {
+        rt.key(KeyEvent {
+            key: Key::Text(c.to_string()),
+            mods: Mods::default(),
+        });
+    }
+    press(&mut rt, Key::Enter);
+    assert!(rt.state.panel.as_ref().unwrap().rename.is_none());
+    assert_eq!(
+        requests(&other)
+            .iter()
+            .map(|(m, id, p)| (m.as_str(), id.as_str(), &p["label"]))
+            .collect::<Vec<_>>(),
+        vec![("session.set_label", "b", &serde_json::json!("renamed"))]
+    );
+
+    // The highlighted row's × asks first, and cancelling comes back to the switcher.
+    rt.state.panel.as_mut().unwrap().selected = index;
+    rt.frame(1. / 60.);
+    click(&mut rt, &format!("close:{index}"));
+    let panel = rt.state.panel.as_ref().expect("close confirmation");
+    assert!(matches!(panel.kind, PanelKind::Confirm { .. }));
+    press(&mut rt, Key::Escape);
+    let panel = rt.state.panel.as_ref().expect("back to the switcher");
+    assert!(matches!(panel.kind, PanelKind::Picker(true)));
     press(&mut rt, Key::Escape);
 
     secondary_click(&mut rt, "identity");

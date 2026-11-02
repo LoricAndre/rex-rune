@@ -122,6 +122,8 @@ pub struct Row<'a> {
     pub followup: bool,
     pub enabled: bool,
     pub selected: bool,
+    /// Shown at the end in place of the detail, while the row is highlighted.
+    pub actions: Option<El>,
 }
 
 /// The sliding selection: a childless background that flies to the next selected row, with no
@@ -179,20 +181,47 @@ pub fn list_row(
             el()
         }));
     }
-    e.child(
+    e = e.child(
         text(r.label.to_owned())
             .font(if r.selected { medium(13.) } else { ui(13.) })
             .color(ink)
             .truncate()
             .grow(1.)
             .shrink(),
-    )
-    .child(text(r.detail.to_owned()).font(ui(11.)).color(detail))
-    .child(el().w(14.).child(if r.followup {
-        glyph(&RIGHT, 13., rgb(MUTED))
-    } else {
-        el()
-    }))
+    );
+    match r.actions.filter(|_| r.selected) {
+        Some(actions) => e.child(actions),
+        None => e
+            .child(text(r.detail.to_owned()).font(ui(11.)).color(detail))
+            .child(el().w(14.).child(if r.followup {
+                glyph(&RIGHT, 13., rgb(MUTED))
+            } else {
+                el()
+            })),
+    }
+}
+
+/// A small icon button inside a list row: pressing it never presses the row.
+pub fn row_action(
+    key: String,
+    icon: &'static Icon,
+    help: &str,
+    on_press: impl Fn(&mut Workspace, &mut Tx) + 'static,
+) -> El {
+    el().key(key)
+        .role("button")
+        .label(help.to_owned())
+        .help(help.to_owned())
+        .size(22., 22.)
+        .center()
+        .radius(6.)
+        .hover(white(0.1))
+        .press(white(0.14))
+        .cursor(Cursor::Pointer)
+        .preserve_focus_on_press(true)
+        .tab_index(-1)
+        .on_press_tx(on_press)
+        .child(glyph(icon, 13., rgb(INK).alpha(0.75)))
 }
 
 /// A list's scroll thumb and its direction-aware hint, both driven from the scroll offset

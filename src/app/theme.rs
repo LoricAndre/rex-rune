@@ -213,6 +213,11 @@ icon!(
     r#"path d="m13.5 6.5-7 7""#
 );
 icon!(
+    PENCIL,
+    "rex-pencil",
+    r#"path d="M12.5 5.5 14.5 7.5 8 14l-2.75.75L6 12z""#
+);
+icon!(
     SEARCH,
     "rex-search",
     r#"circle cx="9" cy="9" r="5""#,

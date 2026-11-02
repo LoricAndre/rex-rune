@@ -183,6 +183,8 @@ pub struct Panel {
     pub session: Option<SessionTarget>,
     pub back: Option<Box<Panel>>,
     pub anchor: Option<(f32, f32)>,
+    /// A switcher row being renamed in place, and its field.
+    pub rename: Option<(SessionTarget, TextEdit)>,
 }
 
 impl Panel {
@@ -209,6 +211,7 @@ impl Panel {
             session: None,
             back: None,
             anchor: None,
+            rename: None,
         }
     }
     pub fn is_list(&self) -> bool {

@@ -1,13 +1,13 @@
 //! List popups: the session switcher, the host step, Commands and the pane and tab menus. No scrim;
 //! an outside press dismisses and is consumed.
 use super::{
-    input::list_key,
+    input::{list_key, rename_key},
     panel::{Intent, PanelKind},
     theme::*,
-    widgets::{Row, glyph, list_row},
+    widgets::{Row, glyph, list_row, row_action},
     workspace::Workspace,
 };
-use rune::{El, ScrollSpec, Tx, col, el, row, text};
+use rune::{El, ScrollSpec, TextEdit, Tx, col, el, row, text};
 use rune_kit::TextInput;
 
 const HEADER: f32 = 26.;
@@ -180,27 +180,65 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
         }
         let action = entry.action.clone();
         let enabled = entry.enabled;
-        let mut r = list_row(
-            Row {
-                key: format!("entry:{i}"),
-                surface: surface_id,
-                label: &entry.label,
-                detail: &entry.detail,
-                height: if entry.footer { 28. } else { row_height },
-                check: (sessions || entry.current).then_some(entry.current),
-                followup: entry.followup,
-                enabled,
-                selected: i == panel.selected && enabled,
-            },
-            i,
-            move |s: &mut Workspace, tx: &mut Tx| s.perform(action.clone(), tx),
-        );
-        if let Intent::Select(host, session) = &entry.action {
-            let (host, session) = (*host, session.clone());
-            r = r.on_secondary_press(move |s: &mut Workspace, p, _| {
-                s.session_menu(host, session.clone(), (p.x, p.y))
+        // Switcher sessions are renamed in place and closed from the row itself.
+        let switcher_session = match (&panel.kind, &entry.action) {
+            (PanelKind::Picker(true), Intent::Select(host, session)) => {
+                Some((*host, session.clone()))
+            }
+            _ => None,
+        };
+        let renaming = switcher_session.as_ref().and_then(|(host, session)| {
+            panel
+                .rename
+                .as_ref()
+                .filter(|(t, _)| t.host == *host && &t.session == session)
+        });
+        let r = if let Some((_, edit)) = renaming {
+            rename_row(edit, row_height, entry.current, surface_id)
+        } else {
+            let actions = switcher_session.clone().map(|(host, session)| {
+                let close = session.clone();
+                row()
+                    .gap(2.)
+                    .mr(-4.)
+                    .child(row_action(
+                        format!("rename:{i}"),
+                        &PENCIL,
+                        "Rename",
+                        move |s: &mut Workspace, _: &mut Tx| s.start_rename(host, session.clone()),
+                    ))
+                    .child(row_action(
+                        format!("close:{i}"),
+                        &CLOSE,
+                        "Close session",
+                        move |s: &mut Workspace, tx: &mut Tx| {
+                            s.close_from_switcher(host, &close, tx)
+                        },
+                    ))
             });
-        }
+            let mut r = list_row(
+                Row {
+                    key: format!("entry:{i}"),
+                    surface: surface_id,
+                    label: &entry.label,
+                    detail: &entry.detail,
+                    height: if entry.footer { 28. } else { row_height },
+                    check: (sessions || entry.current).then_some(entry.current),
+                    followup: entry.followup,
+                    enabled,
+                    selected: i == panel.selected && enabled,
+                    actions,
+                },
+                i,
+                move |s: &mut Workspace, tx: &mut Tx| s.perform(action.clone(), tx),
+            );
+            if let Some((host, session)) = switcher_session {
+                r = r.on_secondary_press(move |s: &mut Workspace, _, _| {
+                    s.start_rename(host, session.clone())
+                });
+            }
+            r
+        };
         if entry.footer {
             footer = footer.child(r);
         } else {
@@ -386,4 +424,42 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
         layer = layer.child(outline);
     }
     layer.child(surface.absolute(x, y))
+}
+
+/// A switcher row renamed in place: its name becomes a field, Enter saves and Esc goes back to
+/// browsing.
+fn rename_row(edit: &TextEdit, height: f32, current: bool, surface: &str) -> El {
+    row()
+        .key(format!("{surface}-rename"))
+        .w_full()
+        .h(height)
+        .pl(9.)
+        .pr(4.)
+        .gap(8.)
+        .center_y()
+        .radius(7.)
+        .continuous_corners()
+        .fill(white(0.05))
+        .border(1., rgb(ACCENT).alpha(0.55))
+        .child(el().w(14.).center().child(if current {
+            glyph(&CHECK, 14., rgb(ACCENT))
+        } else {
+            el()
+        }))
+        .child(
+            TextInput::new(edit)
+                .text_style(medium(13.))
+                .height(height - 2.)
+                .plain()
+                .trailing(text("enter").font(medium(10.5)).color(rgb(MUTED)))
+                .on_edit(|s: &mut Workspace| s.rename_input())
+                .on_key(rename_key)
+                .width(None)
+                .build(kit())
+                .key("session-rename")
+                // The field's own inset, so the name stays where the row's label was.
+                .ml(-8.)
+                .grow(1.)
+                .shrink(),
+        )
 }

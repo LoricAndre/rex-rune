@@ -171,6 +171,9 @@ pub fn list_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if zoom_key(s, ev, tx) {
         return true;
     }
+    if s.panel.as_ref().is_some_and(|p| p.rename.is_some()) {
+        return rename_key(s, ev, tx);
+    }
     match ev.key {
         Key::Up | Key::Down => {
             s.navigate_panel(if ev.key == Key::Up { -1 } else { 1 });
@@ -178,6 +181,17 @@ pub fn list_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
         }
         Key::Enter => s.submit(tx),
         Key::Escape => s.cancel_panel(tx),
+        Key::Function(2) => {
+            let selected = s
+                .panel
+                .as_ref()
+                .filter(|p| matches!(p.kind, PanelKind::Picker(true)));
+            if let Some(Intent::Select(host, session)) =
+                selected.and_then(|p| s.entries().get(p.selected).map(|e| e.action.clone()))
+            {
+                s.start_rename(host, session);
+            }
+        }
         // Lists have one control; Tab must not walk focus out to the window behind them.
         Key::Tab => {}
         _ if ctrl(ev)
@@ -190,6 +204,17 @@ pub fn list_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
             s.close_panel(tx)
         }
         _ => return false,
+    }
+    true
+}
+
+/// Keys the switcher row being renamed takes: Enter saves, Esc goes back to browsing.
+pub fn rename_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    match ev.key {
+        Key::Enter => s.finish_rename(true),
+        Key::Escape => s.finish_rename(false),
+        Key::Tab | Key::Up | Key::Down => {}
+        _ => return zoom_key(s, ev, tx),
     }
     true
 }

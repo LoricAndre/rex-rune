@@ -1016,6 +1016,15 @@ impl Workspace {
             &[],
         );
         panel.target = target;
+        // Asked from the switcher: cancelling goes back to it.
+        panel.back = self
+            .panel
+            .take()
+            .filter(|p| matches!(p.kind, PanelKind::Picker(true)))
+            .map(|mut p| {
+                p.rename = None;
+                Box::new(p)
+            });
         self.panel = Some(panel);
     }
 
@@ -1327,6 +1336,77 @@ impl Workspace {
 
     /// A field's model. Rune may write back to a field that its own key just removed (Escape
     /// closing the popup), so a closed panel's writes land in a scratch edit.
+    /// Turn a switcher row into a field holding its session's name, selected.
+    pub fn start_rename(&mut self, host: usize, session: String) {
+        let Some(label) = self.hosts[host]
+            .model
+            .sessions
+            .iter()
+            .find(|s| s.session_id == session)
+            .map(|s| s.label.clone())
+        else {
+            return;
+        };
+        let Some(panel) = &mut self.panel else { return };
+        let mut edit = TextEdit::new(&label);
+        edit.anchor = 0;
+        edit.focus = label.len();
+        edit.focused = true;
+        if let Some(search) = panel.inputs.first_mut() {
+            search.focused = false;
+        }
+        panel.rename = Some((
+            SessionTarget {
+                host,
+                session,
+                label,
+            },
+            edit,
+        ));
+    }
+
+    /// Leave the row being renamed, saving its new name when `save`; the search field gets
+    /// the keyboard back.
+    pub fn finish_rename(&mut self, save: bool) {
+        let Some(panel) = &mut self.panel else { return };
+        let Some((target, edit)) = panel.rename.take() else {
+            return;
+        };
+        if let Some(search) = panel.inputs.first_mut() {
+            search.focused = true;
+        }
+        let label = edit.text.trim();
+        if save && !label.is_empty() && label != target.label {
+            self.session_request(&target, "session.set_label", json!({"label": label}));
+        }
+    }
+
+    /// Ask to close a switcher row's session; cancelling returns to the switcher.
+    pub fn close_from_switcher(&mut self, host: usize, session: &str, tx: &mut Tx) {
+        let Some(label) = self.hosts[host]
+            .model
+            .sessions
+            .iter()
+            .find(|s| s.session_id == session)
+            .map(|s| s.label.clone())
+        else {
+            return;
+        };
+        let target = SessionTarget {
+            host,
+            session: session.to_owned(),
+            label,
+        };
+        self.perform(Intent::Session(target, SessionAction::Close), tx);
+    }
+
+    pub fn rename_input(&mut self) -> &mut TextEdit {
+        match self.panel.as_mut().and_then(|p| p.rename.as_mut()) {
+            Some((_, edit)) => edit,
+            None => &mut self.scratch,
+        }
+    }
+
     pub fn edit_input(&mut self, index: usize) -> &mut TextEdit {
         match self.panel.as_mut().and_then(|p| p.inputs.get_mut(index)) {
             Some(edit) => edit,
