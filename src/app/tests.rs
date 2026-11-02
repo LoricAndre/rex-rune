@@ -765,8 +765,8 @@ fn session_menu_on_an_edge_row_and_an_offline_host() {
     std::fs::remove_file(&rt.state.settings_path).ok();
 }
 
-/// Shift+right-click over a mouse-tracking program opens the pane menu, so the grid's
-/// secondary handler must see Shift.
+/// Shift+right-click goes to a mouse-tracking program instead of opening the pane menu, so
+/// the grid's secondary handler must see Shift.
 #[test]
 fn a_secondary_press_handler_sees_held_shift() {
     struct S {

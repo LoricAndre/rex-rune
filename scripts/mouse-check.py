@@ -196,8 +196,14 @@ def main():
         assert any(r[0] == 32 for r in new), f"no motion with the button held: {new}"
         assert new[-1][3] == "m" and new[-1][1] > x0, new
 
-        new = step("right click", lambda: click(px, py, 273))
-        assert [(r[0], r[3]) for r in new] == [(2, "M"), (2, "m")], new
+        new = step("right click opens the pane menu", lambda: click(px, py, 273))
+        assert new == [], f"a plain right-click must not report: {new}"
+        time.sleep(.4)
+        shot("01-right-click-tracking")
+        key("Escape")
+        time.sleep(.3)
+        new = step("shift right click", lambda: click(px, py, 273, held=(42,)))
+        assert [(r[0] & ~4, r[3]) for r in new] == [(2, "M"), (2, "m")], new
         new = step("middle click", lambda: click(px, py, 274))
         assert [(r[0], r[3]) for r in new] == [(1, "M"), (1, "m")], new
         new = step("ctrl click", lambda: click(px, py, held=(29,)))

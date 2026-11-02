@@ -326,15 +326,16 @@ fn card(
                         t.send_mouse("motion", None, at, tx.mods());
                     }
                 })
-                // Right-click goes to a program that tracks the mouse (sent on release, when Rune
-                // reports it); otherwise, and with Shift, it opens the pane menu.
+                // Right-click opens the pane menu, even over a program that tracks the mouse;
+                // Shift+right-click goes to such a program (sent on release, when Rune reports
+                // it).
                 .on_secondary_press_local(move |s: &mut Workspace, p: PointerEvent, tx: &mut Tx| {
                     let cell = term::metrics(s.settings.font_size, s.terminal_family).cell;
                     let mods = tx.mods();
                     let focused = s.focused_block().as_deref() == Some(k5.1.as_str());
                     if let Some(t) = s.terminals.get_mut(&k5)
                         && t.tracking()
-                        && !mods.shift
+                        && mods.shift
                         && t.status().live
                     {
                         if !focused {
