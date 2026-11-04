@@ -43,6 +43,8 @@ It is written in Rust on [Rune](https://github.com/anomalyco/rune) (wgpu/winit, 
 cargo build --locked --release --bin rex-linux
 ```
 
+Optionally, [mise](https://mise.jdx.dev/) can provide the toolchain: [`mise.toml`](mise.toml) pins Rust 1.96.1 (with Clippy and rustfmt) and Zig 0.17.1, and `mise run build` runs the command above. Run `mise trust` and `mise install` once first. Mise does not provide the native Linux libraries listed in [Requirements](#requirements).
+
 `Cargo.lock` pins the dependency graph. TLS uses Rustls with the system trust roots. The workspace also builds two protocol probes (`rex-probe`, `rex-workspace-probe`) that do not need the UI; use `--no-default-features` to build only those.
 
 ## Run
@@ -78,10 +80,13 @@ Without `--session`, the workspace restores the saved host and session; on a new
 ### Desktop install
 
 ```sh
-bash scripts/install-desktop.sh [path/to/rex-linux]
+bash scripts/install-desktop.sh [--copy] [path/to/rex-linux]
+bash scripts/install-desktop.sh --uninstall
 ```
 
-This installs `dev.shuv.rex-linux.desktop` under `$XDG_DATA_HOME/applications` (normally `~/.local/share/applications`) pointing at the release binary of this checkout (or the binary you pass), and the app icon at 32, 128 and 256 px into the user's `hicolor` theme. Re-run it if you move the checkout. It needs `desktop-file-install`, `desktop-file-validate` and `update-desktop-database`. See [icon provenance](resources/icons/README.md).
+This installs `dev.shuv.rex-linux.desktop` under `$XDG_DATA_HOME/applications` (normally `~/.local/share/applications`) pointing at the release binary of this checkout (or the binary you pass), and the app icon at 32, 128 and 256 px into the user's `hicolor` theme. Without `--copy`, re-run it if you move the checkout. With `--copy`, the binary is copied to `$XDG_BIN_HOME` (normally `~/.local/bin`) and the launcher points there, so it no longer depends on the checkout. `--uninstall` removes the launcher, the icons and the copied binary. It needs `desktop-file-install`, `desktop-file-validate` and `update-desktop-database`; no root access. See [icon provenance](resources/icons/README.md).
+
+With mise, `mise run install` builds the release binary and runs the script with `--copy`, and `mise run uninstall` runs it with `--uninstall`.
 
 ## Configuration
 
@@ -130,6 +135,8 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo run --locked --no-default-features --bin rex-probe
 cargo run --locked --no-default-features --bin rex-workspace-probe
 ```
+
+With mise, `mise run test`, `fmt`, `clippy` and `test-rexrs` run the first three commands and the vendored SDK tests; `mise run check` runs them all.
 
 The `scripts/` directory holds integration checks; each script's docstring lists its requirements (Xvfb, xdotool, a `rex` binary, `wayland-info`, …). Some use the configured Rex server rather than starting their own: point them at a disposable server you control. Wayland checks use the running compositor; X11 checks use an isolated display.
 
