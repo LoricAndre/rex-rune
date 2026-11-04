@@ -2,7 +2,8 @@
 """Real X11 event/clipboard regression, isolated from the user's desktop.
 
 Requires Xvfb, xdotool, rex and a built native binary. Creates/destroys only its
-own local Rex session. This does not validate Wayland or a physical IME.
+own local Rex session. This validates XKB dead-key composition, not Wayland or a
+full input method editor.
 """
 import json
 import os
@@ -75,6 +76,11 @@ def run():
 
             text("echo X11_NATIVE_INPUT_OK")
             key("Return")
+            text("echo X11_DEAD_KEY_")
+            key("dead_tilde")
+            key("space")
+            text("_OK")
+            key("Return")
             # Use a native field as a real X11 clipboard source, then paste into
             # the terminal. The rename is cancelled, so the session stays named.
             command("Rename session")
@@ -89,6 +95,7 @@ def run():
             before_clear = api("com.superlogical.terminal.format", session_id=sid,
                                block_id=block, args={"format": "text", "trim": True, "unwrap": True})["content"]
             assert "X11_NATIVE_INPUT_OK" in before_clear.splitlines(), before_clear
+            assert "X11_DEAD_KEY_~_OK" in before_clear.splitlines(), before_clear
             assert "X11_CLIPBOARD_OK" in before_clear.splitlines(), before_clear
             key("ctrl+comma")  # Settings, focused on its section list
             original_size = json.loads(config.read_text())["font_size"]

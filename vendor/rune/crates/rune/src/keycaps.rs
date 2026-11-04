@@ -125,6 +125,7 @@ fn key_label(ev: &KeyEvent) -> (String, bool) {
         Key::Text(s) if !chord => return (s.clone(), true),
         Key::Text(s) if s == " " => "␣".to_owned(),
         Key::Text(s) => title(s),
+        Key::Dead(accent) => accent.map_or_else(|| "Dead".into(), |c| c.to_string()),
         Key::Command(c) => {
             let mods = Mods { cmd: true, ..m };
             let label = if *c == ' ' { "␣".to_owned() } else { title(&c.to_string()) };

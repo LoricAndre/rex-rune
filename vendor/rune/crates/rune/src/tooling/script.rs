@@ -147,7 +147,14 @@ pub(crate) fn parse_script(list: Value) -> Vec<Ev> {
             "key" | "key-up" => {
                 let name = e["name"].as_str().unwrap_or("");
                 let mods = script_mods(&e);
-                let key = if mods.cmd && name.len() == 1 {
+                let key = if let Some(dead) = e["dead"].as_str() {
+                    let mut chars = dead.chars();
+                    let accent = chars.next();
+                    if chars.next().is_some() {
+                        die("dead must be one character or empty");
+                    }
+                    Key::Dead(accent)
+                } else if mods.cmd && name.len() == 1 {
                     Key::Command(name.chars().next().unwrap().to_ascii_lowercase())
                 } else {
                     key_named(name).unwrap_or_else(|| die(&format!("unknown key {name}")))

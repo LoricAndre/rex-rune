@@ -60,6 +60,7 @@ pub(crate) fn map_key(key: &WKey, m: ModifiersState) -> Option<KeyEvent> {
                 Key::Text(c.to_string())
             }
         }
+        WKey::Dead(accent) => Key::Dead(*accent),
         _ => return None,
     };
     Some(KeyEvent { key, mods })
@@ -79,4 +80,15 @@ pub(crate) fn key_base(event: &winit::event::KeyEvent) -> Option<char> {
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     { let _ = event; None }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dead_keys_reach_logical_key_handlers() {
+        let event = map_key(&WKey::Dead(Some('~')), ModifiersState::empty()).unwrap();
+        assert_eq!(event.key, Key::Dead(Some('~')));
+    }
 }

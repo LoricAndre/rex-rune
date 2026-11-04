@@ -86,6 +86,7 @@ fn a_script_key_with_a_code_reaches_handlers_with_its_physical_key() {
     let script = parse_script(json!([
         {"type": "key", "name": "&", "cmd": true, "shift": true, "code": "7"},
         {"t": 0.1, "type": "key", "name": "&", "cmd": true, "shift": true},
+        {"t": 0.2, "type": "key", "dead": "~", "code": "backquote"},
     ]));
     type Seen = Vec<(Key, Option<crate::PhysicalKeyCode>)>;
     let mut rt = Runtime::new(Seen::new(), |_: &Seen, _: &mut crate::Cx<Seen>| crate::el(), (100.0, 100.0), Env::default());
@@ -98,7 +99,11 @@ fn a_script_key_with_a_code_reaches_handlers_with_its_physical_key() {
         }
         rt.frame(0.0);
     }
-    assert_eq!(rt.state, [(Key::Command('&'), Some(crate::PhysicalKeyCode::Digit7)), (Key::Command('&'), None)]);
+    assert_eq!(rt.state, [
+        (Key::Command('&'), Some(crate::PhysicalKeyCode::Digit7)),
+        (Key::Command('&'), None),
+        (Key::Dead(Some('~')), Some(crate::PhysicalKeyCode::Backquote)),
+    ]);
 }
 
 #[test]

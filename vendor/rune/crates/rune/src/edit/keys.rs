@@ -17,6 +17,8 @@ pub struct Mods {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Key {
     Text(String),
+    /// A dead key whose accent, when known, is waiting for the next key to complete it.
+    Dead(Option<char>),
     Enter,
     Backspace,
     Delete,

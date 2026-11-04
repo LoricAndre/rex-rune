@@ -149,7 +149,7 @@ pub fn payload(
         "consumed_mods": if ev.mods.shift && !text.is_empty() { "shift" } else { "" },
         "text": text,
         "unshifted_codepoint": unshifted,
-        "composing": false,
+        "composing": matches!(ev.key, Key::Dead(_)),
         "action": action,
     }))
 }
@@ -223,6 +223,37 @@ mod tests {
         assert_eq!(
             (p["key"].as_str(), p["text"].as_str()),
             (Some("enter"), Some(""))
+        );
+    }
+
+    #[test]
+    fn dead_key_waits_for_the_composed_text() {
+        let dead = KeyEvent {
+            key: Key::Dead(Some('~')),
+            mods: Mods::default(),
+        };
+        let first = payload(&dead, Some(C::Backquote), None, Action::Press).unwrap();
+        assert_eq!(
+            (
+                first["key"].as_str(),
+                first["text"].as_str(),
+                first["composing"].as_bool()
+            ),
+            (Some("backquote"), Some(""), Some(true))
+        );
+
+        let completed = KeyEvent {
+            key: Key::Text("~".into()),
+            mods: Mods::default(),
+        };
+        let last = payload(&completed, Some(C::Space), Some(' '), Action::Press).unwrap();
+        assert_eq!(
+            (
+                last["key"].as_str(),
+                last["text"].as_str(),
+                last["composing"].as_bool()
+            ),
+            (Some("space"), Some("~"), Some(false))
         );
     }
 }
