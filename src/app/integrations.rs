@@ -189,19 +189,41 @@ pub struct Integrations {
     pub ran: Vec<Vec<String>>,
 }
 
-/// Run `rex` with `args` and return its standard output, or words for the user.
-fn run_rex(args: &[String]) -> Result<String, String> {
-    let output = std::process::Command::new("rex")
+fn local_rex() -> Option<std::path::PathBuf> {
+    let directory = std::env::var_os("XDG_BIN_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .map(|home| home.join(".local/bin"))
+        })?;
+    let path = directory.join("rex");
+    path.is_file().then_some(path)
+}
+
+fn rex_output(program: &std::ffi::OsStr, args: &[String]) -> std::io::Result<std::process::Output> {
+    std::process::Command::new(program)
         .args(args)
         .stdin(std::process::Stdio::null())
         .output()
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                "The rex command isn't installed on this machine (or isn't on PATH), so agents can't be set up from here.".to_owned()
-            } else {
-                format!("Couldn't run rex: {error}")
-            }
-        })?;
+}
+
+/// Run `rex` with `args` and return its standard output, or words for the user.
+fn run_rex(args: &[String]) -> Result<String, String> {
+    let output = match rex_output(std::ffi::OsStr::new("rex"), args) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => match local_rex() {
+            Some(path) => rex_output(path.as_os_str(), args),
+            None => Err(error),
+        },
+        result => result,
+    }
+    .map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            "The rex command isn't installed on this machine (or isn't on PATH or in the user bin directory), so agents can't be set up from here.".to_owned()
+        } else {
+            format!("Couldn't run rex: {error}")
+        }
+    })?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {

@@ -28,7 +28,7 @@ It is written in Rust on [Rune](https://github.com/anomalyco/rune) (wgpu/winit, 
 - Borderless window with its own close button, edge resizing and drag region. There are no minimize or maximize buttons; double-clicking the drag region maximizes, and the window manager handles the rest.
 - Keys are sent by physical position (Ghostty key names), so non-US layouts work.
 
-**Attachment only.** Rex Linux never starts, stops, replaces or reconfigures a Rex server and attaching does not need a `rex` executable on `PATH`. The only place the app runs `rex` is Settings → Integrations, on this machine and always with `--autostart=false`. An unavailable server is shown as disconnected and retried. Closing the client leaves server programs running.
+**Attachment only.** Rex Linux never starts, stops, replaces or reconfigures a Rex server and attaching does not need a `rex` executable. The only place the app runs `rex` is Settings → Integrations, on this machine and always with `--autostart=false`; it searches `PATH`, then `$XDG_BIN_HOME` or `~/.local/bin` for desktop launches that do not inherit the shell's path. An unavailable server is shown as disconnected and retried. Closing the client leaves server programs running.
 
 ## Requirements
 
