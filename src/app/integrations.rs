@@ -13,12 +13,16 @@ use rune::{El, Tx, col, row, text};
 use rune_kit::Switch;
 use serde::Deserialize;
 
-/// The agents `rex skill` knows, in the order Settings lists them.
-pub const AGENTS: [(&str, &str); 4] = [
+/// The agents Settings knows, in the order it lists them.
+///
+/// OMP reads the same Agent Skills directory as Pi. Rex does not yet accept an `omp`
+/// harness name, so changes for OMP use Rex's Pi target to manage that shared file.
+pub const AGENTS: [(&str, &str); 5] = [
     ("claude", "Claude Code"),
     ("codex", "Codex"),
     ("opencode", "OpenCode"),
     ("pi", "Pi"),
+    ("omp", "OMP"),
 ];
 
 fn agent_name(id: &str) -> &str {
@@ -146,8 +150,18 @@ impl AgentChange {
                 agents
             }
         };
-        for agent in agents {
-            args.push(format!("--agent={agent}"));
+        let mut selected = Vec::new();
+        for requested in agents {
+            // Rex has no `omp` agent; remove this mapping when it does.
+            let agent = if requested == "omp" {
+                "pi"
+            } else {
+                requested.as_str()
+            };
+            if !selected.contains(&agent) {
+                selected.push(agent);
+                args.push(format!("--agent={agent}"));
+            }
         }
         if let AgentChange::Setup { force, .. } = self {
             args.push(format!("--session-naming={naming}"));
@@ -180,13 +194,88 @@ pub fn status_args() -> Vec<String> {
         .to_vec()
 }
 
-#[derive(Default)]
+/// The environment OMP is detected from.
+#[derive(Clone, Debug, Default)]
+pub struct OmpEnv {
+    pub home: Option<std::path::PathBuf>,
+    pub path: Option<std::ffi::OsString>,
+    pub pi_coding_agent_dir: Option<std::path::PathBuf>,
+}
+
+impl OmpEnv {
+    pub fn current() -> Self {
+        OmpEnv {
+            home: std::env::var_os("HOME").map(Into::into),
+            path: std::env::var_os("PATH"),
+            pi_coding_agent_dir: std::env::var_os("PI_CODING_AGENT_DIR").map(Into::into),
+        }
+    }
+
+    /// OMP's agent directory exists (`$PI_CODING_AGENT_DIR` or `~/.omp/agent`), or `omp` is
+    /// on `PATH`.
+    pub fn detected(&self) -> bool {
+        let configured = self
+            .pi_coding_agent_dir
+            .as_ref()
+            .is_some_and(|dir| dir.is_dir());
+        let default = self
+            .home
+            .as_ref()
+            .is_some_and(|home| home.join(".omp/agent").is_dir());
+        let on_path = self.path.as_ref().is_some_and(|path| {
+            std::env::split_paths(path).any(|directory| directory.join("omp").is_file())
+        });
+        configured || default || on_path
+    }
+}
+
+/// OMP discovers the Agent Skills path that Rex already manages for Pi. Mirror that
+/// file's state so OMP gets a first-class row without duplicating Rex's ownership logic.
+fn add_omp_harness(harnesses: &mut Vec<Harness>, omp: &OmpEnv) {
+    if harnesses.iter().any(|harness| harness.id == "omp") {
+        return;
+    }
+    let items = harnesses
+        .iter()
+        .find(|harness| harness.id == "pi")
+        .and_then(|harness| {
+            harness
+                .items
+                .iter()
+                .find(|item| item.kind == "skill")
+                .cloned()
+        })
+        .into_iter()
+        .collect();
+    harnesses.push(Harness {
+        id: "omp".into(),
+        detected: omp.detected(),
+        items,
+    });
+}
+
 pub struct Integrations {
     pub status: AgentStatus,
     /// A preview or change is running; actions wait for it.
     pub busy: bool,
     /// `rex` invocations headless tests would have made.
     pub ran: Vec<Vec<String>>,
+    pub omp: OmpEnv,
+}
+
+impl Default for Integrations {
+    fn default() -> Self {
+        Integrations {
+            status: AgentStatus::default(),
+            busy: false,
+            ran: Vec::new(),
+            omp: if cfg!(test) {
+                OmpEnv::default()
+            } else {
+                OmpEnv::current()
+            },
+        }
+    }
 }
 
 fn local_rex() -> Option<std::path::PathBuf> {
@@ -276,7 +365,10 @@ impl Workspace {
             serde_json::from_str::<StatusReply>(&out)
                 .map_err(|e| format!("Couldn't read rex skill status: {e}"))
         }) {
-            Ok(reply) => AgentStatus::Ready(reply.harnesses),
+            Ok(mut reply) => {
+                add_omp_harness(&mut reply.harnesses, &self.integrations.omp);
+                AgentStatus::Ready(reply.harnesses)
+            }
             Err(words) => AgentStatus::Unavailable(words),
         };
     }
@@ -423,6 +515,16 @@ fn agent_row(s: &Workspace, harness: &Harness) -> El {
             .wrap(),
         );
     }
+    if id == "omp" {
+        detail = detail.child(
+            text(
+                "Shares Pi's skill directory: installing or removing it here does the same for Pi.",
+            )
+            .font(ui(11.5))
+            .color(rgb(MUTED))
+            .wrap(),
+        );
+    }
     let mut actions = row().gap(8.).center_y();
     let busy = s.integrations.busy;
     let setup = |label: &str, force: bool| {
@@ -520,20 +622,22 @@ pub fn section(s: &Workspace) -> El {
                 }
                 body = body.child(agent_row(s, harness));
             }
-            let pending = harnesses
+            let pending: Vec<String> = harnesses
                 .iter()
-                .any(|h| h.detected && h.installed() != Installed::Yes);
+                .filter(|h| h.detected && h.installed() != Installed::Yes)
+                .map(|h| h.id.clone())
+                .collect();
             let mut all = row().gap(8.).mt(10.).child(refresh);
-            if pending {
+            if !pending.is_empty() {
                 all = all.child(wait(
                     pill(
                         "agents-setup-all",
                         "Set up all detected…",
                         Pill::Primary,
                         28.,
-                        |s, _| {
+                        move |s, _| {
                             s.preview_agents(AgentChange::Setup {
-                                agents: Vec::new(),
+                                agents: pending.clone(),
                                 force: false,
                             })
                         },
@@ -609,8 +713,19 @@ pub fn confirm(s: &Workspace, title: &str, change: &AgentChange, steps: &[Step])
         .iter()
         .any(|st| st.kind == "skill" && !s.sharing_any(st).is_empty())
     {
-        note.push_str("A shared skill changes for every agent that uses it.");
+        note.push_str("A shared skill changes for every agent that uses it. ");
     }
+    if shown.iter().any(|st| {
+        st.kind == "skill"
+            && st.harnesses.iter().any(|h| h == "pi")
+            && s.sharing("pi").contains(&"OMP")
+    }) {
+        note.push_str(match change {
+            AgentChange::Remove { .. } => "OMP and Pi share one skill, so both lose it.",
+            AgentChange::Setup { .. } => "OMP and Pi share one skill, so both get it.",
+        });
+    }
+    let note = note.trim_end();
     let action = match change {
         AgentChange::Setup { force: true, .. } => "Replace",
         AgentChange::Setup { .. } => "Set up",

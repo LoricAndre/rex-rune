@@ -1478,10 +1478,96 @@ fn agent_commands_never_autostart_and_always_name_the_naming_choice() {
             "--json"
         ])
     );
+    let omp = AgentChange::Setup {
+        agents: vec!["omp".into(), "pi".into()],
+        force: false,
+    };
+    assert_eq!(
+        omp.args(false, true),
+        strings(&[
+            "--autostart=false",
+            "skill",
+            "setup",
+            "--agent=pi",
+            "--session-naming=false",
+            "--dry-run",
+            "--json"
+        ])
+    );
+    let omp_alone = AgentChange::Remove {
+        agents: vec!["omp".into()],
+    };
+    assert_eq!(
+        omp_alone.args(true, false),
+        strings(&[
+            "--autostart=false",
+            "skill",
+            "remove",
+            "--agent=pi",
+            "--json"
+        ])
+    );
 }
 
-fn integrations_open(status: Result<String, String>) -> Runtime<Workspace> {
+/// A home directory with OMP's agent directory in it.
+fn omp_home(name: &str) -> std::path::PathBuf {
+    let home = std::env::temp_dir().join(format!("rex-linux-omp-{}-{name}", std::process::id()));
+    std::fs::create_dir_all(home.join(".omp/agent")).unwrap();
+    home
+}
+
+fn omp_at(home: &std::path::Path) -> super::integrations::OmpEnv {
+    super::integrations::OmpEnv {
+        home: Some(home.to_owned()),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn omp_is_detected_from_its_agent_directory_or_path() {
+    use super::integrations::OmpEnv;
+    let home = omp_home("detect");
+    let bin = home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let empty = home.join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let path = |dirs: &[&std::path::Path]| Some(std::env::join_paths(dirs).unwrap());
+
+    assert!(!OmpEnv::default().detected());
+    assert!(omp_at(&home).detected());
+    assert!(
+        !OmpEnv {
+            home: Some(empty.clone()),
+            path: path(&[&empty, &bin]),
+            pi_coding_agent_dir: Some(home.join("missing")),
+        }
+        .detected()
+    );
+    assert!(
+        OmpEnv {
+            pi_coding_agent_dir: Some(home.join(".omp")),
+            ..Default::default()
+        }
+        .detected()
+    );
+    std::fs::write(bin.join("omp"), "").unwrap();
+    assert!(
+        OmpEnv {
+            home: Some(empty.clone()),
+            path: path(&[&empty, &bin]),
+            ..Default::default()
+        }
+        .detected()
+    );
+    std::fs::remove_dir_all(&home).ok();
+}
+
+fn integrations_open(
+    status: Result<String, String>,
+    omp: super::integrations::OmpEnv,
+) -> Runtime<Workspace> {
     let mut ws = workspace();
+    ws.integrations.omp = omp;
     ws.perform(Intent::Settings, &mut rune::Tx::default());
     ws.open_section(super::panel::SettingsSection::Integrations);
     assert_eq!(
@@ -1517,10 +1603,17 @@ fn element_text(rt: &Runtime<Workspace>, key: &str) -> Vec<String> {
 #[test]
 fn integrations_list_agents_and_preview_changes_before_making_them() {
     use super::integrations::AgentChange;
-    let mut rt = integrations_open(Ok(SKILL_STATUS.into()));
+    let home = omp_home("list");
+    let mut rt = integrations_open(Ok(SKILL_STATUS.into()), omp_at(&home));
     let codex = element_text(&rt, "agent:codex").join(" | ");
     assert!(codex.contains("Not installed"), "{codex}");
-    assert!(codex.contains("with OpenCode and Pi"), "{codex}");
+    assert!(codex.contains("with OpenCode and Pi and OMP"), "{codex}");
+    let omp = element_text(&rt, "agent:omp").join(" | ");
+    assert!(omp.contains("OMP"), "{omp}");
+    assert!(omp.contains("Not installed"), "{omp}");
+    assert!(omp.contains("with Codex and OpenCode and Pi"), "{omp}");
+    assert!(omp.contains("Shares Pi's skill directory"), "{omp}");
+    assert!(omp.contains("Install…"), "{omp}");
     assert!(
         element_text(&rt, "agent:claude")
             .join(" ")
@@ -1549,7 +1642,7 @@ fn integrations_list_agents_and_preview_changes_before_making_them() {
         .join("\n");
     // The shared skill names every agent it affects, not only the one asked for.
     assert!(
-        lines.contains("Create skill /home/user/.agents/skills/rex · Codex, OpenCode, Pi"),
+        lines.contains("Create skill /home/user/.agents/skills/rex · Codex, OpenCode, Pi, OMP"),
         "{lines}"
     );
     assert!(
@@ -1565,13 +1658,110 @@ fn integrations_list_agents_and_preview_changes_before_making_them() {
         Some(PanelKind::Settings)
     ));
     std::fs::remove_file(&rt.state.settings_path).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+#[test]
+fn omp_mirrors_pis_skill_and_is_only_offered_when_found() {
+    use super::integrations::{AgentStatus, Item};
+    let pi_skill = |state: &str| {
+        let mut status: serde_json::Value = serde_json::from_str(SKILL_STATUS).unwrap();
+        for harness in status["harnesses"].as_array_mut().unwrap() {
+            if harness["id"] == "pi" {
+                harness["items"][0]["state"] = state.into();
+            }
+        }
+        status.to_string()
+    };
+    let home = omp_home("mirror");
+    for (state, words) in [
+        ("current", "Installed"),
+        ("missing", "Not installed"),
+        ("unsupported", "Not installed"),
+    ] {
+        let rt = integrations_open(Ok(pi_skill(state)), omp_at(&home));
+        let AgentStatus::Ready(harnesses) = &rt.state.integrations.status else {
+            panic!("status not read");
+        };
+        let omp = harnesses.iter().find(|h| h.id == "omp").unwrap();
+        assert!(omp.detected);
+        assert_eq!(
+            omp.items,
+            vec![Item {
+                kind: "skill".into(),
+                path: Some("/home/user/.agents/skills/rex".into()),
+                state: state.into(),
+            }]
+        );
+        let row = element_text(&rt, "agent:omp").join(" | ");
+        assert!(row.contains(words), "{state}: {row}");
+        assert!(
+            element_text(&rt, "agent:pi").join(" | ").contains(words),
+            "{state}"
+        );
+        std::fs::remove_file(&rt.state.settings_path).ok();
+    }
+    std::fs::remove_dir_all(&home).ok();
+
+    let rt = integrations_open(Ok(SKILL_STATUS.into()), Default::default());
+    let row = element_text(&rt, "agent:omp").join(" | ");
+    assert!(row.contains("Not found on this machine"), "{row}");
+    assert!(!row.contains("Install…"), "{row}");
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn removing_omp_previews_that_pi_loses_the_skill_too() {
+    use super::integrations::AgentChange;
+    let home = omp_home("remove");
+    let installed = SKILL_STATUS.replace("\"missing\"", "\"current\"");
+    let mut rt = integrations_open(Ok(installed), omp_at(&home));
+    click(&mut rt, "agent-remove:omp");
+    let change = AgentChange::Remove {
+        agents: vec!["omp".into()],
+    };
+    let preview = rt.state.integrations.ran.last().unwrap().clone();
+    assert_eq!(preview, change.args(false, true));
+    rt.state.show_agent_preview(
+        change.clone(),
+        Ok(
+            r#"{"steps": [{"harnesses": ["codex", "opencode", "pi"], "kind": "skill",
+            "path": "/home/user/.agents/skills/rex", "change": "removed"}]}"#
+                .into(),
+        ),
+    );
+    let ws = rt.state;
+    assert_eq!(ws.panel.as_ref().unwrap().title, "Remove Rex from OMP?");
+    let mut rt = runtime_at(ws, (1280., 900.));
+    let lines = rt
+        .elements()
+        .into_iter()
+        .filter_map(|e| e.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        lines.contains("Remove skill /home/user/.agents/skills/rex · Codex, OpenCode, Pi, OMP"),
+        "{lines}"
+    );
+    assert!(
+        lines.contains("OMP and Pi share one skill, so both lose it."),
+        "{lines}"
+    );
+    click(&mut rt, "agents-apply");
+    assert_eq!(
+        rt.state.integrations.ran.last().unwrap(),
+        &change.args(false, false)
+    );
+    std::fs::remove_file(&rt.state.settings_path).ok();
+    std::fs::remove_dir_all(&home).ok();
 }
 
 #[test]
 fn a_missing_rex_explains_itself_and_naming_reapplies_to_installed_agents() {
-    let rt = integrations_open(Err(
-        "The rex command isn't installed on this machine.".into()
-    ));
+    let rt = integrations_open(
+        Err("The rex command isn't installed on this machine.".into()),
+        Default::default(),
+    );
     let texts = rt
         .elements()
         .into_iter()
