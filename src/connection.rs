@@ -1410,6 +1410,8 @@ async fn run_data(
                         Ok(DataCommand::Stop) | Err(_) => return Ok(true),
                     },
                     _ = tick.tick(), if visible && (dirty || stream.terminal.as_ref().is_some_and(|t| selection.autoscrolling(t))) => {
+                        // Mid synchronized update: keep showing the last frame, check again next tick.
+                        if stream.render_held(Instant::now())? { continue; }
                         if let Some(terminal) = &mut stream.terminal {
                             selection.tick(terminal)?;
                             let mut frame = renderer.frame(terminal)?;
