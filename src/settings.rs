@@ -61,6 +61,8 @@ pub struct Settings {
     pub last_host: Option<String>,
     pub sessions: HashMap<String, String>,
     pub sidebar_width: f32,
+    /// The sidebar was open when the app last saved, so it opens again at launch.
+    pub sidebar_open: bool,
     pub font_size: f32,
     pub ui_scale: f32,
     pub notice_position: NoticePosition,
@@ -83,6 +85,7 @@ impl Default for Settings {
             last_host: None,
             sessions: HashMap::new(),
             sidebar_width: 236.,
+            sidebar_open: false,
             font_size: 15.,
             ui_scale: 1.,
             notice_position: NoticePosition::default(),

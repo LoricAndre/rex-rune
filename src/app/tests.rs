@@ -44,6 +44,32 @@ fn workspace_hosts(count: usize) -> Workspace {
     Workspace::new(options, settings, path, handle, None)
 }
 
+/// A second launch on the settings `ws` saved.
+fn relaunch(ws: &Workspace) -> Workspace {
+    let options = Options::parse_from([
+        "rex-linux",
+        "--endpoint",
+        "unix:///nonexistent/rex-test.sock",
+    ]);
+    let settings = Settings::load(&ws.settings_path).unwrap();
+    let handle = rune::App::new(AppSpec::new("Rex", (1024., 700.), placeholder, view)).handle();
+    Workspace::new(options, settings, ws.settings_path.clone(), handle, None)
+}
+
+#[test]
+fn the_sidebar_opens_at_launch_as_it_was_left() {
+    let mut ws = workspace();
+    assert!(!ws.sidebar.is_open(), "closed on a first launch");
+    ws.toggle_sidebar();
+    assert!(relaunch(&ws).sidebar.is_open(), "left open, opens again");
+    ws.toggle_sidebar();
+    assert!(
+        !relaunch(&ws).sidebar.is_open(),
+        "left closed, stays closed"
+    );
+    std::fs::remove_file(&ws.settings_path).ok();
+}
+
 fn click(rt: &mut Runtime<Workspace>, key: &str) {
     let r = rt
         .elements()
