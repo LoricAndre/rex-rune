@@ -6,6 +6,7 @@ use super::{
 };
 use rex_linux::{
     connection::{Command, Connection},
+    links::Link,
     terminal::{
         Cell, Frame, SelectionUnit,
         graphics::{Image as TermImage, ImagePixels},
@@ -43,6 +44,10 @@ pub struct Term {
     /// The last cell a motion report named, so moves within a cell send nothing.
     pub mouse_cell: Option<(u16, u16)>,
     images: HashMap<usize, (Arc<ImagePixels>, rune::Image)>,
+    /// The link under the pointer while Ctrl is held, with the cell the pointer is on.
+    pub link: Option<(usize, Link)>,
+    /// The link a Ctrl+press went down on; releasing over the same link opens it.
+    pub pressed_link: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -103,6 +108,8 @@ impl Term {
             mouse: None,
             mouse_cell: None,
             images: HashMap::new(),
+            link: None,
+            pressed_link: None,
         }
     }
 
@@ -132,6 +139,14 @@ impl Term {
             }
         }
         self.frame = frame;
+        // The same cell may hold a different link, or none, after output.
+        if let Some((index, _)) = self.link.take() {
+            self.link = self
+                .frame
+                .as_ref()
+                .and_then(|f| f.link_at(index))
+                .map(|l| (index, l));
+        }
     }
 
     pub fn cache_images(&mut self, cache: Option<&rune::ImageCache>) {
@@ -228,6 +243,12 @@ impl Term {
     /// The program has asked for mouse reports.
     pub fn tracking(&self) -> bool {
         self.frame.as_ref().is_some_and(|f| f.mouse_tracking)
+    }
+
+    /// The openable link under a point in the grid's own coordinates, with its cell index.
+    pub fn link_at(&self, x: f32, y: f32, cell: (f32, f32)) -> Option<(usize, Link)> {
+        let index = self.index(x, y, cell);
+        self.frame.as_ref()?.link_at(index).map(|l| (index, l))
     }
 
     /// The server's cell (column, row) under a point in the grid's own coordinates, clamped
@@ -749,6 +770,11 @@ pub fn grid(key: &str, term: &Term, m: &Metrics, look: GridLook) -> El {
         grid = rows(grid, RowPass::Text);
         grid = images(grid, 2);
     }
+    if let Some((_, link)) = &term.link {
+        for mark in link_marks(key, frame, link, start..start + visible, m) {
+            grid = grid.child(mark);
+        }
+    }
     if let Some((x, y)) = frame.cursor
         && let Some(cursor_look) = look.cursor
         && (y as usize) >= start
@@ -798,6 +824,47 @@ pub fn grid(key: &str, term: &Term, m: &Metrics, look: GridLook) -> El {
         }
     }
     grid
+}
+
+/// The link Ctrl+click would open, underlined in its own colour, row by row, over the
+/// `rows` on screen. Its tooltip names the target itself, since OSC 8 text can show a
+/// different address.
+fn link_marks(
+    key: &str,
+    frame: &Frame,
+    link: &Link,
+    rows: std::ops::Range<usize>,
+    m: &Metrics,
+) -> Vec<El> {
+    let (cw, ch) = m.cell;
+    let cols = frame.cols as usize;
+    let help = format!("Ctrl+click to open {}", link.uri);
+    let color = frame
+        .cells
+        .get(link.start / cols)
+        .and_then(|row| row.get(link.start % cols))
+        .map_or(frame.fg, |c| RunStyle::of(c, frame.bg).fg);
+    (link.start / cols..=link.end / cols)
+        .filter(|y| rows.contains(y))
+        .map(|y| {
+            let c0 = if y == link.start / cols {
+                link.start % cols
+            } else {
+                0
+            };
+            let c1 = if y == link.end / cols {
+                link.end % cols
+            } else {
+                cols - 1
+            };
+            let width = (c1 + 1 - c0) as f32 * cw;
+            el().key(format!("{key}/link{y}"))
+                .absolute(c0 as f32 * cw, (y - rows.start) as f32 * ch)
+                .size(width, ch)
+                .help(help.clone())
+                .child(el().absolute(0., ch - 2.).size(width, 1.).fill(rgb(color)))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -865,5 +932,41 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_link_tooltip_names_the_hyperlink_target_not_its_text() {
+        let mut terminal = ghostty_vt::Terminal::new(ghostty_vt::TerminalOptions {
+            cols: 40,
+            rows: 2,
+            ..Default::default()
+        })
+        .unwrap();
+        terminal
+            .vt_write(b"\x1b]8;;https://evil.example/\x1b\\https://good.example/\x1b]8;;\x1b\\");
+        let frame = rex_linux::terminal::Renderer::new()
+            .unwrap()
+            .frame(&terminal)
+            .unwrap();
+        let link = frame.link_at(3).expect("hyperlink");
+        assert_eq!(link.uri, "https://evil.example/");
+        struct LinkState {
+            frame: Frame,
+            link: Link,
+        }
+        let view = |s: &LinkState, _: &mut Cx<LinkState>| {
+            let m = metrics(15., None);
+            let marks = link_marks("g", &s.frame, &s.link, 0..2, &m);
+            el().w_full().h_full().children(marks)
+        };
+        let mut rt = Runtime::new(
+            LinkState { frame, link },
+            view,
+            (600., 100.),
+            Env::default(),
+        );
+        rt.frame(0.);
+        let help: Vec<String> = rt.elements().into_iter().filter_map(|e| e.help).collect();
+        assert_eq!(help, ["Ctrl+click to open https://evil.example/"]);
     }
 }

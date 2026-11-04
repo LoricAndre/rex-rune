@@ -27,7 +27,7 @@ Some probes and Python scripts in `scripts/` connect to the configured Rex serve
 - Protocol and model library (`src/lib.rs`, no UI dependency):
   - `transport.rs`, `wire.rs`: Unix/HTTPS WebSockets, data tickets, snapshot framing.
   - `connection.rs` (and `connection/`): one control connection per host, block-keyed terminal streams, the `Options` CLI definition.
-  - `terminal.rs`: Ghostty decoding and render frames.
+  - `terminal.rs`: Ghostty decoding and render frames. `links.rs`: OSC 8 hyperlinks and text URLs in a frame.
   - `layout.rs`: split placement. `settings.rs`: local configuration.
 - `src/main.rs` and `src/app/`: the Rune front end (behind the default `ui` feature).
   - `workspace.rs`: workspace state and behavior (hosts, sessions, tabs, panes, requests, preferences, notices). Host and terminal workers wake the UI through `rune::AppHandle::update`.

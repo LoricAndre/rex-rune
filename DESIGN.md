@@ -54,6 +54,7 @@ Chrome uses Inter (bundled with the kit) in 10–13 pt steps, weights about 450 
 - Size ownership is automatic: the active window owns terminal size and typing claims it. A non-owner or reconnecting terminal shows an exception strip with **Take control** or **Retry**, and never sends a resize.
 - A transport failure marks affected panes input-paused, keeps their output, and never queues or replays input. Notices are toasts: errors are sticky, information leaves after about 6 seconds, and at most three notices are retained.
 - Focus cues: a filled block cursor in the focused terminal, a hollow outline cursor in others, and an accent outline on the focused pane when no panel is open.
+- Links open only on Ctrl+click (press and release on the same link), never on a plain click, so selecting text and clicking into programs stay unchanged. Holding Ctrl over a link underlines it in its own text colour, shows the hand pointer and gives it a tooltip with its target URL (never its displayed text).
 
 ## Do and don't
 

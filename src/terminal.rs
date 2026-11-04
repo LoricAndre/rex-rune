@@ -4,10 +4,13 @@ use ghostty_vt::{
     RenderState, Terminal,
     render::{CellIterator, RowIterator},
     style::RgbColor,
-    terminal::Mode,
+    terminal::{Mode, Point, PointCoordinate},
 };
 use serde_json::Value;
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 pub mod graphics;
 pub mod selection;
@@ -214,6 +217,8 @@ pub struct Cell {
     pub fg: u32,
     pub bg: u32,
     pub style: ghostty_vt::style::Style,
+    /// The cell's OSC 8 hyperlink target.
+    pub link: Option<Arc<str>>,
 }
 #[derive(Clone, Debug)]
 pub struct Frame {
@@ -232,6 +237,8 @@ pub struct Frame {
     pub selection_text: Option<std::sync::Arc<str>>,
     pub selection_error: Option<String>,
     pub selection_revision: u64,
+    /// Per row: the row soft-wraps into the next one.
+    pub wrapped: Vec<bool>,
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -370,15 +377,21 @@ impl Renderer {
                 terminal.width_px()? / u32::from(snapshot.cols()?).max(1),
                 terminal.height_px()? / u32::from(snapshot.rows()?).max(1),
             ],
+            wrapped: Vec::new(),
         };
+        let mut uri = Vec::new();
         let mut rows = self.rows.update(&snapshot)?;
+        let mut y = 0;
         while let Some(row) = rows.next() {
             frame.selection_rows.push(
                 row.selection()?
                     .map(|s| (usize::from(s.start_x), usize::from(s.end_x))),
             );
+            let raw_row = row.raw_row()?;
+            frame.wrapped.push(raw_row.is_wrapped()?);
+            let row_links = raw_row.has_hyperlink()?;
             let mut cells = self.cells.update(row)?;
-            let mut line = Vec::new();
+            let mut line: Vec<Cell> = Vec::new();
             while let Some(cell) = cells.next() {
                 let mut text = String::new();
                 cell.graphemes_utf8(&mut text)?;
@@ -391,20 +404,53 @@ impl Renderer {
                 if style.invisible {
                     text.clear();
                 }
+                let raw = cell.raw_cell()?;
+                let link = if row_links && raw.has_hyperlink()? {
+                    let at = (line.len() as u16, y);
+                    hyperlink(terminal, at, &mut uri)?.then(|| {
+                        // Neighbouring cells of one link share its string.
+                        match line.last().and_then(|c| c.link.clone()) {
+                            Some(prev) if prev.as_bytes() == uri => prev,
+                            _ => Arc::from(String::from_utf8_lossy(&uri)),
+                        }
+                    })
+                } else {
+                    None
+                };
                 line.push(Cell {
                     text,
-                    spacer_tail: cell.raw_cell()?.wide()?
-                        == ghostty_vt::screen::CellWide::SpacerTail,
+                    spacer_tail: raw.wide()? == ghostty_vt::screen::CellWide::SpacerTail,
                     fg,
                     bg,
                     style,
+                    link,
                 });
             }
             frame.cells.push(line);
+            y += 1;
         }
         snapshot.clean()?;
         Ok(frame)
     }
+}
+
+/// Reads the OSC 8 target of the viewport cell `at` into `uri`; false if it has none.
+fn hyperlink(terminal: &Terminal, at: (u16, u16), uri: &mut Vec<u8>) -> Result<bool> {
+    let point = Point::Viewport(PointCoordinate {
+        x: at.0,
+        y: at.1.into(),
+    });
+    let cell = terminal.grid_ref(point)?;
+    uri.resize(uri.capacity().max(256), 0);
+    let len = match cell.hyperlink_uri(uri) {
+        Err(ghostty_vt::Error::OutOfSpace { required }) => {
+            uri.resize(required, 0);
+            cell.hyperlink_uri(uri)?
+        }
+        result => result?,
+    };
+    uri.truncate(len);
+    Ok(len > 0)
 }
 
 #[cfg(test)]

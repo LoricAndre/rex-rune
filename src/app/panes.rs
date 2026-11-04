@@ -222,15 +222,18 @@ fn card(
                 ime: input && s.window_focused,
             };
             let (k1, k2, k3) = (key.clone(), key.clone(), key.clone());
-            let (k4, k5) = (key.clone(), key.clone());
+            let (k4, k5, k6) = (key.clone(), key.clone(), key.clone());
             let menu_block = block.to_owned();
             let mut grid = el()
                 .key(format!("grid:{block}"))
                 .grow(1.)
                 .w_full()
                 .min_h(0.)
-                // A program that tracks the mouse owns the pointer, as in Ghostty.
-                .cursor(if t.tracking() {
+                // A program that tracks the mouse owns the pointer, as in Ghostty; a link under
+                // Ctrl is the exception.
+                .cursor(if t.link.is_some() {
+                    Cursor::Pointer
+                } else if t.tracking() {
                     Cursor::Default
                 } else {
                     Cursor::Text
@@ -268,6 +271,17 @@ fn card(
                         if !focused {
                             let _ = t.connection.commands.focus();
                         }
+                        // Ctrl+click opens a link, even over a program that tracks the mouse.
+                        t.pressed_link = None;
+                        if button == "left"
+                            && mods.ctrl
+                            && let Some((_, link)) = t.link_at(d.x, d.y, cell)
+                        {
+                            t.clear_selection();
+                            t.mouse = None;
+                            t.pressed_link = Some(link.uri);
+                            return;
+                        }
                         // Shift keeps local selection, as Ghostty and xterm do.
                         if t.tracking() && !mods.shift && t.status().live {
                             t.clear_selection();
@@ -277,7 +291,21 @@ fn card(
                         }
                         t.mouse = None;
                     }
-                    // A forwarded press goes to the program until it releases.
+                    // A Ctrl+press on a link opens it if released over the same link.
+                    if let Some(uri) = &t.pressed_link {
+                        if d.phase != Phase::Up {
+                            tx.live_only();
+                            return;
+                        }
+                        let same = t
+                            .link_at(d.x, d.y, cell)
+                            .is_some_and(|(_, l)| &l.uri == uri);
+                        let uri = t.pressed_link.take().filter(|_| same);
+                        if let Some(uri) = uri {
+                            s.open_link(uri);
+                        }
+                        return;
+                    }
                     if let Some(gesture) = t.mouse {
                         match d.phase {
                             Phase::Move => {
@@ -312,19 +340,31 @@ fn card(
                     };
                     t.selection_event(phase, d.x, d.y, cell);
                 })
-                // Motion with no button held, for programs that track every move (1003). The
-                // server drops it for the others. Only the focused pane hears it.
+                // Pointer motion with no button held: Ctrl shows the link under it, and programs
+                // that track every move (1003) hear it (the server drops it for the others).
+                // Only the focused pane reports it.
                 .on_pointer_move_local(move |s: &mut Workspace, p: PointerEvent, tx: &mut Tx| {
-                    tx.live_only();
                     let cell = term::metrics(s.settings.font_size, s.terminal_family).cell;
                     let focused = s.focused_block().as_deref() == Some(k4.1.as_str());
                     let Some(t) = s.terminals.get_mut(&k4) else {
+                        tx.live_only();
                         return;
                     };
                     if t.selecting {
+                        tx.live_only();
                         return;
                     }
-                    tx.live_only();
+                    // Holding Ctrl shows the link a click would open.
+                    let link = if tx.mods().ctrl {
+                        t.link_at(p.x, p.y, cell)
+                    } else {
+                        None
+                    };
+                    let same = link.as_ref().map(|(_, l)| l) == t.link.as_ref().map(|(_, l)| l);
+                    t.link = link;
+                    if same {
+                        tx.live_only();
+                    }
                     if tx.mods().shift
                         || !focused
                         || t.mouse.is_some()
@@ -336,6 +376,11 @@ fn card(
                     let at = t.cell_at(p.x, p.y, cell);
                     if t.mouse_cell != Some(at) {
                         t.send_mouse("motion", None, at, tx.mods());
+                    }
+                })
+                .on_hover_change(move |s: &mut Workspace, inside: bool, _: &mut Tx| {
+                    if !inside && let Some(t) = s.terminals.get_mut(&k6) {
+                        t.link = None;
                     }
                 })
                 // Right-click opens the pane menu, even over a program that tracks the mouse;
