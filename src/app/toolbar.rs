@@ -1,5 +1,5 @@
 //! The 52pt bar on the window ground: sidebar toggle, identity chip, tab track, drag space,
-//! Commands, and the window's own controls.
+//! Commands, New tab and Settings, a divider, and the window's own controls.
 use super::{
     activity::{program_icon, tab_activity, tab_name, tab_word},
     panel::Intent,
@@ -218,36 +218,13 @@ fn tab_track(s: &Workspace) -> El {
     chip_press(chip(track).on_press(|_: &mut Workspace| {}))
 }
 
-/// A 34pt square chip holding one icon: Commands and New tab.
-fn icon_chip(
+/// A toolbar button at the right end: no fill at rest and a round hover inside, but the hit
+/// area takes the bar's whole height (and the last one its right margin), so the corner above
+/// Close closes.
+fn bar_button(
     key: &str,
     i: &'static rune::Icon,
     label: &str,
-    help: &str,
-    f: impl Fn(&mut Workspace, &mut Tx) + 'static,
-) -> El {
-    chip_press(chip(
-        row()
-            .key(key.to_owned())
-            .role("button")
-            .label(label.to_owned())
-            .size(34., 34.)
-            .center()
-            .hover(white(0.08))
-            .help(help.to_owned())
-            .on_press_tx(move |s: &mut Workspace, tx: &mut Tx| {
-                f(s, tx);
-                tx.blur();
-            })
-            .child(glyph(i, 15., rgb(MUTED))),
-    ))
-}
-
-/// A window control: the round hover shows inside, but the hit area takes the bar's whole
-/// height (and the last one its right margin), so the corner above Close closes.
-fn window_control(
-    key: &str,
-    i: &'static rune::Icon,
     help: &str,
     width: f32,
     danger: bool,
@@ -261,7 +238,7 @@ fn window_control(
     row()
         .key(key.to_owned())
         .role("button")
-        .label(help.to_owned())
+        .label(label.to_owned())
         .w(width)
         .h(TOOLBAR)
         .pr(width - 34.)
@@ -313,41 +290,65 @@ pub fn toolbar(s: &Workspace, cx: &mut Cx<Workspace>) -> El {
         .child(tab_track(s))
         // Always at least 48pt of window to drag, outside the tabs.
         .child(el().key("title-drag").grow(1.).min_w(48.).h_full())
-        .child(icon_chip(
-            "commands",
-            &COMMAND,
-            "Commands",
-            "Commands, sessions and tabs · Ctrl Shift P",
-            |s, _| s.picker(false),
-        ))
-        .child(icon_chip(
-            "new-tab",
-            &PLUS,
-            "New tab",
-            "New tab · Ctrl Shift T",
-            |s, tx| s.perform(Intent::NewWindow, tx),
-        ))
         .child(
             row()
-                .child(window_control(
+                .center_y()
+                .child(bar_button(
+                    "commands",
+                    &COMMAND,
+                    "Commands",
+                    "Commands, sessions and tabs · Ctrl Shift P",
+                    36.,
+                    false,
+                    |s, _| s.picker(false),
+                ))
+                .child(bar_button(
+                    "new-tab",
+                    &PLUS,
+                    "New tab",
+                    "New tab · Ctrl Shift T",
+                    36.,
+                    false,
+                    |s, tx| s.perform(Intent::NewWindow, tx),
+                ))
+                .child(bar_button(
+                    "settings",
+                    &SETTINGS,
+                    "Settings",
+                    "Settings · Ctrl ,",
+                    36.,
+                    false,
+                    |s, tx| s.perform(Intent::Settings, tx),
+                ))
+                .child(
+                    el().key("toolbar-divider")
+                        .w(1.)
+                        .h(16.)
+                        .mx(6.)
+                        .fill(white(0.1)),
+                )
+                .child(bar_button(
                     "minimize",
                     &MINIMIZE,
+                    "Minimize",
                     "Minimize",
                     36.,
                     false,
                     |_, tx| tx.minimize(),
                 ))
-                .child(window_control(
+                .child(bar_button(
                     "maximize",
                     if maximized { &RESTORE } else { &MAXIMIZE },
+                    if maximized { "Restore" } else { "Maximize" },
                     if maximized { "Restore" } else { "Maximize" },
                     36.,
                     false,
                     |_, tx| tx.toggle_maximize(),
                 ))
-                .child(window_control(
+                .child(bar_button(
                     "close-app",
                     &CLOSE,
+                    "Close app",
                     "Close app · server programs keep running",
                     36. + MARGIN,
                     true,

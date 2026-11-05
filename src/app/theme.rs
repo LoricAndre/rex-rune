@@ -229,6 +229,14 @@ icon!(
     r#"path d="M12.5 5v10a2.5 2.5 0 1 0 2.5-2.5H5a2.5 2.5 0 1 0 2.5 2.5V5a2.5 2.5 0 1 0-2.5 2.5h10a2.5 2.5 0 1 0-2.5-2.5""#
 );
 icon!(
+    SETTINGS,
+    "rex-settings",
+    r#"path d="M4 6.5h5M13 6.5h3""#,
+    r#"circle cx="11" cy="6.5" r="2""#,
+    r#"path d="M4 13.5h3M11 13.5h5""#,
+    r#"circle cx="9" cy="13.5" r="2""#
+);
+icon!(
     MONITOR,
     "rex-monitor",
     r#"rect x="3" y="4" width="14" height="9.5" rx="2""#,

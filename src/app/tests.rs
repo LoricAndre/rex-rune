@@ -998,6 +998,20 @@ fn close_confirmation_opens_on_keep_running_and_return_keeps_it_running() {
 }
 
 #[test]
+fn the_toolbar_settings_button_opens_settings() {
+    let mut rt = runtime(workspace());
+    // The root eases from the default viewport to the window's before the right end is on screen.
+    for _ in 0..60 {
+        rt.frame(1. / 60.);
+    }
+    click(&mut rt, "settings");
+    assert!(matches!(
+        rt.state.panel.as_ref().map(|p| &p.kind),
+        Some(PanelKind::Settings)
+    ));
+}
+
+#[test]
 fn forms_focus_their_first_field_and_settings_start_on_its_section_list() {
     let mut ws = workspace();
     ws.open_panel(
