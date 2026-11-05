@@ -72,7 +72,7 @@ pub(crate) fn view(s: &Workspace, cx: &mut Cx<Workspace>) -> El {
                 .pt(TOOLBAR)
                 .child(body),
         )
-        .child(toolbar::toolbar(s, cx).absolute(0., 0.));
+        .child(toolbar::toolbar(s).absolute(0., 0.));
     if let Some(toasts) = dialogs::toasts(s) {
         root = root.child(toasts);
     }

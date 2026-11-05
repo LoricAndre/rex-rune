@@ -257,18 +257,6 @@ icon!(
     r#"rect x="3" y="4" width="14" height="12" rx="3""#,
     r#"path d="M8 4v12""#
 );
-icon!(MINIMIZE, "rex-minimize", r#"path d="M6 10h8""#);
-icon!(
-    MAXIMIZE,
-    "rex-maximize",
-    r#"rect x="6" y="6" width="8" height="8" rx="2""#
-);
-icon!(
-    RESTORE,
-    "rex-restore",
-    r#"rect x="5.5" y="7.5" width="7" height="7" rx="1.5""#,
-    r#"path d="M8 7.5V5.5h6.5V12h-2""#
-);
 icon!(MINUS, "rex-minus", r#"path d="M6 10h8""#);
 
 // Programs a tab can show instead of the terminal glyph (`activity::program_icon`).

@@ -1,5 +1,5 @@
 //! The 52pt bar on the window ground: sidebar toggle, identity chip, tab track, drag space,
-//! Commands, New tab and Settings, a divider, and the window's own controls.
+//! Commands, New tab and Settings, a divider, and Close.
 use super::{
     activity::{program_icon, tab_activity, tab_name, tab_word},
     panel::Intent,
@@ -7,7 +7,7 @@ use super::{
     widgets::{chrome_button, glyph},
     workspace::Workspace,
 };
-use rune::{Cursor, Cx, El, PointerButton, ScrollPos, Tx, col, el, row, text};
+use rune::{Cursor, El, PointerButton, ScrollPos, Tx, col, el, row, text};
 use serde_json::json;
 
 /// A chip's press: consume it (chips never drag the window) and keep the terminal focused.
@@ -268,8 +268,7 @@ fn bar_button(
         )
 }
 
-pub fn toolbar(s: &Workspace, cx: &mut Cx<Workspace>) -> El {
-    let maximized = cx.window_maximized();
+pub fn toolbar(s: &Workspace) -> El {
     row()
         .key("toolbar")
         .w_full()
@@ -327,24 +326,6 @@ pub fn toolbar(s: &Workspace, cx: &mut Cx<Workspace>) -> El {
                         .mx(6.)
                         .fill(white(0.1)),
                 )
-                .child(bar_button(
-                    "minimize",
-                    &MINIMIZE,
-                    "Minimize",
-                    "Minimize",
-                    36.,
-                    false,
-                    |_, tx| tx.minimize(),
-                ))
-                .child(bar_button(
-                    "maximize",
-                    if maximized { &RESTORE } else { &MAXIMIZE },
-                    if maximized { "Restore" } else { "Maximize" },
-                    if maximized { "Restore" } else { "Maximize" },
-                    36.,
-                    false,
-                    |_, tx| tx.toggle_maximize(),
-                ))
                 .child(bar_button(
                     "close-app",
                     &CLOSE,

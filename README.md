@@ -22,7 +22,7 @@ It is written in Rust on [Rune](https://github.com/anomalyco/rune) (wgpu/winit, 
 - Desktop notifications through the freedesktop notification service when a tab you aren't looking at needs you, fails or finishes, and for notifications programs send themselves (OSC 9 and OSC 777). Clicking one raises the window and shows that tab. Each kind can be turned off in Settings → Notifications.
 - Agent integrations (Settings → Integrations): installs, updates or removes Rex's skill and session hooks for Claude Code, Codex, OpenCode and Pi on this machine with the local `rex skill` command. Every change is previewed with a dry run first, which also shows when Codex, OpenCode and Pi share one skill directory. "Let agents name sessions" is passed to every setup explicitly.
 - Interface zoom (70–150%) and a configurable terminal font and size.
-- Borderless window with its own minimize/maximize/close, edge resizing and drag region.
+- Borderless window with its own close button, edge resizing and drag region. There are no minimize or maximize buttons; double-clicking the drag region maximizes, and the window manager handles the rest.
 - Keys are sent by physical position (Ghostty key names), so non-US layouts work.
 
 **Attachment only.** Rex Linux never starts, stops, replaces or reconfigures a Rex server and attaching does not need a `rex` executable on `PATH`. The only place the app runs `rex` is Settings → Integrations, on this machine and always with `--autostart=false`. An unavailable server is shown as disconnected and retried. Closing the client leaves server programs running.
@@ -149,7 +149,7 @@ Each patch is meant to be dropped once the corresponding upstream release has eq
 
 ## Current scope
 
-Still needing hands-on validation: physical Wayland pointer gestures (move, edge resize, double-click, window menu), minimize on Wayland, multi-seat Wayland desktops, actual IME input, and sustained daily use. On X11, winit has no window-menu request, so right-clicking the drag region does nothing there.
+Still needing hands-on validation: physical Wayland pointer gestures (move, edge resize, double-click, window menu), multi-seat Wayland desktops, actual IME input, and sustained daily use. On X11, winit has no window-menu request, so right-clicking the drag region does nothing there.
 
 Not implemented: terminal-content search, complete Kitty graphics, accessibility (AT-SPI) and distribution packages.
 
