@@ -265,7 +265,8 @@ impl Entry {
 
 impl Workspace {
     /// A sidebar session's menu: Switch (unless current), Rename, Move up and down within its
-    /// host, and Close. An offline host keeps Switch and offers Retry in place of the rest.
+    /// host, and Close. An offline host keeps Switch and offers Retry and Edit host… in place
+    /// of the rest.
     fn session_entries(&self, target: &SessionTarget) -> Vec<Entry> {
         let host = &self.hosts[target.host].model;
         let current = self.active == target.host && host.selected.as_ref() == Some(&target.session);
@@ -307,11 +308,18 @@ impl Workspace {
                 "",
                 Intent::RetryHost(target.host),
             ));
+            entries.push(Entry::new(
+                "Edit host…",
+                "",
+                "",
+                Intent::EditHost(target.host),
+            ));
         }
         entries
     }
 
-    /// A sidebar host header's menu: New session, Default shell…, and Retry while offline.
+    /// A sidebar host header's menu: New session, Default shell…, Retry while offline, then
+    /// Edit host… and Remove host… (not for the only host).
     fn host_entries(&self, host: usize) -> Vec<Entry> {
         let connected = self.hosts[host].model.connected;
         let mut create = Entry::new("New session", "", "", Intent::CreateOn(host, None));
@@ -331,6 +339,10 @@ impl Workspace {
                 Intent::RetryHost(host),
             ));
         }
+        entries.push(Entry::new("Edit host…", "", "", Intent::EditHost(host)));
+        let mut remove = Entry::new("Remove host…", "", "", Intent::RemoveHost(host));
+        remove.enabled = self.settings.hosts.len() > 1;
+        entries.push(remove);
         entries
     }
 
@@ -414,12 +426,16 @@ impl Workspace {
                 ("Default shell…", "", Intent::HostShell(self.active)),
                 ("Settings…", "Ctrl ,", Intent::Settings),
                 ("Add host…", "", Intent::AddHost),
+                ("Edit host…", "", Intent::EditHost(self.active)),
                 ("Reconnect host", "", Intent::Retry),
             ] {
                 let mut entry = Entry::new(label, detail, "Workspace", action);
                 if matches!(entry.action, Intent::NewSession) {
                     entry.label = format!("New session on {host_name}");
                     entry.enabled = model.connected;
+                }
+                if matches!(entry.action, Intent::EditHost(_)) {
+                    entry.label = format!("Edit host {host_name}…");
                 }
                 if matches!(entry.action, Intent::HostShell(_)) {
                     entry.label = format!("Default shell for {host_name}…");

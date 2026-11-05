@@ -142,6 +142,8 @@ fn host_menu_rows_online_and_offline() {
         [
             ("New session".to_owned(), String::new(), true),
             ("Default shell…".to_owned(), "zsh".to_owned(), true),
+            ("Edit host…".to_owned(), String::new(), true),
+            ("Remove host…".to_owned(), String::new(), true),
         ]
     );
     press(&mut rt, Key::Escape);
@@ -154,9 +156,51 @@ fn host_menu_rows_online_and_offline() {
             ("New session".to_owned(), String::new(), false),
             ("Default shell…".to_owned(), String::new(), true),
             ("Retry connection".to_owned(), String::new(), true),
+            ("Edit host…".to_owned(), String::new(), true),
+            ("Remove host…".to_owned(), String::new(), true),
         ]
     );
     assert_eq!(rt.state.panel.as_ref().unwrap().selected, 1);
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn the_host_menu_edits_a_host_in_place() {
+    let mut ws = workspace_hosts(2);
+    ws.sidebar.toggle();
+    let mut rt = runtime(ws);
+    secondary_click(&mut rt, "host:1");
+    let index = rt
+        .state
+        .entries()
+        .iter()
+        .position(|e| matches!(e.action, Intent::EditHost(1)))
+        .expect("Edit host…");
+    rt.state.panel.as_mut().unwrap().selected = index;
+    press(&mut rt, Key::Enter);
+    let panel = rt.state.panel.as_ref().expect("the edit form");
+    assert!(matches!(panel.kind, PanelKind::Form(Form::EditHost(1))));
+    assert_eq!(panel.inputs[0].text, "test-1");
+    assert_eq!(panel.inputs[1].text, rt.state.settings.hosts[1].endpoint);
+
+    let endpoint = "https://test-1.example.ts.net:8443".to_owned();
+    rt.state.panel.as_mut().unwrap().inputs[1] = rune::TextEdit::new(&endpoint);
+    click(&mut rt, "save-form");
+    assert!(rt.state.panel.is_none(), "saving closes the form");
+    assert_eq!(rt.state.settings.hosts[1].endpoint, endpoint);
+    assert_eq!(rt.state.settings.hosts[1].label, "test-1");
+
+    // The only host can be edited but not removed.
+    rt.state.settings.hosts.truncate(1);
+    rt.state.hosts.truncate(1);
+    secondary_click(&mut rt, "host:0");
+    let remove = rt
+        .state
+        .entries()
+        .into_iter()
+        .find(|e| matches!(e.action, Intent::RemoveHost(0)))
+        .expect("Remove host…");
+    assert!(!remove.enabled);
     std::fs::remove_file(&rt.state.settings_path).ok();
 }
 
@@ -759,6 +803,7 @@ fn session_menu_on_an_edge_row_and_an_offline_host() {
             ("Move down".to_owned(), false),
             ("Close session…".to_owned(), false),
             ("Retry connection".to_owned(), true),
+            ("Edit host…".to_owned(), true),
         ]
     );
     assert_eq!(panel.selected, 0);
