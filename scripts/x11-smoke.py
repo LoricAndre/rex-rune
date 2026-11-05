@@ -151,8 +151,8 @@ def run():
             lines = output.splitlines()
             assert lines.count("POINTER_COPY_OK") == 2, "Pointer selection/copy failed:\n" + output
             assert view["label"] == label, "Cancelled rename changed the session"
-            # A raw PTY observer enables Kitty event reporting, so leaked key
-            # releases are observable too, not merely invisible to a shell.
+            # A raw PTY observer enables Kitty event reporting. The terminal key must include
+            # its release, while every key consumed by local UI must stay out of the PTY.
             observer = Path(directory) / "observe.py"
             result = Path(directory) / "keys.bin"
             ready = Path(directory) / "ready"
@@ -178,14 +178,17 @@ finally:
             text(f"python3 {shlex.quote(str(observer))} {shlex.quote(str(ready))} {shlex.quote(str(result))}")
             key("Return")
             wait_for(ready.exists, "Raw key observer did not start")
+            key("a")  # terminal press and release
             command("Rename session")
             key("Escape")
             key("ctrl+shift+space")
             key("Escape")
             wait_for(result.exists, "Raw key observer did not finish", timeout=6)
-            assert result.read_bytes() == b"", f"Local key presses/releases leaked: {result.read_bytes()!r}"
+            keys = result.read_bytes()
+            expected = b"a\x1b[97;1:3u"
+            assert keys == expected, f"Raw Kitty key stream: expected {expected!r}, got {keys!r}"
             print("PASS X11 native Enter/Tab, terminal input, clipboard copy/paste, pointer selection/copy, dialog keyboard/default action, host disclosure, add-host form and session switcher")
-            print("PASS local menu/form key presses and releases isolated from raw Kitty-reporting PTY")
+            print("PASS terminal key releases arrive and local UI keys stay out of the raw Kitty-reporting PTY")
     finally:
         for process in (app, server):
             if process:
