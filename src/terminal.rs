@@ -8,6 +8,7 @@ use ghostty_vt::{
 use serde_json::Value;
 
 pub mod graphics;
+pub mod selection;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Part {
@@ -198,6 +199,10 @@ pub struct Frame {
     pub mouse_tracking: bool,
     pub images: Vec<graphics::Image>,
     pub cell_pixels: [u32; 2],
+    pub selection_rows: Vec<Option<(usize, usize)>>,
+    pub selection_text: Option<std::sync::Arc<str>>,
+    pub selection_error: Option<String>,
+    pub selection_revision: u64,
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -292,6 +297,7 @@ pub struct Renderer {
     rows: RowIterator,
     cells: CellIterator,
     images: graphics::Images,
+    copy_buffer: Vec<u8>,
 }
 impl Renderer {
     pub fn new() -> Result<Self> {
@@ -300,9 +306,15 @@ impl Renderer {
             rows: RowIterator::new()?,
             cells: CellIterator::new()?,
             images: graphics::Images::new()?,
+            copy_buffer: Vec::new(),
         })
     }
     pub fn frame(&mut self, terminal: &Terminal) -> Result<Frame> {
+        let (selection_text, selection_error) =
+            match selection::text(terminal, &mut self.copy_buffer) {
+                Ok(text) => (text, None),
+                Err(error) => (None, Some(format!("Copy failed: {error}"))),
+            };
         let snapshot = self.state.update(terminal)?;
         let colors = snapshot.colors()?;
         let fg = rgb(colors.foreground);
@@ -311,6 +323,10 @@ impl Renderer {
             cols: snapshot.cols()?,
             rows: snapshot.rows()?,
             cells: Vec::new(),
+            selection_rows: Vec::new(),
+            selection_text,
+            selection_error,
+            selection_revision: 0,
             fg,
             bg,
             cursor: if snapshot.cursor_visible()? {
@@ -328,6 +344,10 @@ impl Renderer {
         };
         let mut rows = self.rows.update(&snapshot)?;
         while let Some(row) = rows.next() {
+            frame.selection_rows.push(
+                row.selection()?
+                    .map(|s| (usize::from(s.start_x), usize::from(s.end_x))),
+            );
             let mut cells = self.cells.update(row)?;
             let mut line = Vec::new();
             while let Some(cell) = cells.next() {

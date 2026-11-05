@@ -53,6 +53,7 @@ pub struct Options {
 }
 
 pub enum Command {
+    Selection(crate::terminal::selection::Input),
     Key(Value),
     Paste(String),
     /// A `block.event` mouse payload: `action`, `button`, `x`, `y` (cells) and `mods`.
@@ -461,6 +462,7 @@ impl PaneShared {
 }
 
 enum DataCommand {
+    Selection(crate::terminal::selection::Input),
     Visible(bool),
     Scroll(isize),
     Bottom,
@@ -1105,6 +1107,9 @@ async fn run_host(
                     Ok(HostCommand::Visibility(visible)) => shared.update(|m|m.visible=visible),
                     Ok(HostCommand::Ticket { reply, .. }) => { let _ = reply.send(Err("Host is reconnecting".into())); }
                     Ok(HostCommand::Claim { .. }) => {}
+                    Ok(HostCommand::Terminal { block, command: Command::Selection(input), .. }) => {
+                        if let Some(worker) = workers.get(&block) { let _ = worker.commands.send(DataCommand::Selection(input)); }
+                    }
                     Ok(HostCommand::Terminal { block, command: Command::Resize(a,b,c,d), .. }) => {
                         if let Some(worker) = workers.get_mut(&block) { worker.size = Some((a,b,c,d)); }
                     }
@@ -1234,6 +1239,9 @@ async fn handle_command(
                 return Ok(());
             };
             match command {
+                Command::Selection(input) => {
+                    let _ = worker.commands.send(DataCommand::Selection(input));
+                }
                 Command::Resize(cols, rows, w, h) => {
                     worker.size = Some((cols, rows, w, h));
                     resize(control, &session, &block, cols, rows, w, h).await?;
@@ -1353,6 +1361,7 @@ async fn run_data(
 ) {
     let mut welcome: Option<wire::Welcome> = None;
     let mut stream: Option<TerminalStream> = None;
+    let mut selection = None;
     let mut visible = true;
     let mut renderer = match Renderer::new() {
         Ok(r) => r,
@@ -1374,6 +1383,7 @@ async fn run_data(
             }
             if socket.is_none() {
                 let (next, fresh) = open_data(&endpoint, &session, &block, &host).await?;
+                selection = Some(crate::terminal::selection::Controller::new()?);
                 stream = Some(TerminalStream::new(fresh.nonce)); welcome = Some(fresh);
                 shared.update(|m|m.restore_generation+=1);
                 renderer = Renderer::new()?; socket = Some(next);
@@ -1381,6 +1391,7 @@ async fn run_data(
             }
             let mut socket = socket.context("data socket")?;
             let stream = stream.as_mut().context("terminal stream")?;
+            let selection = selection.as_mut().context("selection controller")?;
             let mut dirty = true;
             let mut tick = tokio::time::interval(Duration::from_millis(16));
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1391,15 +1402,19 @@ async fn run_data(
                         dirty = true;
                     }
                     command = commands.recv_async() => match command {
-                        Ok(DataCommand::Visible(value)) => { if value && !visible { dirty = true; } visible = value; }
-                        Ok(DataCommand::Scroll(delta)) => if let Some(terminal) = &mut stream.terminal { terminal.scroll_viewport(ghostty_vt::terminal::ScrollViewport::Delta(delta)); dirty = true; },
+                        Ok(DataCommand::Selection(input)) => if input.generation == shared.model.lock().expect("terminal model").restore_generation && let Some(terminal) = &stream.terminal { selection.apply(terminal, input)?; dirty = true; },
+                        Ok(DataCommand::Visible(value)) => { if value && !visible { dirty = true; } else if !value && let Some(terminal) = &stream.terminal { selection.stop(terminal)?; } visible = value; }
+                        Ok(DataCommand::Scroll(delta)) => if let Some(terminal) = &mut stream.terminal { terminal.scroll_viewport(ghostty_vt::terminal::ScrollViewport::Delta(delta)); selection.after_scroll(terminal)?; dirty = true; },
                         Ok(DataCommand::Bottom) => if let Some(terminal) = &mut stream.terminal { terminal.scroll_viewport(ghostty_vt::terminal::ScrollViewport::Bottom); dirty = true; },
                         Ok(DataCommand::Reconnect) => { shared.status("Reconnecting terminal…", false); return Ok(false); }
                         Ok(DataCommand::Stop) | Err(_) => return Ok(true),
                     },
-                    _ = tick.tick(), if dirty && visible => {
-                        if let Some(terminal) = &stream.terminal {
-                            let frame = Arc::new(renderer.frame(terminal)?);
+                    _ = tick.tick(), if visible && (dirty || stream.terminal.as_ref().is_some_and(|t| selection.autoscrolling(t))) => {
+                        if let Some(terminal) = &mut stream.terminal {
+                            selection.tick(terminal)?;
+                            let mut frame = renderer.frame(terminal)?;
+                            frame.selection_revision = selection.revision;
+                            let frame = Arc::new(frame);
                             let mut transitioned = false;
                             shared.update(|m| {
                                 m.frame = Some(frame);

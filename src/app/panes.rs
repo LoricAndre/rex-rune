@@ -9,7 +9,7 @@ use super::{
     widgets::{Pill, pill},
     workspace::{DividerDrag, Workspace},
 };
-use rex_linux::{connection::Command, layout};
+use rex_linux::{connection::Command, layout, terminal::selection::Phase as SelectionPhase};
 use rexrs::api::session::Window;
 use rune::{Cursor, El, Phase, PointerButton, PointerEvent, Tx, WheelEvent, col, el, row, text};
 
@@ -270,7 +270,7 @@ fn card(
                         }
                         // Shift keeps local selection, as Ghostty and xterm do.
                         if t.tracking() && !mods.shift && t.status().live {
-                            t.selection = None;
+                            t.clear_selection();
                             t.mouse = Some(MouseGesture { button });
                             t.send_mouse("press", Some(button), at, mods);
                             return;
@@ -299,11 +299,18 @@ fn card(
                         return;
                     }
                     let i = t.index(d.x, d.y, cell);
-                    match d.phase {
-                        Phase::Down => t.begin_selection(i, d.clicks),
-                        Phase::Move => t.extend_selection(i),
-                        Phase::Up => {}
-                    }
+                    let phase = match d.phase {
+                        Phase::Down => {
+                            t.begin_selection(i, d.clicks);
+                            SelectionPhase::Down(d.clicks)
+                        }
+                        Phase::Move => {
+                            t.extend_selection(i);
+                            SelectionPhase::Move
+                        }
+                        Phase::Up => SelectionPhase::Up,
+                    };
+                    t.selection_event(phase, d.x, d.y, cell);
                 })
                 // Motion with no button held, for programs that track every move (1003). The
                 // server drops it for the others. Only the focused pane hears it.
@@ -314,7 +321,16 @@ fn card(
                     let Some(t) = s.terminals.get_mut(&k4) else {
                         return;
                     };
-                    if !focused || t.mouse.is_some() || !t.tracking() || !t.status().live {
+                    if t.selecting {
+                        return;
+                    }
+                    tx.live_only();
+                    if tx.mods().shift
+                        || !focused
+                        || t.mouse.is_some()
+                        || !t.tracking()
+                        || !t.status().live
+                    {
                         return;
                     }
                     let at = t.cell_at(p.x, p.y, cell);
@@ -338,7 +354,7 @@ fn card(
                             let _ = t.connection.commands.focus();
                         }
                         let at = t.cell_at(p.x, p.y, cell);
-                        t.selection = None;
+                        t.clear_selection();
                         t.send_mouse("press", Some("right"), at, mods);
                         t.send_mouse("release", Some("right"), at, mods);
                         return;
@@ -356,7 +372,6 @@ fn card(
                     let lines = t.scroll.trunc();
                     if lines != 0. {
                         t.scroll -= lines;
-                        t.selection = None;
                         // Shift + wheel keeps scrolling the local scrollback.
                         if t.tracking() && !e.mods.shift && t.status().live {
                             let at = t.cell_at(e.x, e.y, cell);
