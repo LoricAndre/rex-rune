@@ -38,7 +38,9 @@ mod platform_sync;
 use platform_sync::sync_platform;
 mod shell_requests;
 mod keys;
-pub(crate) use keys::{key_base, map_key, map_mods};
+pub(crate) use keys::{event_key, key_base, map_mods};
+#[cfg(target_arch = "wasm32")]
+pub(crate) use keys::map_key;
 mod event_loop;
 #[cfg(not(target_arch = "wasm32"))]
 pub use event_loop::run;
@@ -2756,7 +2758,7 @@ impl<S: 'static> Host<S> {
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
                 let pressed = event.state == ElementState::Pressed;
                 // A release's logical key only matters to `on_key_up` handlers.
-                let logical = (pressed || rt.wants_key_up()).then(|| map_key(&event.logical_key, self.mods)).flatten();
+                let logical = (pressed || rt.wants_key_up()).then(|| event_key(&event, self.mods)).flatten();
                 let mut redraw = false;
                 // A standard ⌘W or ⌘M menu item handing Rune its key: close or minimize after,
                 // if no handler takes it.

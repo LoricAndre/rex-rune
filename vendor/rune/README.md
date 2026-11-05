@@ -34,7 +34,9 @@ manager's menu. The patch adds the following without changing existing behavior 
   breaks, so fractional-DPI width rounding must not wrap a text run onto another row.
 - Native dead keys are retained as `Key::Dead` events instead of being dropped, so terminal
   clients can send their physical press and `composing` state before the completed text.
-  Headless scripts accept `{"type":"key","dead":"~","code":"backquote"}` for this path.
+  A completed key carries winit's composed text, so a dead key followed by Space types its
+  accent rather than a space. Headless scripts accept
+  `{"type":"key","dead":"~","code":"backquote"}` for this path.
 
 Spike: `examples/chrome_spike.rs` and `scripts/chrome-spike-x11.py`.
 

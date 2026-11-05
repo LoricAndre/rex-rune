@@ -66,6 +66,19 @@ pub(crate) fn map_key(key: &WKey, m: ModifiersState) -> Option<KeyEvent> {
     Some(KeyEvent { key, mods })
 }
 
+/// `event`'s logical key, with the text a dead key composed on it. winit keeps a named key's
+/// name (Space after a dead tilde) and carries the composed `~` only in `text`.
+pub(crate) fn event_key(event: &winit::event::KeyEvent, m: ModifiersState) -> Option<KeyEvent> {
+    map_key(&event.logical_key, m).map(|ev| with_composed_text(ev, event.text.as_deref()))
+}
+
+fn with_composed_text(mut ev: KeyEvent, text: Option<&str>) -> KeyEvent {
+    if let (Key::Text(key), Some(text)) = (&mut ev.key, text) && !text.is_empty() && key != text {
+        *key = text.to_owned();
+    }
+    ev
+}
+
 /// The character `event`'s key types under the current layout with no modifiers, for
 /// `Tx::key_base`.
 pub(crate) fn key_base(event: &winit::event::KeyEvent) -> Option<char> {
@@ -90,5 +103,14 @@ mod tests {
     fn dead_keys_reach_logical_key_handlers() {
         let event = map_key(&WKey::Dead(Some('~')), ModifiersState::empty()).unwrap();
         assert_eq!(event.key, Key::Dead(Some('~')));
+    }
+
+    #[test]
+    fn a_dead_key_composed_on_space_types_its_accent() {
+        let space = map_key(&WKey::Named(NamedKey::Space), ModifiersState::empty()).unwrap();
+        assert_eq!(with_composed_text(space.clone(), Some("~")).key, Key::Text("~".into()));
+        // A release carries no composed text, and a plain space types itself.
+        assert_eq!(with_composed_text(space.clone(), None).key, Key::Text(" ".into()));
+        assert_eq!(with_composed_text(space, Some(" ")).key, Key::Text(" ".into()));
     }
 }
