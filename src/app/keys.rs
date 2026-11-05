@@ -143,10 +143,13 @@ pub fn payload(
             _ => None,
         })
         .map_or(0, |c| c as u32);
+    // Shift is consumed only when the layout used it to pick the text (`A`); Enter and Tab type
+    // the same text either way, so their shift must stay visible to the encoder.
+    let consumed = ev.mods.shift && !text.is_empty() && matches!(ev.key, Key::Text(_));
     Some(json!({
         "key": name,
         "mods": mods(ev.mods),
-        "consumed_mods": if ev.mods.shift && !text.is_empty() { "shift" } else { "" },
+        "consumed_mods": if consumed { "shift" } else { "" },
         "text": text,
         "unshifted_codepoint": unshifted,
         "composing": matches!(ev.key, Key::Dead(_)),
@@ -223,6 +226,28 @@ mod tests {
         assert_eq!(
             (p["key"].as_str(), p["text"].as_str()),
             (Some("enter"), Some(""))
+        );
+    }
+
+    #[test]
+    fn shift_enter_keeps_shift_for_the_encoder() {
+        // With shift marked consumed, Ghostty's Kitty encoder sends a bare `\r` and apps
+        // cannot tell Shift+Enter from Enter.
+        let shift_enter = KeyEvent {
+            key: Key::Enter,
+            mods: Mods {
+                shift: true,
+                ..Default::default()
+            },
+        };
+        let p = payload(&shift_enter, Some(C::Enter), None, Action::Press).unwrap();
+        assert_eq!(
+            (
+                p["mods"].as_str(),
+                p["consumed_mods"].as_str(),
+                p["text"].as_str()
+            ),
+            (Some("shift"), Some(""), Some("\n"))
         );
     }
 
