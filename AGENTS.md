@@ -61,5 +61,6 @@ Some probes and Python scripts in `scripts/` connect to the configured Rex serve
 - Keep each patch minimal and describe it in the vendor directory's README (`vendor/rune/README.md`, `vendor/rexrs/REX-LINUX.md`, `vendor/ghostty-vt/REX-LINUX.md`).
 - Do not mix unrelated edits into vendored code; changes that could go upstream should.
 - Preserve upstream license files and attribution. When bumping a pinned revision, update `Cargo.toml`, the vendored copy and its README together, then re-run the tests above.
+- The Nix package (`nix/package.nix`) pins fetched sources by hash. A Rune bump also means updating the `rune-kit` hash in `cargoLock.outputHashes`; a `ghostty-vt` bump also means updating the Ghostty source archive and the Zig dependency hash there.
 - Remove a patch once upstream provides an equivalent.
 - Regenerate rexrs types with `python3 codegen/generate.py` (from `vendor/rexrs`) rather than editing generated files by hand.

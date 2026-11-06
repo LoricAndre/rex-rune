@@ -45,6 +45,8 @@ cargo build --locked --release --bin rex-linux
 
 Optionally, [mise](https://mise.jdx.dev/) can provide the toolchain: [`mise.toml`](mise.toml) pins Rust 1.96.1 (with Clippy and rustfmt) and Zig 0.17.1, and `mise run build` runs the command above. Run `mise trust` and `mise install` once first. Mise does not provide the native Linux libraries listed in [Requirements](#requirements).
 
+The repository is also a Nix flake: `nix build .#rex-linux` builds a package with the desktop entry and icons, and `nix develop` gives a shell with the toolchain and libraries. See [Nix packaging](docs/nix.md).
+
 `Cargo.lock` pins the dependency graph. TLS uses Rustls with the system trust roots. The workspace also builds two protocol probes (`rex-probe`, `rex-workspace-probe`) that do not need the UI; use `--no-default-features` to build only those.
 
 ## Run
@@ -169,7 +171,7 @@ Each patch is meant to be dropped once the corresponding upstream release has eq
 
 Still needing hands-on validation: physical Wayland pointer gestures (move, edge resize, double-click, window menu), multi-seat Wayland desktops, input methods beyond dead-key composition, and sustained daily use. On X11, winit has no window-menu request, so right-clicking the drag region does nothing there.
 
-Not implemented: terminal-content search, animated Kitty graphics, accessibility (AT-SPI) and distribution packages.
+Not implemented: terminal-content search, animated Kitty graphics and accessibility (AT-SPI). Apart from the Nix flake there are no distribution packages (deb, rpm, Flatpak, AUR) or prebuilt releases.
 
 ## Third-party software and assets
 
