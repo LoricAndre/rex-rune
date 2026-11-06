@@ -25,6 +25,8 @@ rune-theme-opencode = { git = "https://github.com/anomalyco/rune.git", rev = "10
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# TCP keepalive and user timeout, so a silently dropped connection fails and reconnects.
+socket2 = { version = "0.6", features = ["all"] }
 tokio = { version = "1", features = ["rt", "net", "time", "macros", "sync", "fs", "io-util", "process"] }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 url = "2"

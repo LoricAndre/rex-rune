@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
 use rexrs::AsyncRexClient;
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     sync::oneshot,
@@ -32,7 +32,23 @@ async fn io(endpoint: &str, url: &url::Url) -> Result<Box<dyn Io>> {
         .context("endpoint needs a port")?;
     let tcp = tokio::net::TcpStream::connect((host, port)).await?;
     tcp.set_nodelay(true)?;
+    detect_silent_peer(&tcp)?;
     Ok(Box::new(tcp))
+}
+
+/// A server that drops this connection while the network is gone (a laptop asleep) never sends
+/// a reset, so a client that only listens would wait forever. Probe idle connections, and give
+/// up on data the peer never acknowledges, so the pending read fails and the host or terminal
+/// reconnects within about 30 seconds of the network returning.
+fn detect_silent_peer(tcp: &tokio::net::TcpStream) -> std::io::Result<()> {
+    let socket = socket2::SockRef::from(tcp);
+    socket.set_tcp_keepalive(
+        &socket2::TcpKeepalive::new()
+            .with_time(Duration::from_secs(15))
+            .with_interval(Duration::from_secs(5))
+            .with_retries(3),
+    )?;
+    socket.set_tcp_user_timeout(Some(Duration::from_secs(30)))
 }
 
 pub async fn socket(endpoint: &str, path: &str, protocol: &str) -> Result<Socket> {
