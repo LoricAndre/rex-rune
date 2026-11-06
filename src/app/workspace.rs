@@ -668,6 +668,39 @@ impl Workspace {
         }
     }
 
+    pub fn select_window(&mut self, host: usize, session: String, window: String, tx: &mut Tx) {
+        self.active = host;
+        self.drag = None;
+        self.settings.hosts[host].collapsed = false;
+        self.update_visibility();
+        if self.hosts[host].model.selected.as_ref() != Some(&session) {
+            self.send(host, HostCommand::Select(session.clone()));
+        }
+        self.send(
+            host,
+            HostCommand::Request {
+                method: "session.focus_window".into(),
+                payload: json!({"session_id": session, "window_id": window}),
+            },
+        );
+        self.save();
+        self.update_title(tx);
+    }
+
+    /// Tabs are listed in the sidebar instead of the toolbar: Sidebar tab position, and
+    /// only while the sidebar is open.
+    pub fn sidebar_tabs(&self) -> bool {
+        self.settings.vertical_tabs && self.sidebar.is_open()
+    }
+
+    pub fn set_vertical_tabs(&mut self, vertical: bool) {
+        self.settings.vertical_tabs = vertical;
+        if vertical {
+            self.sidebar.set_open(true);
+        }
+        self.save();
+    }
+
     pub fn toggle_sidebar(&mut self) {
         self.sidebar.toggle();
         self.save();

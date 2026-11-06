@@ -171,6 +171,18 @@ fn interface(s: &Workspace) -> El {
                 .build(k)
                 .key("sidebar-switch"),
         ))
+        .child(setting(
+            "Tab position",
+            "In the toolbar, or under each session in the sidebar while it's open.",
+            SegmentedControl::new(
+                &["Top", "Sidebar"],
+                Some(usize::from(s.settings.vertical_tabs)),
+            )
+            .fit()
+            .on_pick(|s: &mut Workspace, i, _| s.set_vertical_tabs(i == 1))
+            .build(k)
+            .key("tab-position"),
+        ))
         .child(divider())
         .child(setting(
             "Notices",

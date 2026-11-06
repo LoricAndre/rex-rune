@@ -63,6 +63,7 @@ pub struct Settings {
     pub sidebar_width: f32,
     /// The sidebar was open when the app last saved, so it opens again at launch.
     pub sidebar_open: bool,
+    pub vertical_tabs: bool,
     pub font_size: f32,
     pub font_family: String,
     pub font_fallbacks: Vec<String>,
@@ -88,6 +89,7 @@ impl Default for Settings {
             sessions: HashMap::new(),
             sidebar_width: 236.,
             sidebar_open: false,
+            vertical_tabs: false,
             font_size: 15.,
             font_family: "JetBrainsMono Nerd Font".into(),
             font_fallbacks: Vec::new(),

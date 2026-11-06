@@ -2109,3 +2109,102 @@ fn font_preferences_validate_cancel_and_clear_optional_fallbacks() {
     assert_eq!(restored.font_family, "JetBrainsMono Nerd Font");
     std::fs::remove_file(&rt.state.settings_path).unwrap();
 }
+
+/// A workspace with sessions "s" (selected) and "other", each with two tabs, listing tabs in
+/// the sidebar.
+fn sidebar_tabs_workspace() -> (Workspace, flume::Receiver<HostCommand>) {
+    let (mut ws, rx) = tabbed_workspace("single");
+    let mut other = ws.hosts[0].model.views["s"].clone();
+    other.session_id = Some("other".into());
+    other.active_window_id = Some("other-first".into());
+    for (window, id) in other
+        .windows
+        .iter_mut()
+        .zip(["other-first", "other-second"])
+    {
+        window.window_id = Some(id.into());
+    }
+    ws.hosts[0].model.sessions.push(session("other"));
+    ws.hosts[0].model.views.insert("other".into(), other);
+    ws.set_vertical_tabs(true);
+    (ws, rx)
+}
+
+#[test]
+fn sidebar_tabs_replace_the_tab_strip_only_while_the_sidebar_is_open() {
+    let (ws, _rx) = sidebar_tabs_workspace();
+    assert!(ws.sidebar.is_open(), "choosing Sidebar opens the sidebar");
+    let saved = Settings::load(&ws.settings_path).unwrap();
+    assert!(saved.vertical_tabs && saved.sidebar_open);
+    let mut rt = runtime(ws);
+    for _ in 0..60 {
+        rt.frame(1. / 60.);
+    }
+    assert!(!has(&rt, "tab-track"), "tabs are not shown twice");
+    for tab in [
+        "s:single",
+        "s:split",
+        "other:other-first",
+        "other:other-second",
+    ] {
+        assert!(has(&rt, &format!("sidebar-tab:0:{tab}")), "{tab}");
+    }
+    ctrl_shift(&mut rt, 'b');
+    for _ in 0..60 {
+        rt.frame(1. / 60.);
+    }
+    assert!(!rt.state.sidebar.is_open());
+    assert!(
+        has(&rt, "tab-track"),
+        "closing the sidebar brings tabs back"
+    );
+    assert!(rt.state.settings.vertical_tabs, "the setting stays");
+    ctrl_shift(&mut rt, 'b');
+    for _ in 0..60 {
+        rt.frame(1. / 60.);
+    }
+    assert!(!has(&rt, "tab-track"));
+    rt.update(|s, _| s.set_vertical_tabs(false));
+    for _ in 0..60 {
+        rt.frame(1. / 60.);
+    }
+    assert!(has(&rt, "tab-track"));
+    assert!(!has(&rt, "sidebar-tab:0:s:single"));
+    assert!(
+        !Settings::load(&rt.state.settings_path)
+            .unwrap()
+            .vertical_tabs
+    );
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn a_sidebar_tab_selects_its_session_and_focuses_its_window() {
+    let (ws, rx) = sidebar_tabs_workspace();
+    let mut rt = runtime(ws);
+    for _ in 0..60 {
+        rt.frame(1. / 60.);
+    }
+    let sent = |rx: &flume::Receiver<HostCommand>| -> Vec<String> {
+        rx.try_iter()
+            .filter_map(|c| match c {
+                HostCommand::Select(id) => Some(format!("select {id}")),
+                HostCommand::Request { method, payload } => Some(format!(
+                    "{method} {} {}",
+                    payload["session_id"].as_str()?,
+                    payload["window_id"].as_str()?
+                )),
+                _ => None,
+            })
+            .collect()
+    };
+    sent(&rx);
+    click(&mut rt, "sidebar-tab:0:other:other-second");
+    assert_eq!(
+        sent(&rx),
+        ["select other", "session.focus_window other other-second"]
+    );
+    click(&mut rt, "sidebar-tab:0:s:split");
+    assert_eq!(sent(&rx), ["session.focus_window s split"]);
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
