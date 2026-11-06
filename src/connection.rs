@@ -87,6 +87,14 @@ pub struct TerminalSender {
     block: String,
 }
 impl TerminalSender {
+    /// Commands for one block, sent through its host's worker.
+    pub fn new(host: flume::Sender<HostCommand>, session: String, block: String) -> Self {
+        Self {
+            host,
+            session,
+            block,
+        }
+    }
     pub fn focus(&self) -> Result<()> {
         self.host
             .send(HostCommand::Request {
@@ -683,11 +691,7 @@ fn reconcile(
             let (wake, receiver) = flume::bounded(1);
             let connection = Connection {
                 model: state.clone(),
-                commands: TerminalSender {
-                    host: sender.clone(),
-                    session: session_id.clone(),
-                    block: id.clone(),
-                },
+                commands: TerminalSender::new(sender.clone(), session_id.clone(), id.clone()),
                 wake: receiver,
             };
             shared.update(|m| {

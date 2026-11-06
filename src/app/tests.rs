@@ -1694,3 +1694,70 @@ fn alt_arrows_belong_to_terminal_programs_and_ctrl_alt_arrows_move_pane_focus() 
         assert_eq!(call.2["direction"], direction);
     }
 }
+
+#[test]
+fn a_clipboard_paste_reaches_only_the_pane_that_asked_while_it_stays_focused() {
+    use rex_linux::connection::{Command, Connection, TerminalSender};
+    for (move_focus, expected) in [(false, Some("pasted")), (true, None)] {
+        let (mut ws, _rx) = tabbed_workspace("split");
+        let (sender, sent) = flume::unbounded();
+        for block in ["block:b", "block:c"] {
+            let connection = Connection {
+                model: Default::default(),
+                commands: TerminalSender::new(sender.clone(), "s".into(), block.into()),
+                wake: flume::unbounded().1,
+            };
+            {
+                let mut m = connection.model.lock().unwrap();
+                m.connected = true;
+                m.control_connected = true;
+            }
+            let key = ws.term_key(block);
+            ws.terminals.insert(key, super::term::Term::new(connection));
+        }
+        let mut rt = runtime(ws);
+        let clipboard = rune::clipboard::memory();
+        clipboard.set_text("pasted");
+        rt.use_clipboard(&clipboard);
+        let paste = KeyEvent {
+            key: Key::Text("V".into()),
+            mods: Mods {
+                ctrl: true,
+                shift: true,
+                ..Mods::default()
+            },
+        };
+        rt.update(move |s, tx| {
+            super::input::on_key(s, &paste, tx);
+        });
+        if move_focus {
+            rt.update(|s, _| {
+                let view = s.hosts[0].model.views.get_mut("s").unwrap();
+                view.windows[1].focused_block_id = Some("block:c".into());
+            });
+        }
+        for _ in 0..3 {
+            rt.frame(1. / 60.);
+        }
+        let pastes: Vec<(String, String)> = sent
+            .try_iter()
+            .filter_map(|c| match c {
+                HostCommand::Terminal {
+                    block,
+                    command: Command::Paste(text),
+                    ..
+                } => Some((block, text)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            pastes,
+            expected
+                .map(|text| ("block:b".to_owned(), text.to_owned()))
+                .into_iter()
+                .collect::<Vec<_>>(),
+            "focus moved: {move_focus}"
+        );
+        std::fs::remove_file(&rt.state.settings_path).ok();
+    }
+}
