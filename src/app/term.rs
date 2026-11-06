@@ -2,6 +2,7 @@
 //! and the cell grid, drawn on a fixed column grid.
 use super::{
     keys,
+    sprites::Sprite,
     theme::{MIDNIGHT, Palette, mix, rgb},
 };
 use ghostty_vt::style::Underline;
@@ -14,9 +15,7 @@ use rex_linux::{
     },
     terminal_theme::{TerminalTheme, is_light},
 };
-use rune::{
-    El, Family, LineCap, Mods, Path, Shape, Span, TextStyle, canvas, el, memo, rich, text,
-};
+use rune::{El, Family, LineCap, Mods, Path, Shape, Span, TextStyle, canvas, el, memo, rich, text};
 use serde_json::json;
 use std::{
     collections::HashMap,
@@ -63,6 +62,9 @@ pub struct MouseGesture {
 pub struct Metrics {
     pub cell: (f32, f32),
     pub style: TextStyle,
+    /// Device pixels per point the grid is drawn at, so box drawing lands on whole pixels:
+    /// 1 from `metrics`, the window's own in the pane view.
+    pub px: f32,
 }
 
 const FEATURES: &str = "'liga' 0, 'calt' 0, 'clig' 0, 'kern' 0";
@@ -77,6 +79,7 @@ pub fn metrics(size: f32) -> Metrics {
     Metrics {
         cell: (width, (size * 1.4).ceil()),
         style,
+        px: 1.,
     }
 }
 
@@ -660,6 +663,14 @@ fn row_pass(
         let mut chars = text.chars();
         let single = chars.next().filter(|_| chars.next().is_none());
         let wide = cells.get(col + 1).is_some_and(|c| c.spacer_tail);
+        if let Some(sprite) = single.and_then(Sprite::of) {
+            if let Some(done) = segment.take().and_then(|s| s.finish(m)) {
+                row = row.child(done);
+            }
+            let width = if wide { 2. * cw } else { cw };
+            row = sprite.draw(row, col as f32 * cw, (width, ch), m.px, rgb(style.fg));
+            continue;
+        }
         let fits = !wide && single.is_some_and(|c| fits_cell(c, style.bold, style.italic, m));
         if fits {
             if text == " " && segment.is_none() && !style.strike {
@@ -882,6 +893,7 @@ pub fn grid(key: &str, term: &Term, m: &Metrics, look: GridLook) -> El {
                 frame.bg,
                 cw.to_bits(),
                 ch.to_bits(),
+                m.px.to_bits(),
                 m.style,
                 pass,
                 colors,
@@ -1083,6 +1095,97 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A row at 1.5 device pixels per point, placed off the pixel grid.
+    fn scaled_view(s: &RowState, _: &mut Cx<RowState>) -> El {
+        let m = Metrics {
+            px: 1.5,
+            ..metrics(15.)
+        };
+        el().absolute(0.37, 0.71)
+            .w_full()
+            .h_full()
+            .child(row_el(&s.cells, 0., 0, None, &m))
+    }
+
+    /// The rectangles drawn for `text` in one row at 1.5 device pixels per point, in device
+    /// pixels, sorted from the left. Every one has whole-pixel edges.
+    fn scaled_rects(text: &str) -> Vec<[f32; 4]> {
+        let mut terminal = ghostty_vt::Terminal::new(ghostty_vt::TerminalOptions {
+            cols: 40,
+            rows: 2,
+            ..Default::default()
+        })
+        .unwrap();
+        terminal.vt_write(text.as_bytes());
+        let frame = rex_linux::terminal::Renderer::new()
+            .unwrap()
+            .frame(&terminal)
+            .unwrap();
+        let fonts = crate::app::fonts::load("JetBrainsMono Nerd Font", &[]);
+        let mut rt = Runtime::with_text(
+            RowState {
+                cells: frame.cells[0].clone(),
+            },
+            scaled_view,
+            (600., 100.),
+            Env::new(true, 1.5),
+            rune::text::TextSystem::new_with_paths(fonts.files, fonts.paths, fonts.families),
+        );
+        rt.frame(1. / 60.);
+        let mut rects: Vec<[f32; 4]> = rt
+            .instances
+            .iter()
+            .filter(|q| q.params[1] == rune::render::KIND_RECT)
+            .map(|q| q.rect)
+            .collect();
+        rects.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        for r in &rects {
+            assert!(
+                r.iter().all(|v| v.fract() == 0.),
+                "{r:?} is off the pixel grid"
+            );
+        }
+        rects
+    }
+
+    /// Each rectangle starts where an earlier one ends, or before.
+    fn assert_unbroken(rects: &[[f32; 4]]) {
+        let mut end = rects[0][0];
+        for r in rects {
+            assert!(r[0] <= end, "a gap before {r:?} in {rects:?}");
+            end = end.max(r[0] + r[2]);
+        }
+    }
+
+    #[test]
+    fn box_lines_land_on_whole_pixels_and_meet_their_neighbours() {
+        // Horizontal strokes: everything no taller than a heavy line.
+        let lines: Vec<_> = scaled_rects("╭─┬──━━")
+            .into_iter()
+            .filter(|r| r[3] <= 4.)
+            .collect();
+        let (light, heavy): (Vec<&[f32; 4]>, Vec<_>) = lines.iter().partition(|r| r[3] == 2.);
+        assert!(
+            light.len() >= 6 && light.iter().all(|r| r[1] == light[0][1]),
+            "light lines are one point, in whole pixels, on one row: {lines:?}"
+        );
+        assert_eq!(heavy.len(), 4, "heavy lines are twice as thick: {lines:?}");
+        assert_unbroken(&lines);
+    }
+
+    #[test]
+    fn block_elements_fill_whole_pixels_without_seams() {
+        let blocks = scaled_rects("████▌▐▀▄");
+        assert_eq!(blocks.len(), 8, "one rectangle per block: {blocks:?}");
+        let full = &blocks[..4];
+        assert!(
+            full.iter()
+                .all(|r| r[1] == full[0][1] && r[3] == full[0][3]),
+            "full blocks share their top and height: {full:?}"
+        );
+        assert_unbroken(full);
     }
 
     #[test]

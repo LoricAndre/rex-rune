@@ -572,8 +572,12 @@ fn target_block(s: &Workspace) -> Option<String> {
     .flatten()
 }
 
-pub fn area(s: &Workspace) -> El {
-    let m = term::metrics(s.settings.font_size);
+/// `px` is device pixels per point, for drawing terminal box drawing on whole pixels.
+pub fn area(s: &Workspace, px: f32) -> El {
+    let m = Metrics {
+        px,
+        ..term::metrics(s.settings.font_size)
+    };
     let mut area = el()
         .key("panes")
         .grow(1.)
