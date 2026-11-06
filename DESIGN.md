@@ -31,7 +31,7 @@ Interaction fills are translucent white over the surface: hover 7%, pressed 11%;
 
 ## Typography
 
-Chrome uses Inter (bundled with the kit) in 10–13 pt steps, weights about 450 (body), 560 (medium), 620 (strong); group labels are 10.5 pt small capitals with 0.6 tracking. The terminal font is configurable (`--font`, `--font-size`, saved size 8–48 px; default JetBrainsMono Nerd Font 15) and falls back to bundled IBM Plex Mono. Cell width follows the font's advance; ligatures and kerning are off so the grid stays exact. Names keep their case and ellipsize when space is bounded, with tooltips for the full text. Server windows are called **tabs**.
+Chrome uses Inter (bundled with the kit) in 10–13 pt steps, weights about 450 (body), 560 (medium), 620 (strong); group labels are 10.5 pt small capitals with 0.6 tracking. The terminal family, ordered fallback families and size (8–48 px) are saved locally, and `--font`, repeated `--font-fallback` and `--font-size` override them for one launch; the default is JetBrainsMono Nerd Font 15. Missing glyphs come from the named fallbacks in order, then bundled IBM Plex Mono, then the system's script and symbol fallbacks; an unavailable primary is replaced by IBM Plex Mono. Family changes apply after reopening the client. Cell width follows the primary font's advance; ligatures and kerning are off so the grid stays exact. Names keep their case and ellipsize when space is bounded, with tooltips for the full text. Server windows are called **tabs**.
 
 ## Layout and shape
 

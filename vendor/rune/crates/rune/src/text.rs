@@ -69,6 +69,15 @@ const DEFAULT_FONTS: [&[u8]; 2] = [
     include_bytes!("../assets/IBMPlexMono-Regular.ttf"),
 ];
 
+/// Native font files every subsequently created app text system registers by path.
+static APP_FONT_PATHS: std::sync::OnceLock<&'static [std::path::PathBuf]> = std::sync::OnceLock::new();
+
+/// Set process-wide native font files before constructing an app. Returns the paths when another
+/// caller already initialized them.
+pub fn set_app_font_paths(paths: &'static [std::path::PathBuf]) -> Result<(), &'static [std::path::PathBuf]> {
+    APP_FONT_PATHS.set(paths)
+}
+
 /// Scripts the app's own families usually lack: Han, kana, Hangul and Bopomofo.
 const CJK_SCRIPTS: [&[u8; 4]; 5] = [b"Hani", b"Hira", b"Kana", b"Hang", b"Bopo"];
 
@@ -163,8 +172,8 @@ fn family_list<'a>(list: &'a str, system_mono: &'a [String], sans: &'a str) -> V
 }
 
 /// The installed families among `names`, loading the system font files matching `files`.
-fn load_families(collection: &mut Collection, files: &[&str], names: &[&'static str]) -> Vec<&'static str> {
-    collection.load_fonts_from_paths(system_font_files(files));
+fn load_families(collection: &mut Collection, loaded: &mut LoadedFiles, files: &[&str], names: &[&'static str]) -> Vec<&'static str> {
+    load_files(collection, loaded, system_font_files(files));
     names.iter().copied().filter(|name| collection.family_id(name).is_some()).collect()
 }
 
@@ -271,6 +280,20 @@ fn walk_font_dirs() -> Vec<(String, std::path::PathBuf)> {
         dirs.extend(data_dirs.split(':').filter(|d| !d.is_empty()).map(|d| std::path::Path::new(d).join("fonts")));
     }
     let mut found: Vec<(String, std::path::PathBuf)> = Vec::new();
+    let font = |name: &str| [".ttf", ".otf", ".ttc", ".otc"].iter().any(|ext| name.ends_with(ext));
+    // Nix and other fontconfig setups expose fonts outside the conventional directories.
+    #[cfg(target_os = "linux")]
+    if let Ok(out) = std::process::Command::new("fc-list").args(["-f", "%{file}\n"]).output()
+        && out.status.success()
+    {
+        for file in String::from_utf8_lossy(&out.stdout).lines() {
+            let path = std::path::PathBuf::from(file);
+            let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_lowercase()) else { continue };
+            if font(&name) {
+                found.push((name.replace([' ', '.'], ""), path));
+            }
+        }
+    }
     let mut stack = dirs;
     let mut visited = std::collections::HashSet::new();
     while let Some(dir) = stack.pop() {
@@ -285,12 +308,13 @@ fn walk_font_dirs() -> Vec<(String, std::path::PathBuf)> {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().to_lowercase();
-            let font = [".ttf", ".otf", ".ttc", ".otc"].iter().any(|ext| name.ends_with(ext));
-            if font {
+            if font(&name) {
                 found.push((name.replace([' ', '.'], ""), path));
             }
         }
     }
+    let mut seen = std::collections::HashSet::new();
+    found.retain(|(_, path)| seen.insert(path.clone()));
     found
 }
 
@@ -1462,7 +1486,13 @@ impl TextSystem {
     /// bundled sans and mono fallbacks, since there are no system fonts to discover.
     /// `families` names the sans and mono slots; others are selectable with `Family::Named`.
     pub fn new(fonts: &[&'static [u8]], families: (&str, &str)) -> Self {
-        measure::note_fonts(fonts, families);
+        Self::new_with_paths(fonts, APP_FONT_PATHS.get().copied().unwrap_or(&[]), families)
+    }
+
+    /// Like [`Self::new`], with native font files registered from paths without first copying
+    /// their contents into application-owned buffers.
+    pub fn new_with_paths(fonts: &[&'static [u8]], font_paths: &[std::path::PathBuf], families: (&str, &str)) -> Self {
+        measure::note_fonts(fonts, font_paths, families);
         let mut collection = Collection::new(CollectionOptions { shared: false, system_fonts: false });
         let list: &[&'static [u8]] = if fonts.is_empty() { &DEFAULT_FONTS } else { fonts };
         let mut registered = Vec::new();
@@ -1478,8 +1508,14 @@ impl TextSystem {
             registered.extend(added);
         }
         let mut font_files = LoadedFiles::new();
+        #[cfg(not(target_arch = "wasm32"))]
+        for id in load_files(&mut collection, &mut font_files, font_paths.iter().cloned()) {
+            if !registered.contains(&id) {
+                registered.push(id);
+            }
+        }
         register_cjk_fallbacks(&mut collection, &mut font_files, &registered, families);
-        let symbol_families = load_families(&mut collection, SYMBOL_FONT_FILES, SYMBOL_FAMILIES);
+        let symbol_families = load_families(&mut collection, &mut font_files, SYMBOL_FONT_FILES, SYMBOL_FAMILIES);
         let emoji = symbol_families.iter().copied().find(|f| f.contains("Emoji"));
         #[cfg(target_arch = "wasm32")]
         let families = if fonts.is_empty() { ("Inter", "IBM Plex Mono") } else { families };
@@ -1701,7 +1737,7 @@ impl TextSystem {
                 }
             }
             if symbols {
-                self.math = Some(load_families(&mut self.font_cx.collection, fallback::MATH_FONT_FILES, fallback::MATH_FAMILIES));
+                self.math = Some(load_families(&mut self.font_cx.collection, &mut self.font_files, fallback::MATH_FONT_FILES, fallback::MATH_FAMILIES));
             }
         }
         // `trak` tracking at the point size (see `trak.rs`), on top of `style.tracking`. An

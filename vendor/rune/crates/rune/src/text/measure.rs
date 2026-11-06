@@ -15,6 +15,7 @@ use crate::tok::TextStyle;
 struct Fonts {
     generation: u64,
     fonts: Vec<&'static [u8]>,
+    font_paths: Vec<std::path::PathBuf>,
     families: (String, String),
 }
 
@@ -33,13 +34,14 @@ thread_local! {
     static MEASURER: RefCell<Option<Measurer>> = const { RefCell::new(None) };
 }
 
-/// Called by every [`TextSystem::new`]; the next measurement uses these fonts.
-pub(super) fn note_fonts(fonts: &[&'static [u8]], families: (&str, &str)) {
+/// Called by every [`TextSystem::new`] or [`TextSystem::new_with_paths`]; the next measurement
+/// uses the same fonts.
+pub(super) fn note_fonts(fonts: &[&'static [u8]], font_paths: &[std::path::PathBuf], families: (&str, &str)) {
     let Ok(mut slot) = FONTS.lock() else { return };
-    let same = slot.as_ref().is_some_and(|f| f.fonts == fonts && f.families.0 == families.0 && f.families.1 == families.1);
+    let same = slot.as_ref().is_some_and(|f| f.fonts == fonts && f.font_paths == font_paths && f.families.0 == families.0 && f.families.1 == families.1);
     if !same {
         let generation = slot.as_ref().map_or(1, |f| f.generation + 1);
-        *slot = Some(Fonts { generation, fonts: fonts.to_vec(), families: (families.0.to_owned(), families.1.to_owned()) });
+        *slot = Some(Fonts { generation, fonts: fonts.to_vec(), font_paths: font_paths.to_vec(), families: (families.0.to_owned(), families.1.to_owned()) });
     }
 }
 
@@ -68,9 +70,9 @@ pub(super) fn with_text<R>(f: impl FnOnce(&mut TextSystem) -> R) -> R {
     MEASURER.with_borrow_mut(|m| {
         let current = generation();
         if m.as_ref().is_none_or(|m| m.generation != current) {
-            let wanted = FONTS.lock().ok().and_then(|f| f.as_ref().map(|f| (f.fonts.clone(), f.families.clone())));
+            let wanted = FONTS.lock().ok().and_then(|f| f.as_ref().map(|f| (f.fonts.clone(), f.font_paths.clone(), f.families.clone())));
             let text = match &wanted {
-                Some((fonts, (sans, mono))) => TextSystem::new(fonts, (sans, mono)),
+                Some((fonts, paths, (sans, mono))) => TextSystem::new_with_paths(fonts, paths, (sans, mono)),
                 None => TextSystem::default(),
             };
             // Building a text system notes its fonts, so read the generation it settled on.

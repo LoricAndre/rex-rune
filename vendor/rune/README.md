@@ -37,6 +37,14 @@ manager's menu. The patch adds the following without changing existing behavior 
   A completed key carries winit's composed text, so a dead key followed by Space types its
   accent rather than a space. Headless scripts accept
   `{"type":"key","dead":"~","code":"backquote"}` for this path.
+- `text::set_app_font_paths()` and `TextSystem::new_with_paths()` register native font files by
+  path, so large system fonts stay memory-mapped instead of being copied into process-lifetime
+  byte buffers. Symbol and math fallbacks go through the same per-file cache, so a file the app
+  registered is not loaded twice. The embedded-font API is unchanged.
+- Linux system-font discovery includes `fc-list` results and deduplicates them with the
+  conventional directory scan. This lets Rune's existing CJK, symbol and script fallbacks
+  find fontconfig-managed files outside `/usr/share/fonts`, including Nix store fonts.
+  It does not change the configured primary family or the font-selection machinery.
 
 Spike: `examples/chrome_spike.rs` and `scripts/chrome-spike-x11.py`.
 
