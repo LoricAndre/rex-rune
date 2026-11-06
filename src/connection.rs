@@ -188,6 +188,8 @@ pub struct HostModel {
     pub activity_epoch: u64,
     /// The server refused `set_theme`, so this host is never sent a theme again.
     pub themes_unsupported: bool,
+    /// A theme was declared to this server, by `set_theme` or in a new block's layout.
+    pub theme_declared: bool,
 }
 impl HostModel {
     /// Record a block's owner (none when nobody owns it), in its session's view and its pane.
@@ -918,6 +920,7 @@ async fn declare_themes(
             // A block that closed meanwhile or a slow reply isn't retried on this connection.
             _ => {
                 state.themed.insert(block, wanted);
+                shared.update(|m| m.theme_declared = true);
             }
         }
     }
@@ -1526,7 +1529,10 @@ async fn handle_command(
 
 /// The theme a block this client creates starts with, unless the server refused themes.
 fn new_block_theme<'a>(shared: &Shared, theme: Option<&'a SetTheme>) -> Option<&'a SetTheme> {
-    theme.filter(|_| !shared.model.lock().expect("host model").themes_unsupported)
+    let mut m = shared.model.lock().expect("host model");
+    let theme = theme.filter(|_| !m.themes_unsupported);
+    m.theme_declared |= theme.is_some();
+    theme
 }
 
 async fn resize(

@@ -1285,6 +1285,86 @@ async fn follow_server_declares_nothing_and_resets_what_it_declared() {
 }
 
 #[tokio::test]
+async fn follow_server_declares_nothing_and_records_no_declaration() {
+    let mut server = ThemeServer::start(&[("block:a", None)], None).await;
+    let host = HostConnection::spawn(server.endpoint.clone(), None, None, None, true, None);
+    let (themes, _) = server
+        .themes_until("com.superlogical.terminal.program_status")
+        .await;
+    assert_eq!(themes, []);
+    server.owner("block:a", Some("client:test"));
+    assert_eq!(server.themes_after_events().await, []);
+    host.commands.send(HostCommand::Reconnect).unwrap();
+    server.themes_until("session.bootstrap").await;
+    let (themes, _) = server
+        .themes_until("com.superlogical.terminal.program_status")
+        .await;
+    assert_eq!(themes, []);
+    assert!(!host.model.lock().unwrap().theme_declared);
+    drop(host);
+}
+
+/// A client that once declared a theme follows the server with an empty declaration.
+#[tokio::test]
+async fn a_reset_goes_to_each_eligible_block_once_per_connection() {
+    let mut server = ThemeServer::start(
+        &[("block:a", None), ("block:b", Some("client:other"))],
+        None,
+    )
+    .await;
+    let reset = SetTheme::new();
+    let empty = json!({});
+    let host = HostConnection::spawn(
+        server.endpoint.clone(),
+        None,
+        None,
+        None,
+        true,
+        Some(reset.clone()),
+    );
+    let (themes, _) = server
+        .themes_until("com.superlogical.terminal.program_status")
+        .await;
+    assert_eq!(
+        themes,
+        declared(&["block:a"], &empty),
+        "not another client's"
+    );
+    assert!(host.model.lock().unwrap().theme_declared);
+    assert_eq!(
+        themes_after_command(&mut server, &host, HostCommand::Theme(Some(reset.clone()))).await,
+        [],
+        "once per block on a connection"
+    );
+    server.owner("block:b", Some("client:test"));
+    assert_eq!(
+        server.themes_after_events().await,
+        declared(&["block:b"], &empty),
+        "taking a block resets it"
+    );
+    server.owner("block:b", Some("client:other"));
+    server.owner("block:b", Some("client:test"));
+    assert_eq!(server.themes_after_events().await, []);
+
+    host.commands.send(HostCommand::Reconnect).unwrap();
+    server.themes_until("session.bootstrap").await;
+    let (themes, _) = server
+        .themes_until("com.superlogical.terminal.program_status")
+        .await;
+    assert_eq!(
+        themes,
+        declared(&["block:a"], &empty),
+        "again after reconnect"
+    );
+    server.owner("block:b", Some("client:test"));
+    assert_eq!(
+        server.themes_after_events().await,
+        declared(&["block:b"], &empty)
+    );
+    drop(host);
+}
+
+#[tokio::test]
 async fn themes_are_declared_again_after_reconnect_with_the_latest_choice() {
     let mut server = ThemeServer::start(&[("block:a", None)], None).await;
     let first = SetTheme::new().background("#111111");

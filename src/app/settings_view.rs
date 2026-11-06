@@ -311,7 +311,7 @@ fn terminal(s: &Workspace) -> El {
         .child(divider())
         .child(setting(
             "Theme",
-            "Declared to Rex for panes this client owns or nobody owns. Follow server declares none, after resetting panes this client themed to Rex's colours.",
+            "Declared to Rex for panes this client owns or nobody owns. Follow server declares nothing until this client has declared a theme once; from then on it resets those panes to Rex's colours, once each per connection.",
             row()
                 .gap(10.)
                 .center_y()

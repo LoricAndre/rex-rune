@@ -107,6 +107,10 @@ pub struct Settings {
     /// Passed to `rex skill setup` as `--session-naming`, always explicitly.
     pub agent_session_naming: bool,
     pub terminal_theme: TerminalThemeChoice,
+    /// This client has declared a terminal theme to some server at least once. Rex keeps a
+    /// client's last declaration per block across launches, so Follow server then resets
+    /// eligible blocks to Rex's colours. Never cleared automatically.
+    pub terminal_theme_declared: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -133,6 +137,7 @@ impl Default for Settings {
             notifications: NotificationsConfig::default(),
             agent_session_naming: false,
             terminal_theme: TerminalThemeChoice::default(),
+            terminal_theme_declared: false,
         }
     }
 }
@@ -301,6 +306,7 @@ mod tests {
     fn the_terminal_theme_round_trips_and_unknown_values_follow_the_server() {
         let old: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(old.terminal_theme, TerminalThemeChoice::FollowServer);
+        assert!(!old.terminal_theme_declared);
         for (choice, saved) in [
             (TerminalThemeChoice::FollowServer, "follow_server"),
             (TerminalThemeChoice::RexDefault, "builtin_default"),

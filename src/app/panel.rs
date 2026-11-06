@@ -384,7 +384,11 @@ impl Workspace {
         };
         add(
             "Follow server",
-            "Declares nothing",
+            if self.settings.terminal_theme_declared {
+                "Resets to Rex's colours"
+            } else {
+                "Declares nothing"
+            },
             "Server",
             TerminalThemeChoice::FollowServer,
         );

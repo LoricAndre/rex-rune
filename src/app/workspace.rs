@@ -16,6 +16,7 @@ use rex_linux::{
     },
     terminal_theme::{TerminalTheme, ThemeDirs, ThemeInfo},
 };
+use rexrs::api::terminal::SetTheme;
 use rune::{AppHandle, PhysicalKeyCode, TextEdit, Tx};
 use serde_json::{Value, json};
 use std::{
@@ -243,7 +244,7 @@ impl Workspace {
                 .map(|label| (label, host.shell.clone())),
             cli.then(|| self.options.block.clone()).flatten(),
             index == self.active,
-            self.term_theme.as_ref().map(TerminalTheme::args),
+            self.declared_theme(),
         );
         let id = HostId(self.next_host);
         self.next_host += 1;
@@ -390,6 +391,9 @@ impl Workspace {
                 self.settings.hosts[index].endpoint.clone(),
                 selected.clone(),
             );
+        }
+        if model.theme_declared {
+            self.note_theme_declared();
         }
         self.hosts[index].model = model;
         if let Some(copy) = clipboard
@@ -683,12 +687,15 @@ impl Workspace {
 
     /// One new terminal for `host`: its default shell, with the declared theme unless the
     /// host refused themes.
-    pub fn new_terminal(&self, host: usize) -> Value {
+    pub fn new_terminal(&mut self, host: usize) -> Value {
         let theme = self
             .term_theme
             .as_ref()
             .filter(|_| !self.hosts[host].model.themes_unsupported)
             .map(TerminalTheme::args);
+        if theme.is_some() {
+            self.note_theme_declared();
+        }
         shell_layout(self.shell(host), theme.as_ref())
     }
 
@@ -699,15 +706,39 @@ impl Workspace {
     /// Declare the theme `choice` names from now on, on every host, and remember it. Nothing
     /// changes when the theme can't be read.
     pub fn apply_theme(&mut self, choice: TerminalThemeChoice) -> anyhow::Result<()> {
-        let theme = self.theme_dirs.resolve(&choice)?;
-        let args = theme.as_ref().map(TerminalTheme::args);
-        self.term_theme = theme;
+        self.term_theme = self.theme_dirs.resolve(&choice)?;
         self.settings.terminal_theme = choice;
         self.save();
+        self.declare_theme();
+        Ok(())
+    }
+
+    /// What every host declares to the blocks this client may theme: the chosen theme, or
+    /// without one, Rex's own colours once this client has ever declared a theme, since Rex
+    /// keeps a client's last declaration per block across launches.
+    pub fn declared_theme(&self) -> Option<SetTheme> {
+        match &self.term_theme {
+            Some(theme) => Some(theme.args()),
+            None => self.settings.terminal_theme_declared.then(SetTheme::new),
+        }
+    }
+
+    fn declare_theme(&mut self) {
+        let args = self.declared_theme();
         for index in 0..self.hosts.len() {
             self.send(index, HostCommand::Theme(args.clone()));
         }
-        Ok(())
+    }
+
+    /// Remember for good that a theme reached a server, so Follow server resets from now on.
+    fn note_theme_declared(&mut self) {
+        if !self.settings.terminal_theme_declared {
+            self.settings.terminal_theme_declared = true;
+            self.save();
+            if self.term_theme.is_none() {
+                self.declare_theme();
+            }
+        }
     }
 
     /// The Theme setting's name for `choice`.
@@ -867,13 +898,14 @@ impl Workspace {
                 "Add host",
                 &[("Host name", "my-host", ""), ("Endpoint", "https://host.example.ts.net or unix:///path", "")],
             ),
-            Intent::NewWindow => self.request(
-                "session.new_window",
-                json!({"window_label":DEFAULT_TAB_LABEL,"layout":self.new_terminal(self.active),"focus":true}),
-            ),
+            Intent::NewWindow => {
+                let layout = self.new_terminal(self.active);
+                self.request("session.new_window", json!({"window_label":DEFAULT_TAB_LABEL,"layout":layout,"focus":true}));
+            }
             Intent::Split(direction) => {
                 if let Some(block) = self.focused_block() {
-                    self.request("session.new_split", split_payload(&block, direction, self.new_terminal(self.active)));
+                    let layout = self.new_terminal(self.active);
+                    self.request("session.new_split", split_payload(&block, direction, layout));
                 }
             }
             Intent::RenameSession => {
@@ -1153,11 +1185,14 @@ impl Workspace {
             );
         };
         match action {
-            PaneAction::Split(direction) => request(
-                self,
-                "session.new_split",
-                split_payload(&target.block, direction, self.new_terminal(target.host)),
-            ),
+            PaneAction::Split(direction) => {
+                let layout = self.new_terminal(target.host);
+                request(
+                    self,
+                    "session.new_split",
+                    split_payload(&target.block, direction, layout),
+                )
+            }
             PaneAction::Zoom => {
                 request(
                     self,

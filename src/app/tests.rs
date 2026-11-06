@@ -1240,6 +1240,65 @@ fn the_theme_picker_filters_declares_to_every_host_and_returns_to_settings() {
 }
 
 #[test]
+fn follow_server_resets_only_after_a_theme_was_ever_declared() {
+    let mut ws = workspace_hosts(2);
+    let hosts = [capture_host(&mut ws, 0), capture_host(&mut ws, 1)];
+    let mut tx = rune::Tx::default();
+    let declared = |host: &flume::Receiver<HostCommand>| {
+        host.try_iter()
+            .filter_map(|c| match c {
+                HostCommand::Theme(args) => Some(args),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ws.declared_theme(), None, "a fresh client declares nothing");
+    ws.apply_theme(TerminalThemeChoice::FollowServer).unwrap();
+    for host in &hosts {
+        assert_eq!(declared(host), [None]);
+    }
+    ws.sync(0, &mut tx);
+    assert!(!ws.settings.terminal_theme_declared);
+    assert!(hosts.iter().all(|h| h.is_empty()));
+
+    ws.hosts[0].connection.model.lock().unwrap().theme_declared = true;
+    ws.sync(0, &mut tx);
+    assert!(
+        ws.settings.terminal_theme_declared,
+        "set by the first declaration"
+    );
+    assert!(
+        Settings::load(&ws.settings_path)
+            .unwrap()
+            .terminal_theme_declared
+    );
+    let reset = || Some(rexrs::api::terminal::SetTheme::new());
+    for host in &hosts {
+        assert_eq!(declared(host), [reset()], "Follow server now resets");
+    }
+    ws.sync(0, &mut tx);
+    assert!(hosts.iter().all(|h| h.is_empty()), "told once");
+    assert_eq!(
+        relaunch(&ws).declared_theme(),
+        reset(),
+        "and on every later launch"
+    );
+    ws.apply_theme(TerminalThemeChoice::FollowServer).unwrap();
+    assert_eq!(declared(&hosts[1]), [reset()]);
+    std::fs::remove_file(&ws.settings_path).ok();
+
+    let mut ws = workspace();
+    let _host = capture_host(&mut ws, 0);
+    ws.term_theme = Some(rex_linux::terminal_theme::TerminalTheme::midnight());
+    ws.perform(Intent::NewWindow, &mut tx);
+    assert!(
+        ws.settings.terminal_theme_declared,
+        "a theme in a new tab's layout is a declaration"
+    );
+    std::fs::remove_file(&ws.settings_path).ok();
+}
+
+#[test]
 fn removing_a_host_keeps_the_others_and_ignores_its_late_wakes() {
     let mut ws = workspace_hosts(3);
     let ids: Vec<_> = ws.hosts.iter().map(|h| h.id).collect();
