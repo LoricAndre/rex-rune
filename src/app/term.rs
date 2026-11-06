@@ -62,17 +62,28 @@ pub struct MouseGesture {
 }
 
 /// The first frame of a pane is at whatever size the server last had for it; the resize this
-/// client sends only lands a moment later. An owner hides frames until one matches its grid,
-/// once. A non-owner never resizes, so its frames may never match and are drawn as they come.
+/// client sends only lands a moment later. During each uninterrupted live ownership epoch, an
+/// owner hides frames until one matches its first grid size. A non-owner never resizes, so its
+/// frames may never match and are drawn as they come.
 #[derive(Default)]
 struct InitialSize {
     expected: Option<(u16, u16)>,
     ready: bool,
+    live_owner: bool,
 }
 
 impl InitialSize {
+    fn transition(&mut self, status: &Status) {
+        let live_owner = status.live && status.owner;
+        if live_owner != self.live_owner {
+            self.expected = None;
+            self.ready = false;
+            self.live_owner = live_owner;
+        }
+    }
+
     fn layout(&mut self, size: (u16, u16), frame: Option<(u16, u16)>) {
-        if self.ready {
+        if !self.live_owner || self.ready {
             return;
         }
         self.expected = Some(size);
@@ -87,7 +98,7 @@ impl InitialSize {
     }
 
     fn renders(&self, status: &Status) -> bool {
-        self.ready || !status.live || !status.owner
+        !status.live || !status.owner || (self.live_owner && self.ready)
     }
 }
 
@@ -260,11 +271,12 @@ impl Term {
 
     /// A non-owner never resizes; an owner sends its grid size whenever it changes.
     pub fn resize_if_owner(&mut self, font: f32) {
+        let status = self.status();
+        self.initial_size.transition(&status);
         if self.rect[2] <= 0. || self.rect[3] <= 0. {
             return;
         }
         let Metrics { cell, .. } = metrics(font);
-        let status = self.status();
         let cols = (self.rect[2] / cell.0).floor().clamp(1., 65535.) as u16;
         let rows = (self.rect[3] / cell.1).floor().clamp(1., 65535.) as u16;
         self.initial_size.layout(
@@ -1098,26 +1110,19 @@ mod tests {
     }
 
     #[test]
-    fn an_owner_waits_once_for_a_frame_at_its_size_and_a_non_owner_never_waits() {
+    fn an_owner_waits_once_per_live_ownership_epoch_and_a_non_owner_never_waits() {
         let status = |live, owner| Status {
             live,
             owner,
             status: String::new(),
         };
         let mut size = InitialSize::default();
+        size.transition(&status(true, true));
         assert!(!size.renders(&status(true, true)), "hidden before layout");
-        assert!(
-            size.renders(&status(false, true)),
-            "retained output offline"
-        );
         size.layout((80, 24), Some((160, 50)));
         assert!(
             !size.renders(&status(true, true)),
             "stale size stays hidden"
-        );
-        assert!(
-            size.renders(&status(true, false)),
-            "a non-owner never resizes, so it draws the size it gets"
         );
         size.observe(Some((80, 24)));
         assert!(size.renders(&status(true, true)), "this size shows");
@@ -1125,6 +1130,29 @@ mod tests {
         assert!(
             size.renders(&status(true, true)),
             "a later resize keeps drawing the previous frame"
+        );
+
+        size.transition(&status(true, false));
+        assert!(
+            size.renders(&status(true, false)),
+            "a non-owner draws the size it gets"
+        );
+        size.transition(&status(true, true));
+        size.layout((100, 30), Some((80, 24)));
+        assert!(
+            !size.renders(&status(true, true)),
+            "taking ownership starts a new wait"
+        );
+        size.transition(&status(false, true));
+        assert!(
+            size.renders(&status(false, true)),
+            "retained output stays visible offline"
+        );
+        size.transition(&status(true, true));
+        size.layout((100, 30), Some((80, 24)));
+        assert!(
+            !size.renders(&status(true, true)),
+            "reconnecting starts a new wait"
         );
     }
 
