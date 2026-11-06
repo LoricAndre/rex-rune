@@ -2,8 +2,8 @@
 use super::theme::{MONITOR, SERVER};
 use super::workspace::Workspace;
 use rex_linux::{
-    settings::TerminalThemeChoice,
-    terminal_theme::{BUILTIN_PREFIX, BUILTINS},
+    settings::{ChromeTheme, TerminalThemeChoice},
+    terminal_theme::{BUILTIN_PREFIX, BUILTINS, paired},
 };
 use rune::TextEdit;
 use serde_json::Value;
@@ -39,6 +39,10 @@ pub enum Intent {
     ChooseTheme,
     /// Declare this terminal theme from now on, then return to Settings.
     Theme(TerminalThemeChoice),
+    /// The chrome palette picker, from Settings.
+    ChooseChrome,
+    /// Draw the chrome in this palette from now on, then return to Settings.
+    Chrome(ChromeTheme),
 }
 impl Intent {
     /// Actions that open another panel instead of closing the current one.
@@ -54,6 +58,7 @@ impl Intent {
                 | Intent::Settings
                 | Intent::Fonts
                 | Intent::ChooseTheme
+                | Intent::ChooseChrome
                 | Intent::AddHost
                 | Intent::EditHost(_)
                 | Intent::RemoveHost(_)
@@ -169,6 +174,8 @@ pub enum PanelKind {
     Settings,
     /// The terminal themes, filtered by the search field.
     Themes,
+    /// The chrome palettes.
+    Chromes,
     /// Confirm forgetting a saved host; its server and programs are untouched.
     RemoveHost(usize),
     Confirm {
@@ -238,6 +245,7 @@ impl Panel {
                 | PanelKind::Host(_)
                 | PanelKind::Window(_)
                 | PanelKind::Themes
+                | PanelKind::Chromes
         )
     }
 }
@@ -398,6 +406,12 @@ impl Workspace {
             "Server",
             TerminalThemeChoice::RexDefault,
         );
+        add(
+            "Follow chrome",
+            paired(self.settings.chrome_theme).name,
+            "Built in",
+            TerminalThemeChoice::FollowChrome,
+        );
         for builtin in BUILTINS {
             let id = format!("{BUILTIN_PREFIX}{}", builtin.id);
             add(builtin.name, "", "Built in", TerminalThemeChoice::Named(id));
@@ -423,6 +437,16 @@ impl Workspace {
         let lower = query.to_lowercase();
         if matches!(panel.kind, PanelKind::Themes) {
             return self.theme_entries(&lower);
+        }
+        if matches!(panel.kind, PanelKind::Chromes) {
+            return ChromeTheme::ALL
+                .into_iter()
+                .map(|chrome| {
+                    let mut e = Entry::new(chrome.name(), "", "", Intent::Chrome(chrome));
+                    e.current = chrome == self.settings.chrome_theme;
+                    e
+                })
+                .collect();
         }
         if let PanelKind::Hosts(name) = &panel.kind {
             return self

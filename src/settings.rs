@@ -54,9 +54,38 @@ impl Default for NotificationsConfig {
     }
 }
 
+/// The palette the chrome is drawn in. A value this version doesn't know reads as Midnight.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChromeTheme {
+    RosePine,
+    RosePineMoon,
+    GruvboxDark,
+    #[default]
+    #[serde(other)]
+    Midnight,
+}
+impl ChromeTheme {
+    pub const ALL: [ChromeTheme; 4] = [
+        ChromeTheme::Midnight,
+        ChromeTheme::RosePine,
+        ChromeTheme::RosePineMoon,
+        ChromeTheme::GruvboxDark,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            ChromeTheme::Midnight => "Midnight",
+            ChromeTheme::RosePine => "Rosé Pine",
+            ChromeTheme::RosePineMoon => "Rosé Pine Moon",
+            ChromeTheme::GruvboxDark => "Gruvbox Dark",
+        }
+    }
+}
+
 /// The terminal theme this client declares to the server, saved as `follow_server`,
-/// `builtin_default` or `named:<id>`. An id is a Ghostty theme's file name, or a built-in
-/// theme's after `rex/`. A value this version doesn't know reads as Follow server.
+/// `builtin_default`, `follow_chrome` or `named:<id>`. An id is a Ghostty theme's file name,
+/// or a built-in theme's after `rex/`. A value this version doesn't know reads as Follow
+/// server.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub enum TerminalThemeChoice {
@@ -65,12 +94,16 @@ pub enum TerminalThemeChoice {
     FollowServer,
     /// Declare Rex's built-in colours.
     RexDefault,
+    /// Declare the built-in theme paired with the chrome palette, whose background is the
+    /// chrome's ground.
+    FollowChrome,
     Named(String),
 }
 impl From<String> for TerminalThemeChoice {
     fn from(value: String) -> Self {
         match value.as_str() {
             "builtin_default" => Self::RexDefault,
+            "follow_chrome" => Self::FollowChrome,
             _ => match value.strip_prefix("named:") {
                 Some(id) if !id.is_empty() => Self::Named(id.to_owned()),
                 _ => Self::FollowServer,
@@ -83,6 +116,7 @@ impl From<TerminalThemeChoice> for String {
         match choice {
             TerminalThemeChoice::FollowServer => "follow_server".into(),
             TerminalThemeChoice::RexDefault => "builtin_default".into(),
+            TerminalThemeChoice::FollowChrome => "follow_chrome".into(),
             TerminalThemeChoice::Named(id) => format!("named:{id}"),
         }
     }
@@ -106,7 +140,11 @@ pub struct Settings {
     pub notifications: NotificationsConfig,
     /// Passed to `rex skill setup` as `--session-naming`, always explicitly.
     pub agent_session_naming: bool,
+    pub chrome_theme: ChromeTheme,
     pub terminal_theme: TerminalThemeChoice,
+    /// The user picked a terminal theme themselves at least once, so choosing a chrome
+    /// palette leaves it alone. Until then a palette brings its paired theme (Follow chrome).
+    pub terminal_theme_chosen: bool,
     /// This client has declared a terminal theme to some server at least once. Rex keeps a
     /// client's last declaration per block across launches, so Follow server then resets
     /// eligible blocks to Rex's colours. Never cleared automatically.
@@ -136,7 +174,9 @@ impl Default for Settings {
             notice_position: NoticePosition::default(),
             notifications: NotificationsConfig::default(),
             agent_session_naming: false,
+            chrome_theme: ChromeTheme::default(),
             terminal_theme: TerminalThemeChoice::default(),
+            terminal_theme_chosen: false,
             terminal_theme_declared: false,
         }
     }
@@ -306,10 +346,11 @@ mod tests {
     fn the_terminal_theme_round_trips_and_unknown_values_follow_the_server() {
         let old: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(old.terminal_theme, TerminalThemeChoice::FollowServer);
-        assert!(!old.terminal_theme_declared);
+        assert!(!old.terminal_theme_declared && !old.terminal_theme_chosen);
         for (choice, saved) in [
             (TerminalThemeChoice::FollowServer, "follow_server"),
             (TerminalThemeChoice::RexDefault, "builtin_default"),
+            (TerminalThemeChoice::FollowChrome, "follow_chrome"),
             (
                 TerminalThemeChoice::Named("rex/midnight".into()),
                 "named:rex/midnight",
@@ -328,7 +369,7 @@ mod tests {
             let back: Settings = serde_json::from_value(json).unwrap();
             assert_eq!(back.terminal_theme, choice);
         }
-        for unknown in ["follow_chrome", "named:", "Catppuccin Mocha"] {
+        for unknown in ["follow_wallpaper", "named:", "Catppuccin Mocha"] {
             let s: Settings =
                 serde_json::from_value(serde_json::json!({ "terminal_theme": unknown })).unwrap();
             assert_eq!(
@@ -337,5 +378,32 @@ mod tests {
                 "{unknown}"
             );
         }
+    }
+
+    #[test]
+    fn the_chrome_theme_round_trips_and_unknown_values_are_midnight() {
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.chrome_theme, ChromeTheme::Midnight);
+        for (chrome, saved) in [
+            (ChromeTheme::Midnight, "midnight"),
+            (ChromeTheme::RosePine, "rose_pine"),
+            (ChromeTheme::RosePineMoon, "rose_pine_moon"),
+            (ChromeTheme::GruvboxDark, "gruvbox_dark"),
+        ] {
+            let s = Settings {
+                chrome_theme: chrome,
+                terminal_theme_chosen: true,
+                ..Settings::default()
+            };
+            let json = serde_json::to_value(&s).unwrap();
+            assert_eq!(json["chrome_theme"], saved);
+            let back: Settings = serde_json::from_value(json).unwrap();
+            assert_eq!(back.chrome_theme, chrome);
+            assert!(back.terminal_theme_chosen);
+        }
+        let s: Settings =
+            serde_json::from_value(serde_json::json!({ "chrome_theme": "solarized_light" }))
+                .unwrap();
+        assert_eq!(s.chrome_theme, ChromeTheme::Midnight);
     }
 }

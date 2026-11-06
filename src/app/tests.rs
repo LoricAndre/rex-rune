@@ -1173,7 +1173,11 @@ fn the_theme_picker_filters_declares_to_every_host_and_returns_to_settings() {
         [
             row("Follow server", "Server", true),
             row("Rex default colours", "Server", false),
+            row("Follow chrome", "Built in", false),
             row("Midnight", "Built in", false),
+            row("Rosé Pine", "Built in", false),
+            row("Rosé Pine Moon", "Built in", false),
+            row("Gruvbox Dark", "Built in", false),
             row("Rex Test Mocha", "Dark", false),
             row("Paper", "Light", false),
         ]
@@ -2426,5 +2430,188 @@ fn views_are_prefetched_only_for_tabs_the_sidebar_lists() {
     );
     rt.update(|s, _| s.set_vertical_tabs(false));
     assert_eq!(latest(&rx), Some(vec![]));
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+/// The themes a host was told to declare, in order.
+fn declared(host: &flume::Receiver<HostCommand>) -> Vec<Option<rexrs::api::terminal::SetTheme>> {
+    host.try_iter()
+        .filter_map(|c| match c {
+            HostCommand::Theme(args) => Some(args),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_chrome_palette_applies_at_once_and_brings_its_terminal_theme_until_one_is_chosen() {
+    use rex_linux::{settings::ChromeTheme, terminal_theme::TerminalTheme};
+    let mut ws = workspace_hosts(2);
+    let hosts = [capture_host(&mut ws, 0), capture_host(&mut ws, 1)];
+    ws.perform(Intent::Settings, &mut rune::Tx::default());
+    let mut rt = runtime(ws);
+    for _ in 0..60 {
+        rt.frame(1. / 60.);
+    }
+    click(&mut rt, "chrome-theme");
+    assert!(matches!(
+        rt.state.panel.as_ref().map(|p| &p.kind),
+        Some(PanelKind::Chromes)
+    ));
+    let rows: Vec<_> = rt
+        .state
+        .entries()
+        .into_iter()
+        .map(|e| (e.label, e.current))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("Midnight".to_owned(), true),
+            ("Rosé Pine".to_owned(), false),
+            ("Rosé Pine Moon".to_owned(), false),
+            ("Gruvbox Dark".to_owned(), false),
+        ]
+    );
+    let rose = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.label.as_deref() == Some("Rosé Pine") && e.role == "menuitem")
+        .expect("a Rosé Pine row")
+        .rect;
+    let (x, y) = (rose[0] + rose[2] / 2., rose[1] + rose[3] / 2.);
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(1. / 60.);
+    assert!(
+        matches!(
+            rt.state.panel.as_ref().map(|p| &p.kind),
+            Some(PanelKind::Settings)
+        ),
+        "choosing goes back to Settings"
+    );
+    let window = |rt: &Runtime<Workspace>| {
+        rt.elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some("window"))
+            .unwrap()
+            .fill
+    };
+    assert_eq!(
+        window(&rt),
+        super::theme::rgb(0x191724),
+        "the ground changes in one frame, without a spring"
+    );
+    assert_eq!(super::theme::kit().c.page, super::theme::rgb(0x191724));
+    let s = &rt.state.settings;
+    assert_eq!(s.chrome_theme, ChromeTheme::RosePine);
+    assert_eq!(
+        s.terminal_theme,
+        TerminalThemeChoice::FollowChrome,
+        "never chosen: the terminals follow the chrome"
+    );
+    assert_eq!(rt.state.term_theme, Some(TerminalTheme::rose_pine()));
+    for host in &hosts {
+        assert_eq!(declared(host), [Some(TerminalTheme::rose_pine().args())]);
+    }
+    let saved = Settings::load(&rt.state.settings_path).unwrap();
+    assert_eq!(
+        (saved.chrome_theme, saved.terminal_theme_chosen),
+        (ChromeTheme::RosePine, false)
+    );
+
+    rt.update(|s, tx| s.perform(Intent::Chrome(ChromeTheme::GruvboxDark), tx));
+    for host in &hosts {
+        assert_eq!(
+            declared(host),
+            [Some(TerminalTheme::gruvbox_dark().args())],
+            "Follow chrome follows the next palette"
+        );
+    }
+
+    rt.update(|s, tx| s.perform(Intent::Theme(TerminalThemeChoice::FollowServer), tx));
+    assert!(rt.state.settings.terminal_theme_chosen);
+    for host in &hosts {
+        declared(host);
+    }
+    rt.update(|s, tx| s.perform(Intent::Chrome(ChromeTheme::RosePineMoon), tx));
+    assert_eq!(
+        rt.state.settings.terminal_theme,
+        TerminalThemeChoice::FollowServer,
+        "a chosen terminal theme stays"
+    );
+    assert_eq!(rt.state.term_theme, None);
+    assert!(hosts.iter().all(|h| declared(h).is_empty()));
+    let again = relaunch(&rt.state);
+    assert_eq!(again.settings.chrome_theme, ChromeTheme::RosePineMoon);
+    assert_eq!(again.term_colors().background, 0x232136);
+    rt.update(|s, tx| s.perform(Intent::Chrome(ChromeTheme::Midnight), tx));
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn a_palette_round_trip_leaves_terminal_output_and_its_selection_alone() {
+    use rex_linux::{
+        connection::{Connection, TerminalSender},
+        settings::ChromeTheme,
+    };
+    let (mut ws, _rx) = tabbed_workspace("single");
+    let (sender, _sent) = flume::unbounded();
+    let connection = Connection {
+        model: Default::default(),
+        commands: TerminalSender::new(sender, "s".into(), "block:a".into()),
+        wake: flume::unbounded().1,
+    };
+    let mut terminal = ghostty_vt::Terminal::new(ghostty_vt::TerminalOptions {
+        cols: 40,
+        rows: 4,
+        ..Default::default()
+    })
+    .unwrap();
+    terminal.vt_write(b"plain \x1b[31mred\x1b[0m");
+    let frame = std::sync::Arc::new(
+        rex_linux::terminal::Renderer::new()
+            .unwrap()
+            .frame(&terminal)
+            .unwrap(),
+    );
+    {
+        let mut m = connection.model.lock().unwrap();
+        m.connected = true;
+        m.control_connected = true;
+        m.frame = Some(frame.clone());
+    }
+    let key = ws.term_key("block:a");
+    let mut term = super::term::Term::new(connection);
+    term.selection = Some((0, 4));
+    ws.terminals.insert(key.clone(), term);
+    let mut rt = runtime(ws);
+    let output = |rt: &Runtime<Workspace>| {
+        rt.elements()
+            .into_iter()
+            .filter(|e| {
+                e.text
+                    .as_deref()
+                    .is_some_and(|t| t.contains("plain") || t.contains("red"))
+            })
+            .map(|e| (e.text, format!("{:?}", e.text_color), e.rect))
+            .collect::<Vec<_>>()
+    };
+    let before = output(&rt);
+    assert!(!before.is_empty(), "the pane draws its text");
+    rt.update(|s, tx| s.set_chrome(ChromeTheme::RosePine, tx));
+    rt.frame(1. / 60.);
+    assert_eq!(output(&rt), before, "the server's text and colours stay");
+    assert_eq!(
+        rt.state.term_colors().selection_bg,
+        0x403d52,
+        "the selection is drawn in the new palette's colour"
+    );
+    rt.update(|s, tx| s.set_chrome(ChromeTheme::Midnight, tx));
+    rt.frame(1. / 60.);
+    assert_eq!(output(&rt), before);
+    let term = &rt.state.terminals[&key];
+    assert_eq!(term.selection, Some((0, 4)), "the selection is intact");
+    assert!(std::sync::Arc::ptr_eq(term.frame.as_ref().unwrap(), &frame));
     std::fs::remove_file(&rt.state.settings_path).ok();
 }

@@ -124,6 +124,7 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
         PanelKind::Picker(false) => "commands",
         PanelKind::Hosts(_) => "hosts",
         PanelKind::Themes => "themes",
+        PanelKind::Chromes => "chromes",
         PanelKind::Session => "session-menu",
         PanelKind::Host(_) => "host-menu",
         PanelKind::Window(_) => "tab-menu",

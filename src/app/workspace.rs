@@ -5,16 +5,17 @@ use super::{
     notify::{Note, Notifier},
     panel::*,
     term::{Term, TermColors},
+    theme::{palette_of, set_palette},
     widgets::ScrollFx,
 };
 use rex_linux::{
     connection::{Command, DEFAULT_TAB_LABEL, HostCommand, HostConnection, HostModel, Options},
     layout::{Divider, shell_layout},
     settings::{
-        Host, NoticePosition, Settings, TerminalThemeChoice, normalize_font_preferences,
-        validate_host,
+        ChromeTheme, Host, NoticePosition, Settings, TerminalThemeChoice,
+        normalize_font_preferences, validate_host,
     },
-    terminal_theme::{TerminalTheme, ThemeDirs, ThemeInfo},
+    terminal_theme::{TerminalTheme, ThemeDirs, ThemeInfo, paired},
 };
 use rexrs::api::terminal::SetTheme;
 use rune::{AppHandle, PhysicalKeyCode, TextEdit, Tx};
@@ -165,10 +166,12 @@ impl Workspace {
         // A theme that can't be read leaves the setting alone: it applies again once its
         // file is back.
         let theme_dirs = ThemeDirs::from_env();
-        let (term_theme, theme_error) = match theme_dirs.resolve(&settings.terminal_theme) {
-            Ok(theme) => (theme, None),
-            Err(error) => (None, Some(error)),
-        };
+        set_palette(palette_of(settings.chrome_theme));
+        let (term_theme, theme_error) =
+            match theme_dirs.resolve(&settings.terminal_theme, settings.chrome_theme) {
+                Ok(theme) => (theme, None),
+                Err(error) => (None, Some(error)),
+            };
         let mut this = Self {
             logo: None,
             images: None,
@@ -700,17 +703,46 @@ impl Workspace {
     }
 
     pub fn term_colors(&self) -> TermColors {
-        TermColors::of(self.term_theme.as_ref())
+        TermColors::of(
+            self.term_theme.as_ref(),
+            palette_of(self.settings.chrome_theme),
+        )
     }
 
-    /// Declare the theme `choice` names from now on, on every host, and remember it. Nothing
-    /// changes when the theme can't be read.
+    /// Declare the theme the user chose, `choice`, from now on, on every host, and remember
+    /// it; chrome palettes leave it alone from then on. Nothing changes when the theme can't
+    /// be read.
     pub fn apply_theme(&mut self, choice: TerminalThemeChoice) -> anyhow::Result<()> {
-        self.term_theme = self.theme_dirs.resolve(&choice)?;
+        self.term_theme = self
+            .theme_dirs
+            .resolve(&choice, self.settings.chrome_theme)?;
         self.settings.terminal_theme = choice;
+        self.settings.terminal_theme_chosen = true;
         self.save();
         self.declare_theme();
         Ok(())
+    }
+
+    /// Draw the chrome in `chrome` from now on, at once. Under Follow chrome its paired
+    /// terminal theme is declared too; a user who never picked a terminal theme (still on the
+    /// default Follow server) is moved to Follow chrome.
+    pub fn set_chrome(&mut self, chrome: ChromeTheme, tx: &mut Tx) {
+        tx.instant();
+        if self.settings.chrome_theme == chrome {
+            return;
+        }
+        self.settings.chrome_theme = chrome;
+        set_palette(palette_of(chrome));
+        if !self.settings.terminal_theme_chosen
+            && self.settings.terminal_theme == TerminalThemeChoice::FollowServer
+        {
+            self.settings.terminal_theme = TerminalThemeChoice::FollowChrome;
+        }
+        if self.settings.terminal_theme == TerminalThemeChoice::FollowChrome {
+            self.term_theme = Some((paired(chrome).theme)());
+            self.declare_theme();
+        }
+        self.save();
     }
 
     /// What every host declares to the blocks this client may theme: the chosen theme, or
@@ -746,6 +778,7 @@ impl Workspace {
         match choice {
             TerminalThemeChoice::FollowServer => "Follow server",
             TerminalThemeChoice::RexDefault => "Rex default colours",
+            TerminalThemeChoice::FollowChrome => "Follow chrome",
             TerminalThemeChoice::Named(id) => {
                 rex_linux::terminal_theme::builtin(id).map_or(id, |b| b.name)
             }
@@ -826,7 +859,10 @@ impl Workspace {
 
     pub fn perform(&mut self, action: Intent, tx: &mut Tx) {
         // Applying a theme goes back to Settings itself.
-        if !action.opens_followup() && !matches!(action, Intent::Theme(_)) && self.panel.is_some() {
+        if !action.opens_followup()
+            && !matches!(action, Intent::Theme(_) | Intent::Chrome(_))
+            && self.panel.is_some()
+        {
             self.close_panel(tx);
         }
         // Only pane actions carry a captured pane, and session actions a captured session,
@@ -861,6 +897,19 @@ impl Workspace {
                     let panel = self.panel.as_mut().unwrap();
                     panel.selected = current;
                     panel.reveal = true;
+                }
+            }
+            Intent::ChooseChrome => {
+                self.open_panel(PanelKind::Chromes, "Theme", &[]);
+                if let Some(current) = self.entries().iter().position(|e| e.current) {
+                    self.panel.as_mut().unwrap().selected = current;
+                }
+            }
+            Intent::Chrome(chrome) => {
+                self.set_chrome(chrome, tx);
+                match self.settings_back() {
+                    Some(back) => self.panel = Some(back),
+                    None => self.close_panel(tx),
                 }
             }
             Intent::Theme(choice) => match self.apply_theme(choice) {
@@ -1306,6 +1355,7 @@ impl Workspace {
                     | PanelKind::RemoveHost(_)
                     | PanelKind::AgentChange { .. }
                     | PanelKind::Themes
+                    | PanelKind::Chromes
             ) && previous
                 .as_ref()
                 .is_some_and(|p| matches!(p.kind, PanelKind::Settings)));

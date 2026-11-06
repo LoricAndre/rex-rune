@@ -1,5 +1,6 @@
 //! The chrome palette's tokens, the kit pinned to them, shared surfaces (chips, glass,
 //! cards) and the app's icons.
+use rex_linux::settings::ChromeTheme;
 use rune::{Color, El, Icon, Shadow, Spring, SpringPair, TextStyle, Transition};
 use rune_kit::{Kit, PaletteFocus, PaletteSeed};
 use std::sync::OnceLock;
@@ -88,15 +89,79 @@ pub static MIDNIGHT: Palette = Palette {
     kit: OnceLock::new(),
 };
 
+/// Rosé Pine's roles: base, surface, text, subtle, iris, foam, pine, gold, love, highlight med.
+pub static ROSE_PINE: Palette = Palette {
+    ground: 0x191724,
+    card: 0x191724,
+    popover: 0x1f1d2e,
+    ink: 0xe0def4,
+    muted: 0x908caa,
+    accent: 0xc4a7e7,
+    accent2: 0x9ccfd8,
+    live: 0x31748f,
+    warning: 0xf6c177,
+    danger: 0xeb6f92,
+    on_accent: 0x191724,
+    terminal_selection: 0x403d52,
+    kit: OnceLock::new(),
+};
+
+/// Rosé Pine Moon's roles, as for Rosé Pine.
+pub static ROSE_PINE_MOON: Palette = Palette {
+    ground: 0x232136,
+    card: 0x232136,
+    popover: 0x2a273f,
+    ink: 0xe0def4,
+    muted: 0x908caa,
+    accent: 0xc4a7e7,
+    accent2: 0x9ccfd8,
+    live: 0x3e8fb0,
+    warning: 0xf6c177,
+    danger: 0xeb6f92,
+    on_accent: 0x232136,
+    terminal_selection: 0x44415a,
+    kit: OnceLock::new(),
+};
+
+/// Gruvbox Dark: bg, bg1, fg, gray, blue, purple, green, yellow, red, bg2.
+pub static GRUVBOX_DARK: Palette = Palette {
+    ground: 0x282828,
+    card: 0x282828,
+    popover: 0x3c3836,
+    ink: 0xebdbb2,
+    muted: 0xa89984,
+    accent: 0x83a598,
+    accent2: 0xd3869b,
+    live: 0xb8bb26,
+    warning: 0xfabd2f,
+    danger: 0xfb4934,
+    on_accent: 0x282828,
+    terminal_selection: 0x504945,
+    kit: OnceLock::new(),
+};
+
+/// The palette a chrome theme draws in.
+pub fn palette_of(chrome: ChromeTheme) -> &'static Palette {
+    match chrome {
+        ChromeTheme::Midnight => &MIDNIGHT,
+        ChromeTheme::RosePine => &ROSE_PINE,
+        ChromeTheme::RosePineMoon => &ROSE_PINE_MOON,
+        ChromeTheme::GruvboxDark => &GRUVBOX_DARK,
+    }
+}
+
 thread_local! {
     // Per thread: Rune builds a window's view on its UI thread, and headless runtimes on
-    // other threads keep their own.
+    // other threads keep their own. The root view sets it before every build.
     static ACTIVE: std::cell::Cell<&'static Palette> = const { std::cell::Cell::new(&MIDNIGHT) };
 }
 
 /// The palette views on this thread draw in.
 pub fn palette() -> &'static Palette {
     ACTIVE.get()
+}
+pub fn set_palette(palette: &'static Palette) {
+    ACTIVE.set(palette);
 }
 
 pub fn ground() -> u32 {
@@ -128,9 +193,6 @@ pub fn danger() -> u32 {
 }
 pub fn on_accent() -> u32 {
     palette().on_accent
-}
-pub fn terminal_selection() -> u32 {
-    palette().terminal_selection
 }
 
 pub const TOOLBAR: f32 = 52.;
@@ -238,7 +300,7 @@ pub fn chip(e: El) -> El {
         .continuous_corners()
 }
 
-/// A popover or dialog surface: frosted navy with a lit rim and a deep shadow.
+/// A popover or dialog surface: the frosted popover colour with a lit rim and a deep shadow.
 pub fn glass(e: El, radius: f32, blur: bool) -> El {
     let e = e
         .fill(rgb(popover()).alpha(0.95))
@@ -427,5 +489,73 @@ mod tests {
         );
         assert_eq!(kit().c.page, rgb(0x001528));
         assert_eq!(kit().c.text_muted, rgb(0x93a3b8));
+    }
+
+    /// WCAG 2 contrast ratio of two sRGB colours.
+    fn contrast(a: u32, b: u32) -> f64 {
+        let luminance = |c: u32| {
+            let channel = |shift: u32| {
+                let v = ((c >> shift) & 0xff) as f64 / 255.;
+                if v <= 0.04045 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
+        };
+        let (x, y) = (luminance(a), luminance(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    /// Hue in degrees.
+    fn hue(c: u32) -> f64 {
+        let [r, g, b] = [16, 8, 0].map(|shift| ((c >> shift) & 0xff) as f64 / 255.);
+        let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+        let d = max - min;
+        let h = if d == 0. {
+            0.
+        } else if max == r {
+            ((g - b) / d).rem_euclid(6.)
+        } else if max == g {
+            (b - r) / d + 2.
+        } else {
+            (r - g) / d + 4.
+        };
+        h * 60.
+    }
+
+    #[test]
+    fn every_palette_is_legible_and_pairs_with_its_terminal_theme() {
+        assert!((contrast(0xffffff, 0x000000) - 21.).abs() < 1e-9);
+        for chrome in ChromeTheme::ALL {
+            let p = palette_of(chrome);
+            let name = chrome.name();
+            assert!(contrast(p.muted, p.card) >= 4.5, "{name}: muted on card");
+            assert!(contrast(p.ink, p.popover) >= 4.5, "{name}: ink on popover");
+            // Trouble always carries a word; Gruvbox's brightest red is 4.3:1 on its ground.
+            for (word, color) in [("warning", p.warning), ("danger", p.danger)] {
+                for surface in [p.card, p.popover] {
+                    assert!(contrast(color, surface) >= 3., "{name}: {word}");
+                }
+            }
+            let gap = (hue(p.warning) - hue(p.danger)).abs();
+            assert!(
+                gap.min(360. - gap) >= 30.,
+                "{name}: warning and danger differ in hue"
+            );
+            assert_eq!(p.card, p.ground, "{name}: one surface");
+            let paired = rex_linux::terminal_theme::paired(chrome);
+            assert_eq!(
+                (paired.theme)().background,
+                Some(p.ground),
+                "{name}: the paired theme sits on the ground"
+            );
+            set_palette(p);
+            assert_eq!(kit().c.page, rgb(p.ground), "{name}: its own kit");
+            assert_eq!(kit().c.text_base, rgb(p.ink));
+        }
+        set_palette(&MIDNIGHT);
+        assert_eq!(kit().c.page, rgb(0x001528), "Midnight's kit is unchanged");
     }
 }

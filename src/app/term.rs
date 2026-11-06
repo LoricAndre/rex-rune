@@ -2,7 +2,7 @@
 //! and the cell grid, drawn on a fixed column grid.
 use super::{
     keys,
-    theme::{card, mix, rgb, terminal_selection},
+    theme::{MIDNIGHT, Palette, mix, rgb},
 };
 use rex_linux::{
     connection::{Command, Connection},
@@ -738,16 +738,18 @@ pub struct TermColors {
 }
 impl Default for TermColors {
     fn default() -> Self {
-        Self::of(None)
+        Self::of(None, &MIDNIGHT)
     }
 }
 impl TermColors {
-    /// For the theme this client declares, if any.
-    pub fn of(theme: Option<&TerminalTheme>) -> Self {
+    /// For the theme this client declares, if any, in chrome `palette`.
+    pub fn of(theme: Option<&TerminalTheme>, palette: &Palette) -> Self {
         let theme = theme.cloned().unwrap_or_default();
         Self {
-            background: theme.background.unwrap_or(card()),
-            selection_bg: theme.selection_background.unwrap_or(terminal_selection()),
+            background: theme.background.unwrap_or(palette.card),
+            selection_bg: theme
+                .selection_background
+                .unwrap_or(palette.terminal_selection),
             selection_fg: theme.selection_foreground,
             cursor_text: theme.cursor_text,
         }
@@ -1030,7 +1032,7 @@ mod tests {
         }
         let view = |s: &LinkState, _: &mut Cx<LinkState>| {
             let m = metrics(15.);
-            let marks = link_marks("g", &s.frame, &s.link, 0..2, &m, card());
+            let marks = link_marks("g", &s.frame, &s.link, 0..2, &m, MIDNIGHT.card);
             el().w_full().h_full().children(marks)
         };
         let mut rt = Runtime::new(
@@ -1072,17 +1074,21 @@ mod tests {
     #[test]
     fn the_default_background_takes_the_chromes_only_on_its_own_side() {
         let follow = TermColors::default();
-        assert_eq!(follow.body(0x000000), card(), "Rex's built-in black");
-        assert_eq!(follow.body(0x1e1e2e), card(), "another owner's dark theme");
+        let card = MIDNIGHT.card;
+        assert_eq!(follow.body(0x000000), card, "Rex's built-in black");
+        assert_eq!(follow.body(0x1e1e2e), card, "another owner's dark theme");
         assert_eq!(
             follow.body(0xfdf6e3),
             0xfdf6e3,
             "another owner's light theme"
         );
-        let light = TermColors::of(Some(&TerminalTheme {
-            background: Some(0xfdf6e3),
-            ..TerminalTheme::default()
-        }));
+        let light = TermColors::of(
+            Some(&TerminalTheme {
+                background: Some(0xfdf6e3),
+                ..TerminalTheme::default()
+            }),
+            &MIDNIGHT,
+        );
         assert_eq!(light.body(0xfdf6e3), 0xfdf6e3);
         assert_eq!(light.body(0xeeeeee), 0xfdf6e3);
         assert_eq!(
@@ -1090,15 +1096,19 @@ mod tests {
             0x000000,
             "a server without set_theme keeps its black under its light default text"
         );
-        let midnight = TermColors::of(Some(&TerminalTheme::midnight()));
+        let midnight = TermColors::of(Some(&TerminalTheme::midnight()), &MIDNIGHT);
         assert_eq!(midnight, follow, "Midnight's background is the card's");
         assert_eq!(
-            TermColors::of(Some(&TerminalTheme::default())),
+            TermColors::of(Some(&TerminalTheme::default()), &MIDNIGHT),
             follow,
             "Rex's own colours draw like Follow server"
         );
+        let rose = TermColors::of(None, &crate::app::theme::ROSE_PINE);
+        assert_eq!(rose.body(0x000000), 0x191724, "another chrome's card");
+        assert_eq!(rose.selection_bg, 0x403d52, "and its selection");
+        assert_ne!(rose, follow, "so rows memoized on the colours draw again");
 
-        for (bg, fg, body) in [(0x1e1e2e, 0xcdd6f4, card()), (0xfdf6e3, 0x586e75, 0xfdf6e3)] {
+        for (bg, fg, body) in [(0x1e1e2e, 0xcdd6f4, card), (0xfdf6e3, 0x586e75, 0xfdf6e3)] {
             let frame = themed_frame(bg, fg);
             assert_eq!(frame.bg, bg);
             let body_drawn = follow.body(frame.bg);

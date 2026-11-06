@@ -145,6 +145,24 @@ fn interface(s: &Workspace) -> El {
     col()
         .gap(4.)
         .child(setting(
+            "Theme",
+            "The window's colours. Until you pick a terminal theme, terminals take the matching one (Follow chrome).",
+            row()
+                .gap(10.)
+                .center_y()
+                .child(
+                    text(s.settings.chrome_theme.name())
+                        .font(medium(13.))
+                        .color(rgb(ink()))
+                        .truncate()
+                        .max_w(160.),
+                )
+                .child(pill("chrome-theme", "Change…", Pill::Neutral, 26., |s, tx| {
+                    s.perform(Intent::ChooseChrome, tx)
+                })),
+        ))
+        .child(divider())
+        .child(setting(
             "Interface zoom",
             "Chrome and terminals together, 70–150%. Ctrl + and Ctrl − also work.",
             row()
