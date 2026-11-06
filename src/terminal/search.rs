@@ -1,7 +1,12 @@
 //! Searching a terminal's screen and scrollback with Ghostty's search, which keeps up with
 //! new output and scrolls the viewport to the selected match.
 use anyhow::Result;
-use ghostty_vt::{Terminal, search::Search, selection::Selection, terminal::PointSpace};
+use ghostty_vt::{
+    Terminal,
+    search::{Search, Status},
+    selection::Selection,
+    terminal::PointSpace,
+};
 
 /// One match on screen, from `start` to `end` inclusive, as viewport (column, row) cells.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -20,29 +25,53 @@ pub struct Results {
     /// The selected match's place among all matches, newest first.
     pub index: Option<usize>,
     pub total: usize,
+    rows: Vec<Vec<(usize, usize, bool)>>,
 }
 
 impl Results {
-    /// The inclusive columns each match covers on viewport row `y` of a grid `cols` wide, and
-    /// whether it is the selected match.
-    pub fn on_row(&self, y: usize, cols: usize) -> Vec<(usize, usize, bool)> {
-        self.matches
-            .iter()
-            .filter(|m| (usize::from(m.start.1)..=usize::from(m.end.1)).contains(&y))
-            .map(|m| {
-                let first = if usize::from(m.start.1) == y {
-                    usize::from(m.start.0)
+    fn new(
+        matches: Vec<Match>,
+        selected: Option<Match>,
+        index: Option<usize>,
+        total: usize,
+        cols: usize,
+        rows: usize,
+    ) -> Self {
+        let mut by_row = vec![Vec::new(); rows];
+        for found in &matches {
+            let first_row = usize::from(found.start.1).min(rows);
+            let last_row = usize::from(found.end.1).min(rows.saturating_sub(1));
+            for (y, row) in by_row
+                .iter_mut()
+                .enumerate()
+                .take(last_row.saturating_add(1))
+                .skip(first_row)
+            {
+                let first = if usize::from(found.start.1) == y {
+                    usize::from(found.start.0)
                 } else {
                     0
                 };
-                let last = if usize::from(m.end.1) == y {
-                    usize::from(m.end.0)
+                let last = if usize::from(found.end.1) == y {
+                    usize::from(found.end.0)
                 } else {
                     cols.saturating_sub(1)
                 };
-                (first, last, self.selected == Some(*m))
-            })
-            .collect()
+                row.push((first, last, selected == Some(*found)));
+            }
+        }
+        Self {
+            matches,
+            selected,
+            index,
+            total,
+            rows: by_row,
+        }
+    }
+
+    /// The inclusive columns each match covers on viewport row `y`, and whether it is selected.
+    pub fn on_row(&self, y: usize) -> &[(usize, usize, bool)] {
+        self.rows.get(y).map(Vec::as_slice).unwrap_or_default()
     }
 }
 
@@ -65,10 +94,7 @@ impl Controller {
             }
             _ => self.search = None,
         }
-        match terminal {
-            Some(terminal) => self.update(terminal),
-            None => Ok(()),
-        }
+        Ok(())
     }
 
     /// Selects the next older match (`older`) or the next newer one, wrapping around.
@@ -83,11 +109,11 @@ impl Controller {
         Ok(())
     }
 
-    /// Catches the search up with the terminal's output, starting it on a terminal that
-    /// arrived after the needle. Until a match is selected, the newest one is.
-    pub fn update(&mut self, terminal: &Terminal) -> Result<()> {
+    /// Makes one bounded unit of progress, feeding terminal changes when needed. Returns whether
+    /// more work remains, so the data worker schedules another tick without blocking I/O.
+    pub fn update(&mut self, terminal: &Terminal) -> Result<bool> {
         if self.needle.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
         let search = match &mut self.search {
             Some(search) => search,
@@ -97,11 +123,17 @@ impl Controller {
                 self.search.insert(search)
             }
         };
-        search.run(terminal)?;
+        let status = match search.status()? {
+            Status::Running => search.tick()?,
+            Status::FeedRequired | Status::Complete => {
+                search.feed(terminal)?;
+                search.status()?
+            }
+        };
         if search.selected_index()?.is_none() && search.total_matches()? > 0 {
             search.select_next(terminal)?;
         }
-        Ok(())
+        Ok(status != Status::Complete)
     }
 
     /// The search no longer applies to the terminal it ran on: a fresh snapshot replaced it.
@@ -121,12 +153,14 @@ impl Controller {
             Some(found) => on_screen(terminal, &found)?,
             None => None,
         };
-        Ok(Some(Results {
+        Ok(Some(Results::new(
             matches,
             selected,
-            index: search.selected_index()?,
-            total: search.total_matches()?,
-        }))
+            search.selected_index()?,
+            search.total_matches()?,
+            usize::from(terminal.cols()?),
+            usize::from(terminal.rows()?),
+        )))
     }
 }
 
@@ -154,6 +188,15 @@ fn on_screen(terminal: &Terminal, found: &Selection<'_>) -> Result<Option<Match>
 mod tests {
     use super::*;
 
+    fn finish(search: &mut Controller, terminal: &Terminal) {
+        for _ in 0..10_000 {
+            if !search.update(terminal).unwrap() {
+                return;
+            }
+        }
+        panic!("search did not finish");
+    }
+
     #[test]
     fn a_search_selects_the_newest_match_and_steps_through_the_rest() {
         let mut terminal = Terminal::new(ghostty_vt::TerminalOptions {
@@ -166,6 +209,7 @@ mod tests {
         let mut search = Controller::default();
         assert_eq!(search.results(&terminal).unwrap(), None);
         search.set_needle(Some(&terminal), "needle".into()).unwrap();
+        finish(&mut search, &terminal);
         let results = search.results(&terminal).unwrap().unwrap();
         assert_eq!(results.total, 2);
         assert_eq!(results.index, Some(0), "the newest match first");
@@ -174,7 +218,7 @@ mod tests {
             end: (5, 1),
         };
         assert_eq!(results.selected, Some(newest));
-        assert_eq!(results.on_row(1, 20), [(0, 5, true)]);
+        assert_eq!(results.on_row(1), [(0, 5, true)]);
 
         // The older match is in scrollback: selecting it scrolls it into view.
         search.step(&terminal, true).unwrap();
@@ -187,7 +231,7 @@ mod tests {
 
         // New output is searched too.
         terminal.vt_write(b"\r\nneedle three");
-        search.update(&terminal).unwrap();
+        finish(&mut search, &terminal);
         assert_eq!(search.results(&terminal).unwrap().unwrap().total, 3);
 
         search.set_needle(Some(&terminal), String::new()).unwrap();
@@ -205,12 +249,12 @@ mod tests {
         let first = Terminal::new(options).unwrap();
         search.set_needle(None, "abc".into()).unwrap();
         assert_eq!(search.results(&first).unwrap(), None, "no terminal yet");
-        search.update(&first).unwrap();
+        finish(&mut search, &first);
         assert_eq!(search.results(&first).unwrap().unwrap().total, 0);
         search.forget_terminal();
         let mut second = Terminal::new(options).unwrap();
         second.vt_write(b"xx abc");
-        search.update(&second).unwrap();
+        finish(&mut search, &second);
         let results = search.results(&second).unwrap().unwrap();
         assert_eq!(results.total, 1);
         assert_eq!(

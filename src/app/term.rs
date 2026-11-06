@@ -681,9 +681,9 @@ enum RowPass {
 /// What the client marks on a row itself, as inclusive columns: the selection, and search
 /// matches with whether each is the selected match.
 #[derive(Default, Hash)]
-struct Marks {
+struct Marks<'a> {
     selection: Option<(usize, usize)>,
-    search: Vec<(usize, usize, bool)>,
+    search: &'a [(usize, usize, bool)],
 }
 
 #[cfg(test)]
@@ -707,7 +707,7 @@ fn row_pass(
     cells: &[Cell],
     y: f32,
     frame_bg: u32,
-    marks: &Marks,
+    marks: &Marks<'_>,
     m: &Metrics,
     pass: RowPass,
     colors: &TermColors,
@@ -736,7 +736,7 @@ fn row_pass(
             }
             start = end;
         }
-        for &(a, b, selected) in &marks.search {
+        for &(a, b, selected) in marks.search {
             let alpha = if selected { 0.55 } else { 0.25 };
             row = row.child(
                 el().absolute(a as f32 * cw, 0.)
@@ -1008,7 +1008,7 @@ pub fn grid(key: &str, term: &Term, m: &Metrics, look: GridLook) -> El {
                 search: frame
                     .search
                     .as_ref()
-                    .map(|search| search.on_row(y, cols))
+                    .map(|search| search.on_row(y - start))
                     .unwrap_or_default(),
             };
             let mut h = DefaultHasher::new();

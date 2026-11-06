@@ -1741,12 +1741,12 @@ async fn run_data(
                         Ok(DataCommand::Reconnect) => { shared.status("Reconnecting terminal…", false); return Ok(false); }
                         Ok(DataCommand::Stop) | Err(_) => return Ok(true),
                     },
-                    _ = tick.tick(), if visible && (dirty || stream.terminal.as_ref().is_some_and(|t| selection.autoscrolling(t))) => {
+                    _ = tick.tick(), if visible && commands.is_empty() && (dirty || stream.terminal.as_ref().is_some_and(|t| selection.autoscrolling(t))) => {
                         // Mid synchronized update: keep showing the last frame, check again next tick.
                         if stream.render_held(Instant::now())? { continue; }
                         if let Some(terminal) = &mut stream.terminal {
                             selection.tick(terminal)?;
-                            search.update(terminal)?;
+                            let search_pending = search.update(terminal)?;
                             let mut frame = renderer.frame(terminal)?;
                             frame.selection_revision = selection.revision;
                             frame.search = search.results(terminal)?;
@@ -1758,8 +1758,10 @@ async fn run_data(
                                 if let Some(code) = stream.exit_code { m.status = format!("Process exited · {code}"); }
                             });
                             if transitioned { let _ = shared.host_wake.try_send(()); }
+                            dirty = search_pending;
+                        } else {
+                            dirty = false;
                         }
-                        dirty = false;
                     }
                 }
             }

@@ -262,7 +262,9 @@ fn pane_card(
     }
     let c = match s.terminals.get(&key) {
         Some(t) => {
-            let cursor = if input && s.window_focused {
+            let keyboard =
+                input && s.window_focused && !t.search.as_ref().is_some_and(|edit| edit.focused);
+            let cursor = if keyboard {
                 CursorLook::Block
             } else {
                 CursorLook::Hollow
@@ -270,7 +272,7 @@ fn pane_card(
             let colors = s.term_colors();
             let look = GridLook {
                 cursor: Some(cursor),
-                ime: input && s.window_focused,
+                ime: keyboard,
                 colors,
             };
             let (k1, k2, k3) = (key.clone(), key.clone(), key.clone());
