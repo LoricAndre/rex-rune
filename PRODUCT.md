@@ -19,8 +19,8 @@ Native Linux desktop (Wayland and X11). Rust, [Rune](https://github.com/anomalyc
 
 ## Capabilities
 
-Saved hosts, sessions, tabs, authoritative splits, snapshot restoration, live output, input, mouse reporting, reconnect and resume. API revisions 10 and 11 are supported; older servers are refused rather than carried along while Rex is in alpha. Bootstrap bundles the initial terminal tickets; live streams and data resume take priority over new snapshots. On revision 11, files dropped on a pane or pasted are uploaded to the terminal's machine and their paths typed into it. Program activity (OSC 7501) marks tabs and, for tabs out of view, sends desktop notifications. Settings can set up Rex's skill and hooks for coding agents on this machine through the local `rex skill` command, previewing every change.
+Saved hosts, sessions, tabs, authoritative splits, snapshot restoration, live output, input, mouse reporting, reconnect and resume. Terminal search covers the screen and scrollback. API revisions 10 and 11 are supported; older servers are refused rather than carried along while Rex is in alpha. Bootstrap bundles the initial terminal tickets; live streams and data resume take priority over new snapshots. On revision 11, files dropped on a pane or pasted are uploaded to the terminal's machine and their paths typed into it. Program activity (OSC 7501) marks tabs and, for tabs out of view, sends desktop notifications. Settings can set up Rex's skill and hooks for coding agents on this machine through the local `rex skill` command, previewing every change.
 
 ## Out of scope for now
 
-Terminal-content search, complete Kitty graphics, accessibility (AT-SPI) and distribution packages. See the README for the current list of unvalidated areas.
+Complete Kitty graphics, accessibility (AT-SPI) and distribution packages. See the README for the current list of unvalidated areas.

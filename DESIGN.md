@@ -20,7 +20,7 @@ Rex Linux draws calm, dark chrome around terminals that the server owns. Chrome 
 | `POPOVER` | Popovers, dialogs, raised surfaces (drawn at 95% over a backdrop blur) |
 | `INK` | Primary text and icons |
 | `MUTED` | Secondary text, labels, shortcuts and icons |
-| `ACCENT` | Focus, selection outline, current-session emphasis, caret |
+| `ACCENT` | Focus, selection outline, current-session emphasis, caret, terminal search matches |
 | `ACCENT2` | Secondary accent |
 | `LIVE` | Kit success colour |
 | `WARNING` | Reconnecting, notices, ownership strips |

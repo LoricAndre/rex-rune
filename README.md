@@ -17,6 +17,7 @@ It is written in Rust on [Rune](https://github.com/anomalyco/rune) (wgpu/winit, 
 - A single toolbar with session identity, tabs, commands and the window's own controls. A tab with one pane draws it edge to edge; splits are rounded pane cards. Tabs close from their right-click menu, a middle-click or `Ctrl Shift W`, always behind a confirmation. Host-grouped session navigation opens on demand, with an optional sidebar (Ctrl Shift B) that opens at launch as it was left. Tabs can sit in the toolbar or, while the sidebar is open, under each session in the sidebar.
 - Searchable session switcher (`Ctrl K`) and command palette (`Ctrl Shift P`).
 - Snapshot restore, live output, physical-layout key press and release forwarding with dead-key composition, bracketed paste, text selection and copy, local scrollback, and mouse/wheel reporting for terminal programs. Right-click always opens the pane menu; Shift+right-click sends the click to a program that tracks the mouse, and Shift with the left button selects text locally.
+- Terminal search (`Ctrl Shift F`) over the focused pane's screen and scrollback, with Ghostty's search: matches are highlighted in the chrome's accent and the field counts them; Enter selects the next older match and Shift+Enter the next newer one, scrolling it into view; Escape closes the search. New output is searched as it arrives, and the search survives a reconnect.
 - Cursor shapes programs choose with DECSCUSR (block, bar or underline) in the focused pane; other panes show a hollow block. Blinking cursors draw steadily: terminal content does not animate.
 - Underline styles (single, double, curly, dotted and dashed) and colours that programs set with SGR 4:x and 58, and overlines (SGR 53).
 - Box-drawing and block element characters (U+2500–U+259F) are drawn as shapes on whole device pixels, as Ghostty draws them, rather than from the font, so borders, tables and block graphics meet their neighbours without seams or overlaps at any font or display scale.
@@ -161,6 +162,7 @@ The SSH user is the login on that machine, which is also the user whose Rex serv
 | Ctrl , | Settings |
 | Ctrl Shift B | Collapse / restore the sidebar |
 | Ctrl Shift C / V | Copy selection / paste text (bracketed-paste aware), or upload copied files or an image |
+| Ctrl Shift F | Search the focused terminal's screen and scrollback |
 | Ctrl Shift R | Resume the focused terminal's data stream |
 | Shift PageUp / PageDown, wheel | Scroll local history |
 | Ctrl + / Ctrl − / Ctrl 0 | Enlarge / shrink / reset the whole interface |
@@ -221,7 +223,7 @@ Each patch is meant to be dropped once the corresponding upstream release has eq
 
 Still needing hands-on validation: physical Wayland pointer gestures (move, edge resize, double-click, window menu), multi-seat Wayland desktops, input methods beyond dead-key composition, and sustained daily use. On X11, winit has no window-menu request, so right-clicking the drag region does nothing there.
 
-Not implemented: terminal-content search, animated Kitty graphics and accessibility (AT-SPI). Packaging includes the Nix flake, Linux tarballs and Debian/Ubuntu packages; RPM, Flatpak and AUR packages are not provided.
+Not implemented: animated Kitty graphics and accessibility (AT-SPI). Packaging includes the Nix flake, Linux tarballs and Debian/Ubuntu packages; RPM, Flatpak and AUR packages are not provided.
 
 ## Third-party software and assets
 

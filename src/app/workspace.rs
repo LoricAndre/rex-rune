@@ -685,6 +685,41 @@ impl Workspace {
         self.terminals.get_mut(&key)
     }
 
+    /// Opens the focused terminal's search field, or gives it back the keyboard.
+    pub fn open_search(&mut self) {
+        if let Some(term) = self.active_terminal_mut() {
+            term.search.get_or_insert_with(|| TextEdit::new("")).focused = true;
+        }
+    }
+
+    /// A terminal's search field. Rune may write back to a field its own key just closed
+    /// (Escape), so a closed field's writes land in a scratch edit.
+    pub fn search_input(&mut self, key: &(HostId, String)) -> &mut TextEdit {
+        match self.terminals.get_mut(key).and_then(|t| t.search.as_mut()) {
+            Some(edit) => edit,
+            None => &mut self.scratch,
+        }
+    }
+
+    pub fn search_changed(&mut self, key: &(HostId, String)) {
+        if let Some(term) = self.terminals.get_mut(key)
+            && let Some(needle) = term.search.as_ref().map(|edit| edit.text.clone())
+        {
+            term.send(Command::Search(needle));
+        }
+    }
+
+    /// Closes a terminal's search field and its highlights; the keyboard goes back to the
+    /// focused terminal.
+    pub fn close_search(&mut self, key: &(HostId, String), tx: &mut Tx) {
+        if let Some(term) = self.terminals.get_mut(key)
+            && term.search.take().is_some()
+        {
+            term.send(Command::Search(String::new()));
+        }
+        tx.blur();
+    }
+
     pub fn send(&mut self, index: usize, command: HostCommand) {
         if self.hosts[index].connection.commands.send(command).is_err() {
             self.notify("Host worker stopped. Restart Rex to reconnect.");

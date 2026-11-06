@@ -50,6 +50,7 @@ const SHORTCUTS: &[(&str, &[Shortcut])] = &[
         &[
             (&["Ctrl", "Shift", "C"], "Copy"),
             (&["Ctrl", "Shift", "V"], "Paste"),
+            (&["Ctrl", "Shift", "F"], "Search terminal"),
             (&["Shift", "PageUp"], "Scroll history up"),
             (&["Shift", "PageDown"], "Scroll history down"),
             (&["Ctrl", "+"], "Enlarge interface"),

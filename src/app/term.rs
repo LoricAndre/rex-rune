@@ -15,7 +15,9 @@ use rex_linux::{
     },
     terminal_theme::{TerminalTheme, is_light},
 };
-use rune::{El, Family, LineCap, Mods, Path, Shape, Span, TextStyle, canvas, el, memo, rich, text};
+use rune::{
+    El, Family, LineCap, Mods, Path, Shape, Span, TextEdit, TextStyle, canvas, el, memo, rich, text,
+};
 use serde_json::json;
 use std::{
     collections::HashMap,
@@ -55,6 +57,8 @@ pub struct Term {
     pub link: Option<(usize, Link)>,
     /// The link a Ctrl+press went down on; releasing over the same link opens it.
     pub pressed_link: Option<String>,
+    /// The search field over the grid, while this terminal is being searched.
+    pub search: Option<TextEdit>,
 }
 
 #[derive(Clone, Copy)]
@@ -185,6 +189,7 @@ impl Term {
             images: HashMap::new(),
             link: None,
             pressed_link: None,
+            search: None,
         }
     }
 
@@ -673,13 +678,25 @@ enum RowPass {
     Text,
 }
 
+/// What the client marks on a row itself, as inclusive columns: the selection, and search
+/// matches with whether each is the selected match.
+#[derive(Default, Hash)]
+struct Marks {
+    selection: Option<(usize, usize)>,
+    search: Vec<(usize, usize, bool)>,
+}
+
 #[cfg(test)]
 fn row_el(cells: &[Cell], y: f32, frame_bg: u32, sel: Option<(usize, usize)>, m: &Metrics) -> El {
+    let marks = Marks {
+        selection: sel,
+        ..Marks::default()
+    };
     row_pass(
         cells,
         y,
         frame_bg,
-        sel,
+        &marks,
         m,
         RowPass::All,
         &TermColors::default(),
@@ -690,13 +707,14 @@ fn row_pass(
     cells: &[Cell],
     y: f32,
     frame_bg: u32,
-    sel: Option<(usize, usize)>,
+    marks: &Marks,
     m: &Metrics,
     pass: RowPass,
     colors: &TermColors,
 ) -> El {
     let body = colors.body(frame_bg);
     let (cw, ch) = m.cell;
+    let sel = marks.selection;
     // Memoized rows are flattened on their own, so each says again that it never animates:
     // otherwise a glyph run that leaves a changed row fades out over its replacement.
     let mut row = el().w_full().h(ch).absolute(0., y).instant_changes();
@@ -717,6 +735,14 @@ fn row_pass(
                 );
             }
             start = end;
+        }
+        for &(a, b, selected) in &marks.search {
+            let alpha = if selected { 0.55 } else { 0.25 };
+            row = row.child(
+                el().absolute(a as f32 * cw, 0.)
+                    .size((b + 1 - a) as f32 * cw, ch)
+                    .fill(rgb(colors.search_match).alpha(alpha)),
+            );
         }
         if let Some((a, b)) = sel {
             row = row.child(
@@ -899,7 +925,7 @@ pub struct GridLook {
 
 /// The colours the client draws in the terminal area itself. The terminal's own colours reach
 /// the frame through the server; these are the default background's stand-in and the
-/// selection and cursor-text colours, which the protocol has no field for.
+/// selection, cursor-text and search colours, which the protocol has no field for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TermColors {
     /// The declared theme's background, else the card.
@@ -907,6 +933,8 @@ pub struct TermColors {
     pub selection_bg: u32,
     pub selection_fg: Option<u32>,
     pub cursor_text: Option<u32>,
+    /// Search matches' highlight: the chrome's accent.
+    pub search_match: u32,
 }
 impl Default for TermColors {
     fn default() -> Self {
@@ -924,6 +952,7 @@ impl TermColors {
                 .unwrap_or(palette.terminal_selection),
             selection_fg: theme.selection_foreground,
             cursor_text: theme.cursor_text,
+            search_match: palette.accent,
         }
     }
 
@@ -964,7 +993,7 @@ pub fn grid(key: &str, term: &Term, m: &Metrics, look: GridLook) -> El {
     let selection = term.selection.map(|(a, b)| (a.min(b), a.max(b)));
     let rows = |mut grid: El, pass: RowPass| {
         for (y, cells) in frame.cells.iter().enumerate().skip(start).take(visible) {
-            let sel = if term.selection.is_some()
+            let selected = if term.selection.is_some()
                 && frame.selection_revision == term.selection_revision
             {
                 frame.selection_rows.get(y).copied().flatten()
@@ -974,12 +1003,20 @@ pub fn grid(key: &str, term: &Term, m: &Metrics, look: GridLook) -> El {
                     (a <= row1 && b >= row0).then(|| (a.max(row0) - row0, b.min(row1) - row0))
                 })
             };
+            let marks = Marks {
+                selection: selected,
+                search: frame
+                    .search
+                    .as_ref()
+                    .map(|search| search.on_row(y, cols))
+                    .unwrap_or_default(),
+            };
             let mut h = DefaultHasher::new();
             for cell in cells {
                 hash_cell(cell, &mut h);
             }
             (
-                sel,
+                &marks,
                 frame.bg,
                 cw.to_bits(),
                 ch.to_bits(),
@@ -992,7 +1029,7 @@ pub fn grid(key: &str, term: &Term, m: &Metrics, look: GridLook) -> El {
             let top = (y - start) as f32 * ch;
             let id = format!("{key}/r{}:{pass:?}", y - start);
             grid = grid.child(memo(id, h.finish(), || {
-                row_pass(cells, top, frame.bg, sel, m, pass, colors)
+                row_pass(cells, top, frame.bg, &marks, m, pass, colors)
             }));
         }
         grid

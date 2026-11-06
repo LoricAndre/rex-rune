@@ -6,7 +6,7 @@
 use super::{
     keys::{self, Action},
     panel::{Intent, PanelKind},
-    workspace::Workspace,
+    workspace::{HostId, Workspace},
 };
 use rex_linux::connection::Command;
 use rune::{Ime, Key, KeyEvent, PhysicalKeyCode as Code, Tx};
@@ -21,6 +21,7 @@ fn letter(ev: &KeyEvent, tx: &Tx, c: char) -> bool {
         'b' => Code::KeyB,
         'c' => Code::KeyC,
         'd' => Code::KeyD,
+        'f' => Code::KeyF,
         'k' => Code::KeyK,
         'n' => Code::KeyN,
         'p' => Code::KeyP,
@@ -99,6 +100,8 @@ fn shortcut(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
             s.close_focused(tx);
         } else if letter(ev, tx, 'd') {
             s.perform(Intent::Split("horizontal"), tx);
+        } else if letter(ev, tx, 'f') {
+            s.open_search();
         } else if ev.key == Key::Enter {
             s.perform(Intent::Zoom, tx);
         } else if space(ev, tx) {
@@ -192,6 +195,24 @@ pub fn list_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
                 .is_some_and(|p| matches!(p.kind, PanelKind::Pane)) =>
         {
             s.close_panel(tx)
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// Keys a terminal's search field takes: Enter selects the next older match and Shift+Enter
+/// the next newer one; Escape closes the search.
+pub fn search_key(s: &mut Workspace, key: &(HostId, String), ev: &KeyEvent, tx: &mut Tx) -> bool {
+    if zoom_key(s, ev, tx) {
+        return true;
+    }
+    match ev.key {
+        Key::Escape => s.close_search(key, tx),
+        Key::Enter => {
+            if let Some(term) = s.terminals.get_mut(key) {
+                term.send(Command::SearchStep(!ev.mods.shift));
+            }
         }
         _ => return false,
     }

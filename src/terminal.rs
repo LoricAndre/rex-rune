@@ -13,6 +13,7 @@ use std::{
 };
 
 pub mod graphics;
+pub mod search;
 pub mod selection;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -251,6 +252,8 @@ pub struct Frame {
     pub selection_revision: u64,
     /// Per row: the row soft-wraps into the next one.
     pub wrapped: Vec<bool>,
+    /// The user's search of this terminal, while there is one.
+    pub search: Option<search::Results>,
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -397,6 +400,7 @@ impl Renderer {
                 terminal.height_px()? / u32::from(snapshot.rows()?).max(1),
             ],
             wrapped: Vec::new(),
+            search: None,
         };
         let mut uri = Vec::new();
         let mut rows = self.rows.update(&snapshot)?;

@@ -3497,3 +3497,77 @@ fn an_endpoint_by_hand_takes_ssh_and_rejects_duplicates() {
     assert_eq!(rt.state.settings.hosts[1].label, "lab");
     std::fs::remove_file(&rt.state.settings_path).ok();
 }
+
+#[test]
+fn ctrl_shift_f_searches_the_focused_terminal_without_typing_into_it() {
+    use rex_linux::connection::{Command, Connection, TerminalSender};
+    let (mut ws, _rx) = tabbed_workspace("single");
+    let (sender, sent) = flume::unbounded();
+    let connection = Connection {
+        model: Default::default(),
+        commands: TerminalSender::new(sender, "s".into(), "block:a".into()),
+        wake: flume::unbounded().1,
+    };
+    {
+        let mut m = connection.model.lock().unwrap();
+        m.connected = true;
+        m.control_connected = true;
+    }
+    let key = ws.term_key("block:a");
+    ws.terminals
+        .insert(key.clone(), super::term::Term::new(connection));
+    let mut rt = runtime(ws);
+    rt.frame(1. / 60.);
+    let sent = move || -> Vec<String> {
+        sent.try_iter()
+            .filter_map(|c| match c {
+                HostCommand::Terminal { command, .. } => Some(match command {
+                    Command::Search(needle) => format!("search {needle}"),
+                    Command::SearchStep(older) => format!("step older={older}"),
+                    Command::Key(_) => "key".into(),
+                    _ => "other".into(),
+                }),
+                _ => None,
+            })
+            .collect()
+    };
+
+    ctrl_shift(&mut rt, 'f');
+    assert!(
+        focused(&rt).is_some_and(|path| path.contains("search-field:block:a")),
+        "the search field takes the keyboard: {:?}",
+        focused(&rt)
+    );
+    for c in ["n", "e"] {
+        press(&mut rt, Key::Text(c.into()));
+    }
+    press(&mut rt, Key::Enter);
+    rt.key(KeyEvent {
+        key: Key::Enter,
+        mods: Mods {
+            shift: true,
+            ..Mods::default()
+        },
+    });
+    rt.frame(1. / 60.);
+    assert_eq!(
+        sent(),
+        [
+            "search n",
+            "search ne",
+            "step older=true",
+            "step older=false"
+        ],
+        "typing searches, Enter steps, and nothing reaches the program"
+    );
+    assert!(has(&rt, "search:block:a"));
+
+    press(&mut rt, Key::Escape);
+    assert_eq!(sent(), ["search "], "Escape clears the search");
+    assert!(rt.state.terminals[&key].search.is_none());
+    assert!(!has(&rt, "search:block:a"));
+    assert_eq!(focused(&rt), None, "the terminal has the keyboard again");
+    press(&mut rt, Key::Text("x".into()));
+    assert_eq!(sent(), ["key"]);
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
