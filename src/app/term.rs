@@ -8,7 +8,7 @@ use rex_linux::{
     connection::{Command, Connection},
     links::Link,
     terminal::{
-        Cell, Frame, SelectionUnit,
+        Cell, CursorShape, Frame, SelectionUnit,
         graphics::{Image as TermImage, ImagePixels},
     },
     terminal_theme::{TerminalTheme, is_light},
@@ -386,7 +386,8 @@ impl Term {
     }
 }
 
-/// How the cursor draws: owning the keyboard (filled), visible but not (hollow), or not at all.
+/// How the cursor draws: owning the keyboard (the shape the program asked for, a filled block
+/// by default), visible but not (hollow), or not at all.
 #[derive(Clone, Copy, Hash, PartialEq)]
 pub enum CursorLook {
     Block,
@@ -862,19 +863,23 @@ pub fn grid(key: &str, term: &Term, m: &Metrics, look: GridLook) -> El {
         let (px, py) = (x as f32 * cw, (y as usize - start) as f32 * ch);
         let cell = frame.cells.get(y as usize).and_then(|r| r.get(x as usize));
         let color = rgb(frame.cursor_color);
-        let mut cursor = el()
-            .key(format!("{key}/cursor"))
-            .absolute(px, py)
-            .size(cw, ch);
-        cursor = match cursor_look {
-            CursorLook::Block => cursor.fill(color),
-            CursorLook::Hollow => cursor.border(1., color),
+        // A pane without the keyboard always shows a hollow block, whatever the program asked.
+        let shape = match cursor_look {
+            CursorLook::Block => frame.cursor_shape,
+            CursorLook::Hollow => CursorShape::Hollow,
+        };
+        let cursor = el().key(format!("{key}/cursor"));
+        let mut cursor = match shape {
+            CursorShape::Block => cursor.absolute(px, py).size(cw, ch).fill(color),
+            CursorShape::Bar => cursor.absolute(px, py).size(2., ch).fill(color),
+            CursorShape::Underline => cursor.absolute(px, py + ch - 2.).size(cw, 2.).fill(color),
+            CursorShape::Hollow => cursor.absolute(px, py).size(cw, ch).border(1., color),
         };
         if look.ime {
             cursor = cursor.ime_cursor();
         }
         grid = grid.child(cursor);
-        if cursor_look == CursorLook::Block
+        if shape == CursorShape::Block
             && let Some(cell) =
                 cell.filter(|c| !c.text.is_empty() && !c.text.starts_with('\u{10eeee}'))
         {

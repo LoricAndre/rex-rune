@@ -70,7 +70,7 @@ Chrome uses Inter (bundled with the kit) in 10–13 pt steps, weights about 450 
 - Right-click captures the specific pane under the pointer; its menu names tab and pane and keeps a target outline through rename and close. A target that disappears dismisses the menu with a notice instead of retargeting.
 - Size ownership is automatic: the active window owns terminal size and typing claims it. A non-owner or reconnecting terminal shows an exception strip with **Take control** or **Retry**, and never sends a resize.
 - A transport failure marks affected panes input-paused, keeps their output, and never queues or replays input. Notices are toasts: errors are sticky, information leaves after about 6 seconds, and at most three notices are retained.
-- Focus cues: a filled block cursor in the focused terminal, a hollow outline cursor in others, and an accent outline on the focused pane when no panel is open.
+- Focus cues: the focused terminal draws the cursor shape its program asked for (a filled block unless it chose a bar or underline), other panes a hollow outline block, and the focused pane has an accent outline when no panel is open. Cursor blink requests draw steadily, like the rest of terminal content.
 - Links open only on Ctrl+click (press and release on the same link), never on a plain click, so selecting text and clicking into programs stay unchanged. Holding Ctrl over a link underlines it in its own text colour, shows the hand pointer and gives it a tooltip with its target URL (never its displayed text).
 
 ## Do and don't

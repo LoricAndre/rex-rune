@@ -2,7 +2,7 @@ use crate::wire::SnapshotBuffer;
 use anyhow::{Result, ensure};
 use ghostty_vt::{
     RenderState, Terminal,
-    render::{CellIterator, RowIterator},
+    render::{CellIterator, CursorVisualStyle, RowIterator},
     style::RgbColor,
     terminal::{Mode, Point, PointCoordinate},
 };
@@ -210,6 +210,15 @@ pub fn rgb(color: RgbColor) -> u32 {
     (color.r as u32) << 16 | (color.g as u32) << 8 | color.b as u32
 }
 
+/// The cursor shape a program asked for with DECSCUSR (or Ghostty's hollow block).
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum CursorShape {
+    Block,
+    Bar,
+    Underline,
+    Hollow,
+}
+
 #[derive(Clone, Debug)]
 pub struct Cell {
     pub text: String,
@@ -229,6 +238,7 @@ pub struct Frame {
     pub bg: u32,
     pub cursor: Option<(u16, u16)>,
     pub cursor_color: u32,
+    pub cursor_shape: CursorShape,
     /// The program asked for mouse reports (DEC 9, 1000, 1002 or 1003).
     pub mouse_tracking: bool,
     pub images: Vec<graphics::Image>,
@@ -371,6 +381,13 @@ impl Renderer {
                 None
             },
             cursor_color: snapshot.cursor_color()?.map(rgb).unwrap_or(fg),
+            // Blinking is ignored: terminal content never animates.
+            cursor_shape: match snapshot.cursor_visual_style()? {
+                CursorVisualStyle::Bar => CursorShape::Bar,
+                CursorVisualStyle::Underline => CursorShape::Underline,
+                CursorVisualStyle::BlockHollow => CursorShape::Hollow,
+                _ => CursorShape::Block,
+            },
             mouse_tracking: terminal.is_mouse_tracking()?,
             images: self.images.frame(terminal, &snapshot)?,
             cell_pixels: [
@@ -506,6 +523,31 @@ mod tests {
         let hidden_cursor = renderer.frame(&terminal).unwrap();
         assert!(hidden_cursor.cursor.is_none());
         assert_eq!(hidden_cursor.display_row_start(3), 2);
+    }
+
+    #[test]
+    fn programs_choose_the_cursor_shape() {
+        let mut terminal = Terminal::new(ghostty_vt::TerminalOptions {
+            cols: 12,
+            rows: 2,
+            ..Default::default()
+        })
+        .unwrap();
+        let mut renderer = Renderer::new().unwrap();
+        assert_eq!(
+            renderer.frame(&terminal).unwrap().cursor_shape,
+            CursorShape::Block
+        );
+        for (sequence, shape) in [
+            (&b"\x1b[5 q"[..], CursorShape::Bar),
+            (b"\x1b[6 q", CursorShape::Bar),
+            (b"\x1b[3 q", CursorShape::Underline),
+            (b"\x1b[4 q", CursorShape::Underline),
+            (b"\x1b[2 q", CursorShape::Block),
+        ] {
+            terminal.vt_write(sequence);
+            assert_eq!(renderer.frame(&terminal).unwrap().cursor_shape, shape);
+        }
     }
     #[test]
     fn copy_preserves_graphemes_without_wide_cell_padding() {
