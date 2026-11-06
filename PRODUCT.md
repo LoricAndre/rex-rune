@@ -11,7 +11,7 @@ Native Linux desktop (Wayland and X11). Rust, [Rune](https://github.com/anomalyc
 ## Principles
 
 - **Attachment only.** The client never starts, stops or reconfigures a server, and never creates or destroys a session unless asked explicitly.
-- **The server owns the terminal.** Terminal content, colours and split geometry come from the server; the client draws chrome around them and never recolours output.
+- **The server owns the terminal.** Terminal content, colours and split geometry come from the server; the client draws chrome around them and never recolours output. The client may declare a terminal theme to the server, as it declares a size: Rex applies it at once when this client owns the terminal or no client does, and otherwise when this client becomes the owner. Rex keeps each client's last declaration for each terminal, and the terminal shows its owner's; an owner that declared nothing leaves the colours as they were. So while this client owns a terminal (or nobody does), other clients viewing it see the declared theme, just as they see its size, and when another client that declared a theme takes it over, everyone sees that one.
 - **Hosts → sessions → tabs.** Saved hosts contain sessions; a session's Rex windows are tabs and its splits are the server's. Navigation must stay useful with a dozen or more sessions across several hosts.
 - **Compact and calm.** One toolbar, rounded pane cards on a flat dark ground. Popups and highlights animate; terminal content never does.
 - **Safe by default.** Closing a pane or tab names what will end and defaults to **Keep running**. A transport failure pauses input rather than queueing it.

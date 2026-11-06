@@ -1,10 +1,10 @@
 # Design system: Midnight
 
-Rex Linux draws calm, dark chrome around terminals that the server owns. The tokens below mirror `src/app/theme.rs`, which is the source of truth; update both together.
+Rex Linux draws calm, dark chrome around terminals that the server owns. Chrome palettes are token sets defined in `src/app/theme.rs`, which is the source of truth, and chosen at runtime; Midnight is the default and so far the only one, and its tokens are listed below (update both together). Each palette pairs with a default terminal theme whose background equals the chrome's ground, so a single pane reads as one surface with the toolbar. Palettes are dark only.
 
 ## Principles
 
-- **The terminal is the content.** Chrome frames it and stays out of the way. Terminal text, colours, cursor and split geometry come from the server and are never recoloured. The one exception: the server's default terminal background is drawn in the navy `CARD` colour, the same as the ground, so a single pane and the toolbar read as one surface; explicit colours are preserved.
+- **The terminal is the content.** Chrome frames it and stays out of the way. Terminal text, colours, cursor and split geometry come from the server and are never recoloured; a terminal theme the client declares reaches the terminal through the server (Rex's `set_theme`). The one exception: the server's default terminal background is drawn in the navy `CARD` colour, the same as the ground, so a single pane and the toolbar read as one surface; explicit colours are preserved.
 - **Chrome moves, content doesn't.** Popups spring open from their anchor and highlights and the sidebar slide; terminal content, pane geometry and cell rendering never animate.
 - **One working row.** Session identity, tabs, commands and the window's own controls share a single toolbar. Navigation (hosts → sessions) opens on demand, with an optional sidebar. The Sidebar tab position is an option that moves tabs out of the toolbar into the sidebar while the sidebar is open; closed, the toolbar shows them again.
 - **Quiet when healthy.** A connected host, a live pane and the active tab carry no status dots or "Connected" labels; names and host icons are enough. Words appear only for trouble ("Offline", "Reconnecting", "input paused"), in `WARNING`, next to the action that fixes it. The one exception is program activity: a tab whose programs finished while the user was away says "Done" in `ACCENT` until it is seen.
@@ -27,7 +27,7 @@ Rex Linux draws calm, dark chrome around terminals that the server owns. The tok
 | `DANGER` | `#ff8a8a` | Validation errors and destructive text |
 | `TERMINAL_SELECTION` | `#2f4a6e` | Local terminal text-selection overlay |
 
-Interaction fills are translucent white over the surface: hover 7%, pressed 11%; borders 6–20% white (focus uses `ACCENT`). Trouble states always carry a word, never colour alone; healthy states show nothing. No light theme is implemented.
+Interaction fills are translucent white over the surface: hover 7%, pressed 11%; borders 6–20% white (focus uses `ACCENT`). Trouble states always carry a word, never colour alone; healthy states show nothing. There is no light chrome palette.
 
 ## Typography
 
