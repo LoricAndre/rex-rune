@@ -272,7 +272,8 @@ fn window_row(s: &Workspace, index: usize, session: &str, tab: &rexrs::api::sess
         row = row.hover(white(0.05));
     }
     if s.settings.notifications.show_in_tabs
-        && let Some((word, tone)) = tab_word(&activity, s.unseen_on(index, id))
+        && let Some((word, tone)) =
+            tab_word(&activity, s.unseen_on(index, id), s.bell_on(index, id))
     {
         row = row.child(text(word).font(medium(10.5)).color(rgb(tone)));
     }

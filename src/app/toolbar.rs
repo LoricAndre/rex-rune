@@ -90,7 +90,7 @@ fn tab_track(s: &Workspace) -> El {
             let active = view.active_window_id.as_ref() == Some(&id);
             let label = tab_name(model, tab);
             let activity = tab_activity(model, tab);
-            let word = tab_word(&activity, s.unseen(&id))
+            let word = tab_word(&activity, s.unseen(&id), s.bell_on(s.active, &id))
                 .filter(|_| s.settings.notifications.show_in_tabs);
             let (press_id, rename_id, menu_id) = (id.clone(), id.clone(), id.clone());
             let mut tab_el = row()

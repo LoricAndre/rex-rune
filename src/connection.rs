@@ -183,6 +183,8 @@ pub struct HostModel {
     pub progress: HashMap<String, TerminalProgress>,
     /// Program notifications not yet taken by the UI.
     pub notices: Vec<DesktopNotice>,
+    /// Bells not yet taken by the UI, as (session, block).
+    pub bells: Vec<(String, String)>,
     /// Latest terminal-initiated copy, consumed once by the foreground UI.
     pub clipboard: Option<clipboard::ClipboardCopy>,
     /// Bumped whenever `activity` is dropped wholesale (on reconnect), so the UI starts its
@@ -274,6 +276,12 @@ impl HostModel {
             }
             BlockEvent::Progress(None) => {
                 self.progress.remove(&block);
+            }
+            BlockEvent::Bell => {
+                // A program ringing in a loop can't grow this without bound.
+                if self.bells.len() < 32 {
+                    self.bells.push((session.into(), block));
+                }
             }
         }
     }

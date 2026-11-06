@@ -1449,7 +1449,11 @@ fn a_tab_folds_its_records_by_priority_and_shows_its_program() {
     assert_eq!(single.state, Idle);
     assert_eq!(single.program.as_deref(), Some("nvim"));
     assert!(std::ptr::eq(program_icon(Some("nvim")), &super::theme::VIM));
-    assert_eq!(tab_word(&single, false), None);
+    assert_eq!(tab_word(&single, false, false), None);
+    assert_eq!(
+        tab_word(&single, false, true).map(|word| word.0),
+        Some("Bell".into())
+    );
     let split = tab_activity(model, &view.windows[1]);
     // Blocked beats Error beats Working, across both panes of the split.
     assert_eq!(split.state, Blocked);
@@ -1457,13 +1461,33 @@ fn a_tab_folds_its_records_by_priority_and_shows_its_program() {
     // The focused pane (block:b) reports through claude, which beats its foreground shell.
     assert_eq!(split.program.as_deref(), Some("claude"));
     assert_eq!(
-        tab_word(&split, false).map(|w| w.0).as_deref(),
+        tab_word(&split, false, false).map(|w| w.0).as_deref(),
         Some("Needs approval")
     );
     assert!(std::ptr::eq(
         program_icon(Some("bash")),
         &super::theme::TERMINAL
     ));
+    std::fs::remove_file(&ws.settings_path).ok();
+}
+
+#[test]
+fn background_bells_latch_until_their_tab_is_seen() {
+    let (mut ws, _rx) = tabbed_workspace("single");
+    ws.window_focused = false;
+    ws.ring_bells(0, vec![("s".into(), "block:b".into())]);
+    assert!(ws.bell_on(0, "split"));
+    ws.window_focused = true;
+    ws.track_activity(0);
+    assert!(ws.bell_on(0, "split"), "a background tab keeps its bell");
+    ws.hosts[0]
+        .model
+        .views
+        .get_mut("s")
+        .unwrap()
+        .active_window_id = Some("split".into());
+    ws.track_activity(0);
+    assert!(!ws.bell_on(0, "split"), "seeing the tab clears its bell");
     std::fs::remove_file(&ws.settings_path).ok();
 }
 
@@ -1475,7 +1499,7 @@ fn a_tabs_progress_report_shows_below_trouble_and_above_done() {
     let model = &mut ws.hosts[0].model;
     let view = model.view().unwrap().clone();
     let word = |model: &rex_linux::connection::HostModel, tab: usize, done: bool| {
-        tab_word(&tab_activity(model, &view.windows[tab]), done).map(|(w, _)| w.into_owned())
+        tab_word(&tab_activity(model, &view.windows[tab]), done, false).map(|(w, _)| w.into_owned())
     };
     for (progress, expected) in [
         (Set(Some(42)), "42%"),

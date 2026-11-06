@@ -104,6 +104,8 @@ pub struct Workspace {
     pub tab_states: TabStates,
     /// Tabs whose programs finished while the user wasn't looking; they show "Done".
     pub unseen_done: HashSet<(HostId, String)>,
+    /// Tabs whose programs rang the bell while the user wasn't looking; they show "Bell".
+    pub unseen_bells: HashSet<(HostId, String)>,
     pub activity_epochs: HashMap<HostId, u64>,
     pub notifier: Option<Notifier>,
     /// Notifications headless tests would have sent.
@@ -223,6 +225,7 @@ impl Workspace {
             settings_section: SettingsSection::default(),
             tab_states: HashMap::new(),
             unseen_done: HashSet::new(),
+            unseen_bells: HashSet::new(),
             activity_epochs: HashMap::new(),
             notifier: None,
             outbox: Vec::new(),
@@ -293,6 +296,7 @@ impl Workspace {
         self.claimed.retain(|(host, _)| *host != id);
         self.tab_states.retain(|(host, _), _| *host != id);
         self.unseen_done.retain(|(host, _)| *host != id);
+        self.unseen_bells.retain(|(host, _)| *host != id);
         self.activity_epochs.remove(&id);
     }
 
@@ -368,7 +372,7 @@ impl Workspace {
     pub fn sync(&mut self, index: usize, tx: &mut Tx) {
         let id = self.hosts[index].id;
         let old_session = self.hosts[index].model.selected.clone();
-        let (model, notices, clipboard) = {
+        let (model, notices, clipboard, bells) = {
             let mut shared = self.hosts[index]
                 .connection
                 .model
@@ -376,7 +380,8 @@ impl Workspace {
                 .expect("host model");
             let notices = std::mem::take(&mut shared.notices);
             let clipboard = shared.clipboard.take();
-            (shared.clone(), notices, clipboard)
+            let bells = std::mem::take(&mut shared.bells);
+            (shared.clone(), notices, clipboard, bells)
         };
         for (block, connection) in &model.terminals {
             let key = (id, block.clone());
@@ -427,6 +432,7 @@ impl Workspace {
         {
             tx.copy(copy.text);
         }
+        self.ring_bells(index, bells);
         self.track_activity(index);
         self.deliver_program_notices(index, notices);
         if self

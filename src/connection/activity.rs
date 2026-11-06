@@ -1,5 +1,5 @@
 //! What programs in a terminal report about themselves: OSC 7501 status records, OSC 9;4
-//! progress, the foreground process, the terminal title, and OSC 9 / OSC 777 desktop
+//! progress, the bell, the foreground process, the terminal title, and OSC 9 / OSC 777 desktop
 //! notifications. All of it arrives as the terminal creator's `block_event`s, or from its
 //! `program_status`, `process` and `title` methods.
 use serde_json::Value;
@@ -135,6 +135,8 @@ pub enum BlockEvent {
     },
     /// An OSC 9;4 report; none when the program removed its progress.
     Progress(Option<TerminalProgress>),
+    /// The program rang the terminal's bell (BEL).
+    Bell,
 }
 
 /// A terminal `block_event`'s block and meaning; none for other creators and other events.
@@ -165,6 +167,7 @@ pub fn parse_block_event(payload: &Value) -> Option<(String, BlockEvent)> {
             title: body["title"].as_str().unwrap_or_default().to_owned(),
             body: body["body"].as_str().unwrap_or_default().to_owned(),
         },
+        "bell" => BlockEvent::Bell,
         "progress_report" => BlockEvent::Progress({
             let percent = body["progress"]
                 .as_u64()

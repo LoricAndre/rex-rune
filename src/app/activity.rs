@@ -110,13 +110,19 @@ pub fn program_icon(program: Option<&str>) -> &'static rune::Icon {
     }
 }
 
-/// The word a pill shows after its label, with its colour: trouble always, then a program's
-/// own progress report, and Done until the tab is seen. Idle and Working records show nothing.
-pub fn tab_word(activity: &TabActivity, unseen_done: bool) -> Option<(Cow<'static, str>, u32)> {
+/// The word a pill shows after its label, with its colour: trouble always, then a bell that
+/// rang while the tab was out of sight, then a program's own progress report, and Done until
+/// the tab is seen. Idle and Working records show nothing.
+pub fn tab_word(
+    activity: &TabActivity,
+    unseen_done: bool,
+    unseen_bell: bool,
+) -> Option<(Cow<'static, str>, u32)> {
     use TerminalProgress::{Error, Indeterminate, Paused, Set};
     match activity.state {
         ProgramState::Blocked => Some((blocked_word(activity.kind).into(), warning())),
         ProgramState::Error => Some(("Error".into(), danger())),
+        _ if unseen_bell => Some(("Bell".into(), warning())),
         _ => match activity.progress {
             Some(Error(_)) => Some(("Error".into(), danger())),
             Some(Paused(Some(n))) => Some((format!("Paused {n}%").into(), warning())),
@@ -199,6 +205,9 @@ impl Workspace {
         }
         self.unseen_done
             .retain(|key| key.0 != id || now.contains_key(key));
+        // A bell shows until its tab is in front, and goes with its tab.
+        self.unseen_bells
+            .retain(|key| key.0 != id || now.get(key).is_some_and(|(_, seen, _)| !seen));
         self.tab_states.retain(|(host, _), _| *host != id);
         self.tab_states
             .extend(now.into_iter().map(|(k, (state, ..))| (k, state)));
@@ -357,6 +366,24 @@ impl Workspace {
         }
     }
 
+    /// Latch the bells programs rang, as (session, block), on tabs the user can't see.
+    pub fn ring_bells(&mut self, index: usize, bells: Vec<(String, String)>) {
+        let id = self.hosts[index].id;
+        for (session, block) in bells {
+            let window = self.hosts[index]
+                .model
+                .views
+                .get(&session)
+                .and_then(|v| v.windows.iter().find(|w| blocks(w).any(|b| b == block)))
+                .and_then(|w| w.window_id.clone());
+            if let Some(window) = window
+                && !self.tab_seen(index, &session, &window)
+            {
+                self.unseen_bells.insert((id, window));
+            }
+        }
+    }
+
     /// Whether `window` on the active host shows "Done" until seen.
     pub fn unseen(&self, window: &str) -> bool {
         self.unseen_on(self.active, window)
@@ -364,6 +391,12 @@ impl Workspace {
 
     pub fn unseen_on(&self, host: usize, window: &str) -> bool {
         self.unseen_done
+            .contains(&(self.hosts[host].id, window.to_owned()))
+    }
+
+    /// Whether `window` on host `host` rang its bell while out of sight.
+    pub fn bell_on(&self, host: usize, window: &str) -> bool {
+        self.unseen_bells
             .contains(&(self.hosts[host].id, window.to_owned()))
     }
 }

@@ -460,7 +460,10 @@ fn unknown_states_kinds_and_events_stay_quiet() {
     assert_eq!(record.app.as_deref(), Some("x"));
     let event = |creator: &str, name: &str| json!({"block_id":"b","creator_name":creator,"name":name,"payload":{}});
     assert!(activity::parse_block_event(&event("other.creator", "process_changed")).is_none());
-    assert!(activity::parse_block_event(&event(activity::TERMINAL, "bell")).is_none());
+    assert_eq!(
+        activity::parse_block_event(&event(activity::TERMINAL, "bell")),
+        Some(("b".into(), BlockEvent::Bell))
+    );
     assert_eq!(
         activity::parse_block_event(&event(activity::TERMINAL, "process_changed")),
         Some((
