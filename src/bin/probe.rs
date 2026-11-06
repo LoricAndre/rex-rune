@@ -104,7 +104,7 @@ async fn run() -> Result<()> {
         println!("PASS rejected resume → fresh snapshot: full scrollback restored");
 
         let client=control.welcome().client.as_ref().context("client identity")?.clone();
-        tokio::io::AsyncWriteExt::shutdown(control.transport().0.get_mut()).await?;
+        tokio::io::AsyncWriteExt::shutdown(control.transport().socket.get_mut()).await?;
         control=transport::control(&endpoint,Some(&client.reconnect_token)).await?;
         let current=control.welcome().client.as_ref().context("resumed client")?;
         ensure!(current.id==client.id && current.resumed,"control identity was not resumed");

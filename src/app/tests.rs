@@ -2208,3 +2208,52 @@ fn a_sidebar_tab_selects_its_session_and_focuses_its_window() {
     assert_eq!(sent(&rx), ["session.focus_window s split"]);
     std::fs::remove_file(&rt.state.settings_path).ok();
 }
+
+#[test]
+fn views_are_prefetched_only_for_tabs_the_sidebar_lists() {
+    fn latest(rx: &flume::Receiver<HostCommand>) -> Option<Vec<String>> {
+        rx.try_iter()
+            .filter_map(|c| match c {
+                HostCommand::PrefetchViews(ids) => {
+                    let mut ids: Vec<_> = ids.into_iter().collect();
+                    ids.sort();
+                    Some(ids)
+                }
+                _ => None,
+            })
+            .last()
+    }
+    let all = Some(vec!["other".to_owned(), "s".to_owned()]);
+    let (mut ws, rx) = tabbed_workspace("single");
+    ws.hosts[0].model.sessions.push(session("other"));
+    ws.toggle_sidebar();
+    let mut rt = runtime(ws);
+    assert_eq!(latest(&rx), None, "Top tab position loads nothing");
+    rt.update(|s, _| s.set_vertical_tabs(true));
+    assert_eq!(latest(&rx), all);
+    for _ in 0..60 {
+        rt.frame(1. / 60.);
+    }
+    click(&mut rt, "host-disclosure:0");
+    assert_eq!(latest(&rx), Some(vec![]), "a collapsed host loads nothing");
+    click(&mut rt, "host-disclosure:0");
+    assert_eq!(latest(&rx), all);
+    ctrl_shift(&mut rt, 'b');
+    assert_eq!(latest(&rx), Some(vec![]), "nor does a closed sidebar");
+    ctrl_shift(&mut rt, 'b');
+    assert_eq!(latest(&rx), all);
+    rt.update(|s, tx| {
+        let mut model = s.hosts[0].model.clone();
+        model.sessions.push(session("new"));
+        *s.hosts[0].connection.model.lock().unwrap() = model;
+        s.sync(0, tx);
+    });
+    assert_eq!(
+        latest(&rx),
+        Some(vec!["new".into(), "other".into(), "s".into()]),
+        "a new session is listed, so it is loaded too"
+    );
+    rt.update(|s, _| s.set_vertical_tabs(false));
+    assert_eq!(latest(&rx), Some(vec![]));
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}

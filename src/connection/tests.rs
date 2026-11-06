@@ -766,3 +766,213 @@ fn font_preferences_use_saved_values_unless_explicitly_overridden() {
         assert!(Options::try_parse_from(args).is_err());
     }
 }
+
+const THIRD: &str = "session:00000000-0000-0000-0000-000000000003";
+
+/// A bootstrap that lists `others` after the selected session.
+fn boot_with(others: &[&str]) -> Value {
+    let mut boot = serde_json::to_value(boot()).unwrap();
+    for id in others {
+        boot["attach_all"]["sessions"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"session_id":id,"label":id}));
+    }
+    boot
+}
+
+fn view_of(id: &str) -> Value {
+    json!({"session_id":id,"revision":1,"windows":[{"window_id":format!("{id}/tab")}]})
+}
+
+/// The next message, which must come well inside the 8 s request timeout.
+async fn next(ws: &mut WebSocketStream<TcpStream>) -> Value {
+    tokio::time::timeout(Duration::from_secs(2), recv(ws))
+        .await
+        .expect("a message in time")
+}
+
+async fn prefetched(ws: &mut WebSocketStream<TcpStream>, id: &str) -> Value {
+    let view = next(ws).await;
+    assert_eq!(view["method"], "session.view");
+    assert_eq!(view["payload"]["session_id"], id);
+    assert!(view["id"].as_str().unwrap().starts_with("detached:"));
+    view
+}
+
+async fn until(host: &HostConnection, done: impl Fn(&HostModel) -> bool) {
+    tokio::time::timeout(Duration::from_secs(8), async {
+        while !done(&host.model.lock().unwrap()) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+fn prefetch(host: &HostConnection, ids: &[&str]) {
+    let ids = ids.iter().map(|id| (*id).to_owned()).collect();
+    host.commands.send(HostCommand::PrefetchViews(ids)).unwrap();
+}
+
+fn focus_window(host: &HostConnection) {
+    host.commands
+        .send(HostCommand::Request {
+            method: "session.focus_window".into(),
+            payload: json!({"session_id":SESSION,"window_id":"w"}),
+        })
+        .unwrap();
+}
+
+/// Answer a control request and the view refresh that follows it.
+async fn answer_request(ws: &mut WebSocketStream<TcpStream>) {
+    let request = next(ws).await;
+    assert_eq!(request["method"], "session.focus_window");
+    reply(ws, &request, 3, json!({})).await;
+    let refresh = next(ws).await;
+    assert_eq!(refresh["method"], "session.view");
+    assert_eq!(refresh["payload"]["session_id"], SESSION);
+    reply(ws, &refresh, 3, json!({"session_id":SESSION,"revision":2})).await;
+}
+
+#[tokio::test]
+async fn a_slow_prefetch_neither_delays_control_requests_nor_overlaps_another() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let (sent, mut started) = tokio::sync::mpsc::unbounded_channel();
+    let server = tokio::spawn(async move {
+        let mut ws = accept(&listener, "rex.control.v1").await;
+        welcome(&mut ws, 8).await;
+        let boot = recv(&mut ws).await;
+        reply(&mut ws, &boot, 1, boot_with(&[OTHER, THIRD])).await;
+        let slow = prefetched(&mut ws, OTHER).await;
+        sent.send(()).unwrap();
+        // Unanswered, it holds back the next fetch but not the request.
+        answer_request(&mut ws).await;
+        reply(&mut ws, &slow, 4, view_of(OTHER)).await;
+        let view = prefetched(&mut ws, THIRD).await;
+        reply(&mut ws, &view, 5, view_of(THIRD)).await;
+        assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
+    });
+    let host = HostConnection::spawn(endpoint, None, None, None, false);
+    connected(&host).await;
+    prefetch(&host, &[OTHER, THIRD]);
+    started.recv().await.unwrap();
+    focus_window(&host);
+    until(&host, |m| {
+        m.views.contains_key(OTHER) && m.views.contains_key(THIRD)
+    })
+    .await;
+    assert!(host.model.lock().unwrap().views[SESSION].revision == 2);
+    drop(host);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn leaving_eligibility_cancels_queued_and_in_flight_fetches() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let (sent, mut started) = tokio::sync::mpsc::unbounded_channel();
+    let server = tokio::spawn(async move {
+        let mut ws = accept(&listener, "rex.control.v1").await;
+        welcome(&mut ws, 8).await;
+        let boot = recv(&mut ws).await;
+        reply(&mut ws, &boot, 1, boot_with(&[OTHER, THIRD])).await;
+        let late = prefetched(&mut ws, OTHER).await;
+        sent.send(()).unwrap();
+        // The request is handled after the empty set, so this response is stale.
+        answer_request(&mut ws).await;
+        reply(&mut ws, &late, 4, view_of(OTHER)).await;
+        sent.send(()).unwrap();
+        // No fetch for THIRD: the next message is the client closing.
+        assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
+    });
+    let host = HostConnection::spawn(endpoint, None, None, None, false);
+    connected(&host).await;
+    prefetch(&host, &[OTHER, THIRD]);
+    started.recv().await.unwrap();
+    prefetch(&host, &[]);
+    focus_window(&host);
+    started.recv().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!host.model.lock().unwrap().views.contains_key(OTHER));
+    drop(host);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn prefetch_picks_up_new_sessions_and_restarts_after_reconnect() {
+    const NEW: &str = "session:00000000-0000-0000-0000-000000000004";
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let mut ws = accept(&listener, "rex.control.v1").await;
+        welcome(&mut ws, 8).await;
+        let boot = recv(&mut ws).await;
+        reply(&mut ws, &boot, 1, boot_with(&[OTHER])).await;
+        let view = prefetched(&mut ws, OTHER).await;
+        reply(&mut ws, &view, 2, view_of(OTHER)).await;
+        send(&mut ws, json!({"type":"event","seq":3,"payload":{"type":"session_created","payload":{"session_id":NEW}}})).await;
+        let list = next(&mut ws).await;
+        assert_eq!(list["method"], "session.attach_all");
+        let sessions = &boot_with(&[OTHER, NEW])["attach_all"];
+        reply(&mut ws, &list, 4, sessions.clone()).await;
+        let view = prefetched(&mut ws, NEW).await;
+        reply(&mut ws, &view, 5, view_of(NEW)).await;
+        // The client reconnects; a new connection fetches every view again.
+        drop(ws);
+        let mut ws = accept(&listener, "rex.control.v1").await;
+        welcome(&mut ws, 8).await;
+        let boot = recv(&mut ws).await;
+        reply(&mut ws, &boot, 1, boot_with(&[OTHER, NEW])).await;
+        for id in [OTHER, NEW] {
+            let view = prefetched(&mut ws, id).await;
+            reply(&mut ws, &view, 2, view_of(id)).await;
+        }
+        assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
+    });
+    let host = HostConnection::spawn(endpoint, None, None, None, false);
+    connected(&host).await;
+    prefetch(&host, &[OTHER, NEW]);
+    until(&host, |m| m.views.contains_key(NEW)).await;
+    // The second one ends the reconnect delay.
+    for _ in 0..2 {
+        host.commands.send(HostCommand::Reconnect).unwrap();
+    }
+    until(&host, |m| {
+        m.protocol.bootstrap_requests == 2
+            && m.views.contains_key(OTHER)
+            && m.views.contains_key(NEW)
+    })
+    .await;
+    drop(host);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_failed_prefetch_is_retried_after_a_backoff() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let mut ws = accept(&listener, "rex.control.v1").await;
+        welcome(&mut ws, 8).await;
+        let boot = recv(&mut ws).await;
+        reply(&mut ws, &boot, 1, boot_with(&[OTHER, THIRD])).await;
+        let view = prefetched(&mut ws, OTHER).await;
+        send(&mut ws, json!({"type":"response","id":view["id"],"error":{"code":"conflict","message":"busy","status":409}})).await;
+        let failed = Instant::now();
+        let view = prefetched(&mut ws, THIRD).await;
+        assert!(failed.elapsed() < Duration::from_millis(500));
+        reply(&mut ws, &view, 2, view_of(THIRD)).await;
+        let view = prefetched(&mut ws, OTHER).await;
+        assert!(failed.elapsed() >= Duration::from_millis(950));
+        reply(&mut ws, &view, 3, view_of(OTHER)).await;
+        assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
+    });
+    let host = HostConnection::spawn(endpoint, None, None, None, false);
+    connected(&host).await;
+    prefetch(&host, &[OTHER, THIRD]);
+    until(&host, |m| m.views.contains_key(OTHER)).await;
+    drop(host);
+    server.await.unwrap();
+}

@@ -28,6 +28,8 @@ pub struct HostState {
     pub id: HostId,
     pub connection: HostConnection,
     pub model: HostModel,
+    /// The sessions this host's worker was last told to load views of.
+    pub prefetch: HashSet<String>,
 }
 
 pub struct DividerDrag {
@@ -236,6 +238,7 @@ impl Workspace {
             id,
             connection,
             model,
+            prefetch: HashSet::new(),
         }
     }
 
@@ -401,6 +404,7 @@ impl Workspace {
                 term.resize_if_owner(font);
             }
         }
+        self.sync_prefetch();
         self.update_title(tx);
     }
 
@@ -589,6 +593,25 @@ impl Workspace {
         self.settings.sidebar_open = self.sidebar.is_open();
         if let Err(error) = self.settings.save(&self.settings_path) {
             self.notify(format!("Preferences not saved: {error:#}"));
+        }
+        self.sync_prefetch();
+    }
+
+    /// Ask each host for the views of the sessions whose tabs the sidebar lists: those of
+    /// expanded hosts, while the sidebar is open with Sidebar tab position.
+    pub fn sync_prefetch(&mut self) {
+        let listing = self.sidebar_tabs();
+        for index in 0..self.hosts.len() {
+            let wanted: HashSet<String> = if listing && !self.settings.hosts[index].collapsed {
+                let sessions = &self.hosts[index].model.sessions;
+                sessions.iter().map(|s| s.session_id.clone()).collect()
+            } else {
+                HashSet::new()
+            };
+            if wanted != self.hosts[index].prefetch {
+                self.hosts[index].prefetch = wanted.clone();
+                self.send(index, HostCommand::PrefetchViews(wanted));
+            }
         }
     }
 

@@ -1,7 +1,11 @@
 use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
 use rexrs::AsyncRexClient;
-use tokio::io::{AsyncRead, AsyncWrite};
+use std::collections::HashMap;
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    sync::oneshot,
+};
 use tokio_tungstenite::{
     WebSocketStream,
     tungstenite::{Message, client::IntoClientRequest},
@@ -75,18 +79,67 @@ async fn open_socket(endpoint: &str, path: &str, protocol: &str) -> Result<Socke
     Ok(socket)
 }
 
-pub struct Transport(pub Socket);
+pub struct Transport {
+    pub socket: Socket,
+    /// Requests sent past the client, whose responses go to their receiver instead.
+    detached: HashMap<String, oneshot::Sender<String>>,
+    next_detached: u64,
+}
+
+impl Transport {
+    /// Send a request without waiting for it, so other calls and events keep flowing. Its
+    /// response arrives on the receiver as raw text, whichever call is reading the socket.
+    /// Dropping the receiver abandons it.
+    pub async fn detach(
+        &mut self,
+        method: &str,
+        payload: impl serde::Serialize,
+    ) -> rexrs::Result<oneshot::Receiver<String>> {
+        self.next_detached += 1;
+        // The client numbers its own requests; a prefix keeps these apart.
+        let id = format!("detached:{}", self.next_detached);
+        let text = serde_json::to_string(&serde_json::json!({
+            "type": "request", "id": id, "method": method, "payload": payload,
+        }))?;
+        let (reply, receiver) = oneshot::channel();
+        self.detached.retain(|_, reply| !reply.is_closed());
+        self.detached.insert(id, reply);
+        rexrs::AsyncTransport::send(self, text).await?;
+        Ok(receiver)
+    }
+
+    fn detached_reply(&mut self, text: &str) -> Option<oneshot::Sender<String>> {
+        #[derive(serde::Deserialize)]
+        struct Response {
+            #[serde(rename = "type")]
+            kind: String,
+            id: Option<String>,
+        }
+        if self.detached.is_empty() {
+            return None;
+        }
+        let response: Response = serde_json::from_str(text).ok()?;
+        (response.kind == "response")
+            .then(|| self.detached.remove(response.id.as_deref()?))
+            .flatten()
+    }
+}
+
 impl rexrs::AsyncTransport for Transport {
     async fn send(&mut self, text: String) -> rexrs::Result<()> {
-        self.0
+        self.socket
             .send(Message::Text(text.into()))
             .await
             .map_err(rexrs::Error::transport)
     }
     async fn recv(&mut self) -> rexrs::Result<rexrs::transport::Frame> {
         loop {
-            match self.0.next().await {
+            match self.socket.next().await {
                 Some(Ok(Message::Text(text))) => {
+                    if let Some(reply) = self.detached_reply(&text) {
+                        let _ = reply.send(text.to_string());
+                        continue;
+                    }
                     return Ok(rexrs::transport::Frame::Text(text.to_string()));
                 }
                 Some(Ok(Message::Close(frame))) => {
@@ -95,7 +148,7 @@ impl rexrs::AsyncTransport for Transport {
                         reason: frame.map(|f| f.reason.to_string()).unwrap_or_default(),
                     });
                 }
-                Some(Ok(_)) => self.0.flush().await.map_err(rexrs::Error::transport)?,
+                Some(Ok(_)) => self.socket.flush().await.map_err(rexrs::Error::transport)?,
                 Some(Err(error)) => return Err(rexrs::Error::transport(error)),
                 None => {
                     return Ok(rexrs::transport::Frame::Closed {
@@ -107,7 +160,10 @@ impl rexrs::AsyncTransport for Transport {
         }
     }
     async fn close(&mut self) -> rexrs::Result<()> {
-        self.0.close(None).await.map_err(rexrs::Error::transport)
+        self.socket
+            .close(None)
+            .await
+            .map_err(rexrs::Error::transport)
     }
 }
 
@@ -129,7 +185,11 @@ pub async fn control(endpoint: &str, reconnect: Option<&str>) -> Result<Client> 
     }
     let client = tokio::time::timeout(
         std::time::Duration::from_secs(8),
-        builder.connect_with(Transport(socket)),
+        builder.connect_with(Transport {
+            socket,
+            detached: HashMap::new(),
+            next_detached: 0,
+        }),
     )
     .await
     .context("Rex control WELCOME timed out")??;

@@ -17,6 +17,7 @@ use std::{
 
 pub mod activity;
 pub mod clipboard;
+mod prefetch;
 
 /// The label new tabs get. A tab that still has it shows its program's terminal title.
 pub const DEFAULT_TAB_LABEL: &str = "Shell";
@@ -275,6 +276,9 @@ pub enum HostCommand {
         blocks: Vec<String>,
     },
     Select(String),
+    /// The sessions whose views to load in the background, for listing their tabs; empty
+    /// stops loading.
+    PrefetchViews(HashSet<String>),
     /// A new session: the server picks a unique label when `label` is none; `shell` starts
     /// its first terminal.
     CreateSession {
@@ -1014,6 +1018,7 @@ async fn run_host(
     let mut token: Option<String> = None;
     let mut workers = HashMap::<String, PaneWorker>::new();
     let mut retry = 0;
+    let mut prefetch = prefetch::Prefetch::default();
     loop {
         let result: Result<bool> = async {
             let mut control = transport::control(&endpoint, token.as_deref()).await?;
@@ -1091,8 +1096,30 @@ async fn run_host(
             reconcile(&endpoint, shared, &sender, &mut workers);
             query_activity(&mut control, shared, &mut state, &workers).await;
             retry = 0;
+            prefetch.reset();
+            let mut pace = tokio::time::interval(prefetch::PACE);
+            pace.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
+                let due = prefetch.due(&shared.model.lock().expect("host model"), Instant::now());
                 tokio::select! {
+                    _ = prefetch::wait(&mut pace, due.unwrap_or_else(Instant::now)), if due.is_some() => {
+                        let next = prefetch.next(&shared.model.lock().expect("host model"), Instant::now());
+                        if let Some(id) = next {
+                            prefetch.start(&mut control, id).await?;
+                        }
+                    }
+                    (id, text) = prefetch.finished(), if prefetch.in_flight() => {
+                        if let Some((seq, view)) = prefetch.result(&id, text, Instant::now()) {
+                            let placed = {
+                                let m = shared.model.lock().expect("host model");
+                                m.views.contains_key(&id) || !m.sessions.iter().any(|s| s.session_id == id)
+                            };
+                            if !placed {
+                                state.view_seq.insert(id.clone(), seq);
+                                apply_view(shared, &id, view);
+                            }
+                        }
+                    }
                     event = control.next_event() => {
                         handle_event(event?, &mut control, shared, &mut workers, &mut state).await?;
                         state.prune(&shared.model.lock().expect("host model"));
@@ -1103,6 +1130,7 @@ async fn run_host(
                         let Ok(command) = command else { control.close().await?; return Ok(true); };
                         if matches!(command, HostCommand::Shutdown) { control.close().await?; return Ok(true); }
                         if matches!(command, HostCommand::Reconnect) { return Ok(false); }
+                        if let HostCommand::PrefetchViews(sessions) = command { prefetch.set_eligible(sessions); continue; }
                         if matches!(command, HostCommand::Select(_) | HostCommand::CreateSession { .. }) { preferred = None; }
                         let outcome = handle_command(command, &mut control, shared, &mut workers, &mut state).await;
                         if let Err(error) = outcome {
@@ -1137,6 +1165,7 @@ async fn run_host(
                     Ok(HostCommand::Reconnect) => break,
                     Ok(HostCommand::Select(id)) => preferred = Some(id),
                     Ok(HostCommand::Visibility(visible)) => shared.update(|m|m.visible=visible),
+                    Ok(HostCommand::PrefetchViews(sessions)) => prefetch.set_eligible(sessions),
                     Ok(HostCommand::Ticket { reply, .. }) => { let _ = reply.send(Err("Host is reconnecting".into())); }
                     Ok(HostCommand::Claim { .. }) => {}
                     Ok(HostCommand::Terminal { block, command: Command::Selection(input), .. }) => {
@@ -1155,6 +1184,7 @@ async fn run_host(
                 HostCommand::Shutdown => return Ok(()),
                 HostCommand::Select(id) => preferred = Some(id),
                 HostCommand::Visibility(visible) => shared.update(|m| m.visible = visible),
+                HostCommand::PrefetchViews(sessions) => prefetch.set_eligible(sessions),
                 HostCommand::Ticket { reply, .. } => {
                     let _ = reply.send(Err("Host is reconnecting".into()));
                 }
@@ -1365,7 +1395,9 @@ async fn handle_command(
                 }
             }
         }
-        HostCommand::Reconnect | HostCommand::Shutdown => unreachable!(),
+        HostCommand::Reconnect | HostCommand::Shutdown | HostCommand::PrefetchViews(_) => {
+            unreachable!()
+        }
     }
     Ok(())
 }
