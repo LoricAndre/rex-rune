@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Only Rex API revisions 10 and 11 are supported; servers older than revision 10 are refused with a message to update Rex. The revision-7 and revision-8 compatibility paths and `scripts/revision8-check.py` are gone.
+
 ## 0.3.0 — 2026-11-06
 
 Changes since the 0.2.0 public release on 2026-11-01. Many of them come from two forks; thank you to [Joe Goldin](https://github.com/joegoldin) ([joegoldin/rex-rune](https://github.com/joegoldin/rex-rune)) and [Lily](https://github.com/kitten-lily) ([kitten-lily/rex-rune](https://github.com/kitten-lily/rex-rune)), credited on each item below and as authors or co-authors of the commits.

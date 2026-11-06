@@ -37,7 +37,7 @@ It is written in Rust on [Rune](https://github.com/anomalyco/rune) (wgpu/winit, 
 - Rust 1.96 or newer (edition 2024; see `rust-version` in `Cargo.toml`).
 - [Zig](https://ziglang.org/) 0.17.x. The `ghostty-vt` crate builds Ghostty's VT library from a checksum-pinned source archive with Zig.
 - Linux with Wayland or X11, plus the usual graphics/input libraries: Vulkan, xkbcommon, fontconfig and the Wayland/X11 client libraries.
-- A running Rex server that supports API revisions 7 to 11. The client negotiates the newest the server offers; uploading files needs revision 11, and bootstrap tickets and program activity need 8.
+- A running Rex server that supports API revision 10 or 11. Rex is in alpha, so older revisions aren't supported; update Rex on a host that refuses the connection. Uploading files needs revision 11.
 
 ## Build
 
@@ -152,7 +152,6 @@ With mise, `mise run test`, `fmt`, `clippy` and `test-rexrs` run the first three
 
 The `scripts/` directory holds integration checks; each script's docstring lists its requirements (Xvfb, xdotool, a `rex` binary, `wayland-info`, …). Some use the configured Rex server rather than starting their own: point them at a disposable server you control. Wayland checks use the running compositor; X11 checks use an isolated display.
 
-- `revision8-check.py`: API revision negotiation and bootstrap tickets against a disposable server, optionally running the probes.
 - `connection-only-smoke.py`: a missing or stale socket must never execute the Rex CLI.
 - `x11-smoke.py`: real X11 events (forms, clipboard, pointer selection, key isolation).
 - `scroll-selection-x11.py`: private-server Unicode copy checks after scrolling, drag autoscroll, and Shift selection in a fullscreen mouse-tracking TUI without breaking ordinary mouse reports.
@@ -200,7 +199,7 @@ Other crates are used under their own licenses; see `Cargo.lock`.
 
 ## Acknowledgements
 
-- [Superlogical Rex](https://www.superlogical.com/rex), the server and protocol this client speaks. The implementation follows the server's `/llms.txt` API revision 11 contract, with tested revision-7 and revision-8 paths.
+- [Superlogical Rex](https://www.superlogical.com/rex), the server and protocol this client speaks. The implementation follows the server's `/llms.txt` API revision 11 contract; revision 10 is also supported.
 - [anomalyco/rune](https://github.com/anomalyco/rune) and [a10y/rexrs](https://github.com/a10y/rexrs).
 - [Ghostty](https://github.com/ghostty-org/ghostty) for the terminal core.
 - [m4nik1/rex-linux-client](https://github.com/m4nik1/rex-linux-client) and [noahdunnagan/rmx](https://github.com/noahdunnagan/rmx), whose protocol work served as references.

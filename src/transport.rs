@@ -168,7 +168,7 @@ impl rexrs::AsyncTransport for Transport {
 }
 
 pub type Client = AsyncRexClient<Transport>;
-pub const MIN_API_REVISION: u32 = 7;
+pub const MIN_API_REVISION: u32 = 10;
 pub const API_REVISION: u32 = 11;
 pub async fn control(endpoint: &str, reconnect: Option<&str>) -> Result<Client> {
     // This is an attachment-only client. Server lifetime and listener configuration

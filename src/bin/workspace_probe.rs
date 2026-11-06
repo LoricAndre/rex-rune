@@ -108,11 +108,7 @@ async fn run() -> Result<()> {
         println!("STARTUP first terminal frame in {} ms (controller probe polling)", started.elapsed().as_millis());
         let stats = model(&host).protocol;
         ensure!(stats.api_revision == revision, "host negotiated the wrong revision");
-        if revision >= 8 {
-            ensure!(stats.bootstrap_requests == 1 && stats.attach_requests == 0 && stats.bundled_tickets_used == 1 && stats.data_connect_requests == 0, "cold startup did not use the bundled ticket");
-        } else {
-            ensure!(stats.bootstrap_requests == 0 && stats.attach_requests == 1 && stats.bundled_tickets_used == 0 && stats.data_connect_requests == 1, "revision-7 compatibility path changed");
-        }
+        ensure!(stats.bootstrap_requests == 1 && stats.attach_requests == 0 && stats.bundled_tickets_used == 1 && stats.data_connect_requests == 0, "cold startup did not use the bundled ticket");
         println!("PASS API {revision} startup: {} bootstrap, {} attach, {} bundled tickets, {} data.connect", stats.bootstrap_requests, stats.attach_requests, stats.bundled_tickets_used, stats.data_connect_requests);
         let block=original.model.lock().unwrap().block.clone();
         ensure!(!original.model.lock().unwrap().owner,"navigation took ownership");
@@ -221,11 +217,7 @@ async fn run() -> Result<()> {
         request(&multi_host, &multi.session_id, "session.focus_window", json!({"window_id":second_window}))?;
         wait(&multi_host, "inactive window ticket", |m| m.terminals.len() == 3 && m.terminals.values().all(|c| c.model.lock().unwrap().connected)).await?;
         let stats = model(&multi_host).protocol;
-        if revision >= 8 {
-            ensure!(stats.bundled_tickets_used == 3 && stats.data_connect_requests == 0, "split/inactive-window tickets were not reused");
-        } else {
-            ensure!(stats.bundled_tickets_used == 0 && stats.data_connect_requests == 3, "revision-7 pane fallback failed");
-        }
+        ensure!(stats.bundled_tickets_used == 3 && stats.data_connect_requests == 0, "split/inactive-window tickets were not reused");
         drop(multi_host);
         println!("PASS three panes across split and inactive windows: {} bundled, {} data.connect", stats.bundled_tickets_used, stats.data_connect_requests);
         Ok(())

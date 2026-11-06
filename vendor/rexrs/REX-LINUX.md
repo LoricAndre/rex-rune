@@ -16,8 +16,7 @@ Local changes:
   `terminal.upload_begin` (11).
 - `ClientBuilder::api_revisions(min..=max)` passes an explicit supported range
   to HELLO. The SDK default still advertises only its generated revision.
-  Rex Linux advertises 7–11, validates WELCOME, gates bootstrap tickets on 8
-  and uploads on 11.
+  Rex Linux advertises 10–11, validates WELCOME and gates uploads on 11.
 - A focused negotiation test accompanies the builder change.
 - The generator preserves `attach_session_ids` as `Option<Vec<String>>`:
   omitting it selects a default session, while an explicit `[]` attaches none.
