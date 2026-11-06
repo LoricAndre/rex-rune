@@ -4,7 +4,7 @@ use crate::{
     transport::{self, Client},
     wire,
 };
-use activity::{BlockEvent, DesktopNotice, StatusRecord};
+use activity::{BlockEvent, DesktopNotice, StatusRecord, TerminalProgress};
 use anyhow::{Context, Result};
 use rexrs::api::{BlockMethod, session, terminal::SetTheme};
 use serde_json::{Value, json};
@@ -179,6 +179,8 @@ pub struct HostModel {
     pub foreground: HashMap<String, Vec<u64>>,
     /// Each terminal block's title, as a program last set it, and the pid that set it.
     pub titles: HashMap<String, (String, Option<u64>)>,
+    /// Each terminal block's OSC 9;4 progress, until its program removes it.
+    pub progress: HashMap<String, TerminalProgress>,
     /// Program notifications not yet taken by the UI.
     pub notices: Vec<DesktopNotice>,
     /// Latest terminal-initiated copy, consumed once by the foreground UI.
@@ -267,6 +269,12 @@ impl HostModel {
                     });
                 }
             }
+            BlockEvent::Progress(Some(progress)) => {
+                self.progress.insert(block, progress);
+            }
+            BlockEvent::Progress(None) => {
+                self.progress.remove(&block);
+            }
         }
     }
     fn forget_block(&mut self, block: &str) {
@@ -274,6 +282,7 @@ impl HostModel {
         self.programs.remove(block);
         self.foreground.remove(block);
         self.titles.remove(block);
+        self.progress.remove(block);
     }
 
     /// The block's terminal title while it's current. Shells rarely clear a title when the
@@ -1162,6 +1171,7 @@ async fn run_host(
                 m.programs.clear();
                 m.foreground.clear();
                 m.titles.clear();
+                m.progress.clear();
                 m.activity_epoch += 1;
             });
             let mut state = ControlState::default();

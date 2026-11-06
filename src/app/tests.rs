@@ -1456,11 +1456,50 @@ fn a_tab_folds_its_records_by_priority_and_shows_its_program() {
     assert_eq!(split.msg.as_deref(), Some("Run cargo test?"));
     // The focused pane (block:b) reports through claude, which beats its foreground shell.
     assert_eq!(split.program.as_deref(), Some("claude"));
-    assert_eq!(tab_word(&split, false).map(|w| w.0), Some("Needs approval"));
+    assert_eq!(
+        tab_word(&split, false).map(|w| w.0).as_deref(),
+        Some("Needs approval")
+    );
     assert!(std::ptr::eq(
         program_icon(Some("bash")),
         &super::theme::TERMINAL
     ));
+    std::fs::remove_file(&ws.settings_path).ok();
+}
+
+#[test]
+fn a_tabs_progress_report_shows_below_trouble_and_above_done() {
+    use super::activity::{tab_activity, tab_word};
+    use rex_linux::connection::activity::{ProgramState::Blocked, TerminalProgress::*};
+    let (mut ws, _rx) = tabbed_workspace("single");
+    let model = &mut ws.hosts[0].model;
+    let view = model.view().unwrap().clone();
+    let word = |model: &rex_linux::connection::HostModel, tab: usize, done: bool| {
+        tab_word(&tab_activity(model, &view.windows[tab]), done).map(|(w, _)| w.into_owned())
+    };
+    for (progress, expected) in [
+        (Set(Some(42)), "42%"),
+        (Set(None), "Working"),
+        (Indeterminate, "Working"),
+        (Paused(Some(7)), "Paused 7%"),
+        (Paused(None), "Paused"),
+        (Error(Some(3)), "Error"),
+    ] {
+        model.progress.insert("block:a".into(), progress);
+        assert_eq!(word(model, 0, true).as_deref(), Some(expected));
+    }
+    // Across a split, an error beats a pause beats progress.
+    model.progress.insert("block:b".into(), Set(Some(10)));
+    model.progress.insert("block:c".into(), Paused(Some(20)));
+    assert_eq!(word(model, 1, false).as_deref(), Some("Paused 20%"));
+    model.progress.insert("block:b".into(), Error(None));
+    assert_eq!(word(model, 1, false).as_deref(), Some("Error"));
+    // OSC 7501 trouble still comes first.
+    model.activity.insert(
+        "block:a".into(),
+        [("".into(), record(Blocked, true))].into(),
+    );
+    assert_eq!(word(model, 0, false).as_deref(), Some("Needs input"));
     std::fs::remove_file(&ws.settings_path).ok();
 }
 

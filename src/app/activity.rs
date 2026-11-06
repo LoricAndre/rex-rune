@@ -8,11 +8,11 @@ use super::{
 };
 use rex_linux::connection::{
     DEFAULT_TAB_LABEL, HostModel,
-    activity::{BlockedKind, ProgramState},
+    activity::{BlockedKind, ProgramState, TerminalProgress},
 };
 use rexrs::api::session;
 use rune::Tx;
-use std::collections::HashMap;
+use std::{borrow::Cow, collections::HashMap};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TabActivity {
@@ -26,6 +26,8 @@ pub struct TabActivity {
     pub source: Option<String>,
     /// The focused block's program: the one reporting, else the foreground process.
     pub program: Option<String>,
+    /// The tab's OSC 9;4 progress: an error, else a pause, else progress, across its panes.
+    pub progress: Option<TerminalProgress>,
 }
 
 fn blocks(window: &session::Window) -> impl Iterator<Item = &str> {
@@ -79,6 +81,9 @@ pub fn tab_activity(model: &HostModel, window: &session::Window) -> TabActivity 
             .and_then(|r| r.app.clone())
             .or_else(|| model.programs.get(b).cloned())
     });
+    let progress = blocks(window)
+        .filter_map(|b| model.progress.get(b).copied())
+        .max_by_key(|p| p.rank());
     TabActivity {
         state: top.map(|r| r.state).unwrap_or_default(),
         kind: top.and_then(|r| r.kind),
@@ -86,6 +91,7 @@ pub fn tab_activity(model: &HostModel, window: &session::Window) -> TabActivity 
         live: top.is_some_and(|r| r.live),
         source: top.and_then(|r| r.app.clone()),
         program,
+        progress,
     }
 }
 
@@ -104,14 +110,22 @@ pub fn program_icon(program: Option<&str>) -> &'static rune::Icon {
     }
 }
 
-/// The word a pill shows after its label, with its colour: trouble always, and Done until
-/// the tab is seen. Idle and Working show nothing.
-pub fn tab_word(activity: &TabActivity, unseen_done: bool) -> Option<(&'static str, u32)> {
+/// The word a pill shows after its label, with its colour: trouble always, then a program's
+/// own progress report, and Done until the tab is seen. Idle and Working records show nothing.
+pub fn tab_word(activity: &TabActivity, unseen_done: bool) -> Option<(Cow<'static, str>, u32)> {
+    use TerminalProgress::{Error, Indeterminate, Paused, Set};
     match activity.state {
-        ProgramState::Blocked => Some((blocked_word(activity.kind), warning())),
-        ProgramState::Error => Some(("Error", danger())),
-        _ if unseen_done => Some(("Done", accent())),
-        _ => None,
+        ProgramState::Blocked => Some((blocked_word(activity.kind).into(), warning())),
+        ProgramState::Error => Some(("Error".into(), danger())),
+        _ => match activity.progress {
+            Some(Error(_)) => Some(("Error".into(), danger())),
+            Some(Paused(Some(n))) => Some((format!("Paused {n}%").into(), warning())),
+            Some(Paused(None)) => Some(("Paused".into(), warning())),
+            Some(Set(Some(n))) => Some((format!("{n}%").into(), accent())),
+            Some(Set(None) | Indeterminate) => Some(("Working".into(), accent())),
+            None if unseen_done => Some(("Done".into(), accent())),
+            None => None,
+        },
     }
 }
 

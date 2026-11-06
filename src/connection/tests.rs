@@ -478,6 +478,36 @@ fn unknown_states_kinds_and_events_stay_quiet() {
 }
 
 #[test]
+fn progress_reports_set_and_clear_a_blocks_progress() {
+    use activity::TerminalProgress::*;
+    let report = |payload: Value| {
+        activity::parse_block_event(&json!({"block_id":"b","creator_name":activity::TERMINAL,
+            "name":"progress_report","payload":payload}))
+    };
+    let mut model = HostModel::default();
+    for (payload, progress) in [
+        (json!({"state":"set","progress":42}), Some(Set(Some(42)))),
+        (json!({"state":"set"}), Some(Set(None))),
+        (json!({"state":"indeterminate"}), Some(Indeterminate)),
+        (json!({"state":"pause","progress":7}), Some(Paused(Some(7)))),
+        (json!({"state":"error","progress":101}), Some(Error(None))),
+        (json!({"state":"remove"}), None),
+    ] {
+        let (block, event) = report(payload).expect("a progress report");
+        model.apply_block_event("s", block, event);
+        assert_eq!(model.progress.get("b").copied(), progress);
+    }
+    assert!(report(json!({"state":"sparkle"})).is_none());
+    model.apply_block_event(
+        "s",
+        "b".into(),
+        activity::BlockEvent::Progress(Some(Set(None))),
+    );
+    model.forget_block("b");
+    assert!(model.progress.is_empty(), "a closed block's progress goes");
+}
+
+#[test]
 fn program_names_prefer_the_script_and_drop_login_dashes() {
     let name = |v: Value| activity::program_name(&v);
     assert_eq!(

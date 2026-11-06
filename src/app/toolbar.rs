@@ -96,7 +96,7 @@ fn tab_track(s: &Workspace) -> El {
             let mut tab_el = row()
                 .key(format!("tab:{id}"))
                 .role("tab")
-                .label(match word {
+                .label(match &word {
                     Some((word, _)) => format!("{label} · {word}"),
                     None => label.clone(),
                 })
@@ -159,11 +159,12 @@ fn tab_track(s: &Workspace) -> El {
             );
             // The label truncates first; the word always stays whole.
             if let Some((word, tone)) = word {
+                let done = word == "Done";
                 let mut mark = text(word)
                     .key(format!("tab-word:{id}"))
                     .font(medium(11.5))
                     .color(rgb(tone));
-                if let Some(msg) = activity.msg.clone().filter(|_| word != "Done") {
+                if let Some(msg) = activity.msg.clone().filter(|_| !done) {
                     mark = mark.help(msg);
                 }
                 tab_el = tab_el.child(mark);
