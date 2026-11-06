@@ -2,7 +2,7 @@
 //! and the cell grid, drawn on a fixed column grid.
 use super::{
     keys,
-    theme::{CARD, TERMINAL_SELECTION, mix, rgb},
+    theme::{card, mix, rgb, terminal_selection},
 };
 use rex_linux::{
     connection::{Command, Connection},
@@ -746,8 +746,8 @@ impl TermColors {
     pub fn of(theme: Option<&TerminalTheme>) -> Self {
         let theme = theme.cloned().unwrap_or_default();
         Self {
-            background: theme.background.unwrap_or(CARD),
-            selection_bg: theme.selection_background.unwrap_or(TERMINAL_SELECTION),
+            background: theme.background.unwrap_or(card()),
+            selection_bg: theme.selection_background.unwrap_or(terminal_selection()),
             selection_fg: theme.selection_foreground,
             cursor_text: theme.cursor_text,
         }
@@ -1030,7 +1030,7 @@ mod tests {
         }
         let view = |s: &LinkState, _: &mut Cx<LinkState>| {
             let m = metrics(15.);
-            let marks = link_marks("g", &s.frame, &s.link, 0..2, &m, CARD);
+            let marks = link_marks("g", &s.frame, &s.link, 0..2, &m, card());
             el().w_full().h_full().children(marks)
         };
         let mut rt = Runtime::new(
@@ -1072,8 +1072,8 @@ mod tests {
     #[test]
     fn the_default_background_takes_the_chromes_only_on_its_own_side() {
         let follow = TermColors::default();
-        assert_eq!(follow.body(0x000000), CARD, "Rex's built-in black");
-        assert_eq!(follow.body(0x1e1e2e), CARD, "another owner's dark theme");
+        assert_eq!(follow.body(0x000000), card(), "Rex's built-in black");
+        assert_eq!(follow.body(0x1e1e2e), card(), "another owner's dark theme");
         assert_eq!(
             follow.body(0xfdf6e3),
             0xfdf6e3,
@@ -1098,7 +1098,7 @@ mod tests {
             "Rex's own colours draw like Follow server"
         );
 
-        for (bg, fg, body) in [(0x1e1e2e, 0xcdd6f4, CARD), (0xfdf6e3, 0x586e75, 0xfdf6e3)] {
+        for (bg, fg, body) in [(0x1e1e2e, 0xcdd6f4, card()), (0xfdf6e3, 0x586e75, 0xfdf6e3)] {
             let frame = themed_frame(bg, fg);
             assert_eq!(frame.bg, bg);
             let body_drawn = follow.body(frame.bg);

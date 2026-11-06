@@ -21,7 +21,7 @@ fn host_header(s: &Workspace, index: usize) -> El {
     let connected = s.hosts[index].model.connected;
     let active = index == s.active;
     // An offline host dims; its Retry connection row below says why.
-    let tone = rgb(if active && connected { INK } else { MUTED });
+    let tone = rgb(if active && connected { ink() } else { muted() });
     let new_help = format!("New session on {}", config.label);
     // One step to a new session; offline hosts keep the slot so the column lines up.
     let plus = if connected {
@@ -41,7 +41,7 @@ fn host_header(s: &Workspace, index: usize) -> El {
                 s.create_session(index, None, tx);
                 tx.blur();
             })
-            .child(glyph(&PLUS, 13., rgb(MUTED)))
+            .child(glyph(&PLUS, 13., rgb(muted())))
     } else {
         el().key(format!("host-new-session-slot:{index}"))
             .size(22., 22.)
@@ -82,7 +82,7 @@ fn host_header(s: &Workspace, index: usize) -> El {
                 .child(glyph(
                     if config.collapsed { &RIGHT } else { &CHEVRON },
                     13.,
-                    rgb(MUTED),
+                    rgb(muted()),
                 )),
         )
         .child(
@@ -174,7 +174,11 @@ fn session_row(s: &Workspace, index: usize, id: &str, label: &str) -> El {
         .child(if s.settings.vertical_tabs {
             el()
         } else {
-            glyph(&TERMINAL, 14., rgb(if selected { ACCENT } else { MUTED }))
+            glyph(
+                &TERMINAL,
+                14.,
+                rgb(if selected { accent() } else { muted() }),
+            )
         })
         .child(
             text(label.to_owned())
@@ -186,16 +190,20 @@ fn session_row(s: &Workspace, index: usize, id: &str, label: &str) -> El {
                     ui(13.)
                 })
                 .color(rgb(if selected && !s.settings.vertical_tabs {
-                    INK
+                    ink()
                 } else {
-                    MUTED
+                    muted()
                 }))
                 .truncate()
                 .grow(1.)
                 .shrink(),
         );
     if let Some(count) = count {
-        e = e.child(text(count.to_string()).font(medium(10.5)).color(rgb(MUTED)));
+        e = e.child(
+            text(count.to_string())
+                .font(medium(10.5))
+                .color(rgb(muted())),
+        );
     }
     if targeted {
         // An overlay, so the outline never shifts the row; above the selected fill.
@@ -204,7 +212,7 @@ fn session_row(s: &Workspace, index: usize, id: &str, label: &str) -> El {
                 .pin(Some(0.), Some(0.), Some(0.), Some(0.))
                 .radius(9.)
                 .continuous_corners()
-                .border(1.5, rgb(ACCENT)),
+                .border(1.5, rgb(accent())),
         );
     }
     e
@@ -246,12 +254,12 @@ fn window_row(s: &Workspace, index: usize, session: &str, tab: &rexrs::api::sess
         .child(glyph(
             program_icon(activity.program.as_deref()),
             15.,
-            rgb(if active { INK } else { MUTED }),
+            rgb(if active { ink() } else { muted() }),
         ))
         .child(
             text(label)
                 .font(if active { medium(12.5) } else { ui(12.5) })
-                .color(rgb(if active { INK } else { MUTED }))
+                .color(rgb(if active { ink() } else { muted() }))
                 .truncate()
                 .grow(1.)
                 .min_w(0.),
@@ -303,11 +311,11 @@ fn new_session(s: &Workspace, index: usize) -> El {
             s.perform(Intent::CreateOn(index, None), tx);
             tx.blur();
         })
-        .child(glyph(&PLUS, 14., rgb(ACCENT)))
+        .child(glyph(&PLUS, 14., rgb(accent())))
         .child(
             text("New session")
                 .font(medium(12.5))
-                .color(rgb(ACCENT))
+                .color(rgb(accent()))
                 .truncate(),
         )
 }
@@ -346,14 +354,14 @@ pub fn sidebar(s: &Workspace, cx: &mut Cx<Workspace>) -> El {
                     group = group.child(new_session(s, index));
                     height += SESSION_ROW + 2.;
                 } else {
-                    group = group.child(note("Waiting for connection…", MUTED));
+                    group = group.child(note("Waiting for connection…", muted()));
                     height += NOTE_ROW;
                 }
             }
             if !host.model.connected {
                 let status = host.model.status.clone();
                 group = group.child(
-                    note("Retry connection", ACCENT)
+                    note("Retry connection", accent())
                         .key(format!("retry-host:{index}"))
                         .role("button")
                         .radius(9.)
@@ -416,14 +424,14 @@ pub fn sidebar(s: &Workspace, cx: &mut Cx<Workspace>) -> El {
                 s.picker(true);
                 tx.blur();
             })
-            .child(glyph(&SEARCH, 14., rgb(MUTED)))
+            .child(glyph(&SEARCH, 14., rgb(muted())))
             .child(
                 text("Find a session")
                     .font(ui(12.5))
-                    .color(rgb(MUTED))
+                    .color(rgb(muted()))
                     .grow(1.),
             )
-            .child(text("⌃K").font(medium(10.5)).color(rgb(MUTED))),
+            .child(text("⌃K").font(medium(10.5)).color(rgb(muted()))),
     );
     let mut panel = col()
         .w_full()
@@ -441,7 +449,12 @@ pub fn sidebar(s: &Workspace, cx: &mut Cx<Workspace>) -> El {
                 .pl(14.)
                 .pr(6.)
                 .center_y()
-                .child(text("Sessions").font(strong(13.)).color(rgb(INK)).grow(1.))
+                .child(
+                    text("Sessions")
+                        .font(strong(13.))
+                        .color(rgb(ink()))
+                        .grow(1.),
+                )
                 .child(chrome_button(
                     "new-session",
                     &PLUS,
@@ -475,13 +488,13 @@ pub fn sidebar(s: &Workspace, cx: &mut Cx<Workspace>) -> El {
                     .cursor(Cursor::Pointer)
                     .preserve_focus_on_press(true)
                     .on_press_tx(|s: &mut Workspace, tx: &mut Tx| s.perform(Intent::AddHost, tx))
-                    .child(glyph(&PLUS, 14., rgb(MUTED)))
-                    .child(text("Add host").font(ui(12.)).color(rgb(MUTED))),
+                    .child(glyph(&PLUS, 14., rgb(muted())))
+                    .child(text("Add host").font(ui(12.)).color(rgb(muted()))),
             )
             .child(
                 text(format!("{total} sessions"))
                     .font(ui(11.))
-                    .color(rgb(MUTED))
+                    .color(rgb(muted()))
                     .pr(6.),
             ),
     );

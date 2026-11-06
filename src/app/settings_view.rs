@@ -65,12 +65,12 @@ pub(super) fn setting(label: &str, detail: &str, control: El) -> El {
         .grow(1.)
         .min_w(0.)
         .gap(2.)
-        .child(text(label.to_owned()).font(ui(13.)).color(rgb(INK)));
+        .child(text(label.to_owned()).font(ui(13.)).color(rgb(ink())));
     if !detail.is_empty() {
         words = words.child(
             text(detail.to_owned())
                 .font(ui(11.5))
-                .color(rgb(MUTED))
+                .color(rgb(muted()))
                 .wrap(),
         );
     }
@@ -87,7 +87,7 @@ pub(super) fn group(name: &str) -> El {
     text(name.to_owned())
         .font(label_caps())
         .text_case(rune::TextCase::Uppercase)
-        .color(rgb(MUTED))
+        .color(rgb(muted()))
         .mt(10.)
 }
 
@@ -121,7 +121,7 @@ fn stepper(
             row()
                 .w(52.)
                 .center()
-                .child(text(value).font(medium(13.)).color(rgb(INK))),
+                .child(text(value).font(medium(13.)).color(rgb(ink()))),
         )
         .child(
             IconButton::new(&PLUS)
@@ -306,7 +306,7 @@ fn terminal(s: &Workspace) -> El {
             "Fallback fonts",
             "Used for missing glyphs, followed by installed system fallbacks. Changes apply next launch.",
             text(if s.settings.font_fallbacks.is_empty() { "Automatic".into() } else { s.settings.font_fallbacks.join(", ") })
-                .font(medium(13.)).color(rgb(INK)).wrap().max_w(220.),
+                .font(medium(13.)).color(rgb(ink())).wrap().max_w(220.),
         ))
         .child(divider())
         .child(setting(
@@ -318,7 +318,7 @@ fn terminal(s: &Workspace) -> El {
                 .child(
                     text(Workspace::theme_label(&s.settings.terminal_theme).to_owned())
                         .font(medium(13.))
-                        .color(rgb(INK))
+                        .color(rgb(ink()))
                         .truncate()
                         .max_w(160.),
                 )
@@ -347,7 +347,7 @@ fn terminal(s: &Workspace) -> El {
     body.child(
         text(format!("Saved in {}", s.settings_path.display()))
             .font(ui(11.))
-            .color(rgb(MUTED))
+            .color(rgb(muted()))
             .wrap()
             .selectable(true)
             .mt(12.),
@@ -363,7 +363,7 @@ fn hosts(s: &Workspace) -> El {
         // Quiet when healthy: only trouble gets words, beside the action that fixes it.
         if !connected {
             actions = actions
-                .child(text("Offline").font(medium(12.)).color(rgb(WARNING)))
+                .child(text("Offline").font(medium(12.)).color(rgb(warning())))
                 .child(pill(
                     &format!("host-retry:{i}"),
                     "Retry",
@@ -412,7 +412,7 @@ fn hosts(s: &Workspace) -> El {
                     .min_h(52.)
                     .gap(12.)
                     .center_y()
-                    .child(glyph(s.host_icon(i), 16., rgb(MUTED)))
+                    .child(glyph(s.host_icon(i), 16., rgb(muted())))
                     .child(
                         col()
                             .grow(1.)
@@ -421,13 +421,13 @@ fn hosts(s: &Workspace) -> El {
                             .child(
                                 text(host.label.clone())
                                     .font(medium(13.))
-                                    .color(rgb(INK))
+                                    .color(rgb(ink()))
                                     .truncate(),
                             )
                             .child(
                                 text(format!("{}{shell}", host.endpoint))
                                     .font(ui(11.5))
-                                    .color(rgb(MUTED))
+                                    .color(rgb(muted()))
                                     .truncate()
                                     .selectable(true),
                             ),
@@ -446,7 +446,7 @@ fn hosts(s: &Workspace) -> El {
     .child(
         text("Removing a host only stops this app connecting to it; its sessions keep running.")
             .font(ui(11.5))
-            .color(rgb(MUTED))
+            .color(rgb(muted()))
             .wrap()
             .mt(8.),
     )
@@ -464,14 +464,14 @@ fn shortcuts() -> El {
                     .gap(12.)
                     .center_y()
                     .child(el().w(190.).child(Keybind::new(keys).build(k)))
-                    .child(text(*label).font(ui(12.5)).color(rgb(INK))),
+                    .child(text(*label).font(ui(12.5)).color(rgb(ink()))),
             );
         }
     }
     body.child(
         text("These are reserved by Rex; every other key goes to the focused terminal.")
             .font(ui(11.5))
-            .color(rgb(MUTED))
+            .color(rgb(muted()))
             .wrap()
             .mt(12.),
     )
@@ -498,12 +498,12 @@ fn nav(s: &Workspace) -> El {
             .cursor(Cursor::Pointer)
             .focusable(true)
             .focus_selected(selected)
-            .focus_ring(2., 0., rgb(ACCENT))
+            .focus_ring(2., 0., rgb(accent()))
             .on_press(move |s: &mut Workspace| s.open_section(section))
             .child(
                 text(section.title())
                     .font(if selected { medium(13.) } else { ui(13.) })
-                    .color(rgb(if selected { INK } else { MUTED })),
+                    .color(rgb(if selected { ink() } else { muted() })),
             );
         item = if selected {
             item.fill(white(0.09))
@@ -520,7 +520,7 @@ fn nav(s: &Workspace) -> El {
         .child(
             text("Settings")
                 .font(strong(15.))
-                .color(rgb(INK))
+                .color(rgb(ink()))
                 .px(10.)
                 .pt(6.),
         )
@@ -548,7 +548,7 @@ pub fn settings(s: &Workspace, viewport: [f32; 2]) -> El {
                 .px(24.)
                 .center_y()
                 .justify_between()
-                .child(text(section.title()).font(strong(17.)).color(rgb(INK)))
+                .child(text(section.title()).font(strong(17.)).color(rgb(ink())))
                 .child(
                     IconButton::new(&CLOSE)
                         .label("Close")

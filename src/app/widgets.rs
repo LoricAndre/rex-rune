@@ -45,7 +45,7 @@ pub fn chrome_button(
             f(s, tx);
             tx.blur();
         })
-        .child(glyph(i, 16., rgb(MUTED)))
+        .child(glyph(i, 16., rgb(muted())))
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -65,31 +65,34 @@ pub fn pill(
     height: f32,
     f: impl Fn(&mut Workspace, &mut Tx) + 'static,
 ) -> El {
-    let (ink, e) = match kind {
+    let (fg, e) = match kind {
         Pill::Primary => (
-            rgb(0x061220),
+            rgb(on_accent()),
             row()
                 .linear_gradient(
                     1.9,
-                    [(0., rgb(ACCENT)), (1., rgb(mix(ACCENT2, ACCENT, 0.55)))],
+                    [
+                        (0., rgb(accent())),
+                        (1., rgb(mix(accent2(), accent(), 0.55))),
+                    ],
                 )
-                .box_shadow(shadow(0., 6., 18., rgb(ACCENT).alpha(0.25)))
+                .box_shadow(shadow(0., 6., 18., rgb(accent()).alpha(0.25)))
                 .box_shadow(inset(1., white(0.35))),
         ),
-        Pill::Neutral => (rgb(INK), chip(row()).hover(white(0.09))),
+        Pill::Neutral => (rgb(ink()), chip(row()).hover(white(0.09))),
         Pill::Danger => (
-            rgb(DANGER),
+            rgb(danger()),
             row()
-                .fill(rgb(DANGER).alpha(0.1))
-                .border(1., rgb(DANGER).alpha(0.35))
-                .hover(rgb(DANGER).alpha(0.16)),
+                .fill(rgb(danger()).alpha(0.1))
+                .border(1., rgb(danger()).alpha(0.35))
+                .hover(rgb(danger()).alpha(0.16)),
         ),
         Pill::Warning => (
-            rgb(WARNING),
+            rgb(warning()),
             row()
-                .fill(rgb(WARNING).alpha(0.1))
-                .border(1., rgb(WARNING).alpha(0.4))
-                .hover(rgb(WARNING).alpha(0.18)),
+                .fill(rgb(warning()).alpha(0.1))
+                .border(1., rgb(warning()).alpha(0.4))
+                .hover(rgb(warning()).alpha(0.18)),
         ),
     };
     e.key(key.to_owned())
@@ -102,12 +105,12 @@ pub fn pill(
         .continuous_corners()
         .cursor(Cursor::Pointer)
         .focusable(true)
-        .focus_ring(2., 2., rgb(ACCENT))
+        .focus_ring(2., 2., rgb(accent()))
         .on_press_tx(f)
         .child(
             text(label.to_owned())
                 .font(medium(if height < 28. { 11.5 } else { 13. }))
-                .color(ink),
+                .color(fg),
         )
 }
 
@@ -145,11 +148,11 @@ pub fn list_row(
     index: usize,
     on_press: impl Fn(&mut Workspace, &mut Tx) + 'static,
 ) -> El {
-    let ink = rgb(if r.enabled { INK } else { MUTED });
+    let fg = rgb(if r.enabled { ink() } else { muted() });
     let detail = if r.selected {
-        rgb(INK).alpha(0.75)
+        rgb(ink()).alpha(0.75)
     } else {
-        rgb(MUTED)
+        rgb(muted())
     };
     let mut e = row()
         .key(r.key)
@@ -180,7 +183,7 @@ pub fn list_row(
     }
     if let Some(current) = r.check {
         e = e.child(el().w(14.).center().child(if current {
-            glyph(&CHECK, 14., rgb(ACCENT))
+            glyph(&CHECK, 14., rgb(accent()))
         } else {
             el()
         }));
@@ -188,7 +191,7 @@ pub fn list_row(
     e = e.child(
         text(r.label.to_owned())
             .font(if r.selected { medium(13.) } else { ui(13.) })
-            .color(ink)
+            .color(fg)
             .truncate()
             .grow(1.)
             .shrink(),
@@ -200,7 +203,7 @@ pub fn list_row(
         None => e
             .child(text(r.detail.to_owned()).font(ui(11.)).color(detail))
             .child(el().w(14.).child(if r.followup {
-                glyph(&RIGHT, 13., rgb(MUTED))
+                glyph(&RIGHT, 13., rgb(muted()))
             } else {
                 el()
             })),
@@ -227,7 +230,7 @@ pub fn row_action(
         .preserve_focus_on_press(true)
         .tab_index(-1)
         .on_press_tx(on_press)
-        .child(glyph(icon, 13., rgb(INK).alpha(0.75)))
+        .child(glyph(icon, 13., rgb(ink()).alpha(0.75)))
 }
 
 /// A list's scroll thumb and its direction-aware hint, both driven from the scroll offset
@@ -282,7 +285,7 @@ impl ScrollFx {
             text("More sessions and hosts below")
                 .live_text(&self.hint)
                 .font(ui(11.))
-                .color(rgb(MUTED))
+                .color(rgb(muted()))
                 .grow(1.),
         )
     }

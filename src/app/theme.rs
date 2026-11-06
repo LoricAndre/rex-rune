@@ -1,5 +1,5 @@
-//! Midnight: Rex's tokens, the kit pinned to them, shared surfaces (chips,
-//! glass, cards) and the app's icons.
+//! The chrome palette's tokens, the kit pinned to them, shared surfaces (chips, glass,
+//! cards) and the app's icons.
 use rune::{Color, El, Icon, Shadow, Spring, SpringPair, TextStyle, Transition};
 use rune_kit::{Kit, PaletteFocus, PaletteSeed};
 use std::sync::OnceLock;
@@ -51,19 +51,87 @@ pub fn inset(y: f32, color: Color) -> Shadow {
     }
 }
 
-pub const GROUND: u32 = 0x001528;
-/// The card, and the terminal's default background (the server's default black is replaced).
-/// The same navy as the ground, so a single pane and the toolbar read as one surface.
-pub const CARD: u32 = 0x001528;
-pub const POPOVER: u32 = 0x0d1524;
-pub const INK: u32 = 0xe8eef6;
-pub const MUTED: u32 = 0x93a3b8;
-pub const ACCENT: u32 = 0x7cc4ff;
-pub const ACCENT2: u32 = 0xa78bfa;
-pub const LIVE: u32 = 0x5eead4;
-pub const WARNING: u32 = 0xf5d48a;
-pub const DANGER: u32 = 0xff8a8a;
-pub const TERMINAL_SELECTION: u32 = 0x2f4a6e;
+/// One chrome palette: the colour tokens, and the kit pinned to them, built once.
+pub struct Palette {
+    pub ground: u32,
+    /// The card, and the terminal's default background (the server's default black is
+    /// replaced). The same colour as the ground, so a single pane and the toolbar read as one
+    /// surface.
+    pub card: u32,
+    pub popover: u32,
+    pub ink: u32,
+    pub muted: u32,
+    pub accent: u32,
+    pub accent2: u32,
+    pub live: u32,
+    pub warning: u32,
+    pub danger: u32,
+    /// Text on an accent fill (primary buttons).
+    pub on_accent: u32,
+    pub terminal_selection: u32,
+    kit: OnceLock<Kit>,
+}
+
+pub static MIDNIGHT: Palette = Palette {
+    ground: 0x001528,
+    card: 0x001528,
+    popover: 0x0d1524,
+    ink: 0xe8eef6,
+    muted: 0x93a3b8,
+    accent: 0x7cc4ff,
+    accent2: 0xa78bfa,
+    live: 0x5eead4,
+    warning: 0xf5d48a,
+    danger: 0xff8a8a,
+    on_accent: 0x061220,
+    terminal_selection: 0x2f4a6e,
+    kit: OnceLock::new(),
+};
+
+thread_local! {
+    // Per thread: Rune builds a window's view on its UI thread, and headless runtimes on
+    // other threads keep their own.
+    static ACTIVE: std::cell::Cell<&'static Palette> = const { std::cell::Cell::new(&MIDNIGHT) };
+}
+
+/// The palette views on this thread draw in.
+pub fn palette() -> &'static Palette {
+    ACTIVE.get()
+}
+
+pub fn ground() -> u32 {
+    palette().ground
+}
+pub fn card() -> u32 {
+    palette().card
+}
+pub fn popover() -> u32 {
+    palette().popover
+}
+pub fn ink() -> u32 {
+    palette().ink
+}
+pub fn muted() -> u32 {
+    palette().muted
+}
+pub fn accent() -> u32 {
+    palette().accent
+}
+pub fn accent2() -> u32 {
+    palette().accent2
+}
+pub fn warning() -> u32 {
+    palette().warning
+}
+pub fn danger() -> u32 {
+    palette().danger
+}
+pub fn on_accent() -> u32 {
+    palette().on_accent
+}
+pub fn terminal_selection() -> u32 {
+    palette().terminal_selection
+}
 
 pub const TOOLBAR: f32 = 52.;
 pub const GUTTER: f32 = 8.;
@@ -97,20 +165,21 @@ pub fn pop_in() -> Transition {
     Transition::scale(0.96).springs(SpringPair::new(POP, SNAPPY))
 }
 
+/// The active palette's kit.
 pub fn kit() -> &'static Kit {
-    static KIT: OnceLock<Kit> = OnceLock::new();
-    KIT.get_or_init(|| {
+    let p = palette();
+    p.kit.get_or_init(|| {
         let mut k = Kit::from_palette_focus(
             PaletteSeed {
-                bg: rgb(GROUND),
-                fg: rgb(INK),
-                accent: rgb(ACCENT),
+                bg: rgb(p.ground),
+                fg: rgb(p.ink),
+                accent: rgb(p.accent),
             },
-            PaletteFocus::Custom(rgb(ACCENT)),
+            PaletteFocus::Custom(rgb(p.accent)),
         );
         let c = &mut k.c;
-        (c.page, c.bg_base, c.surface_base) = (rgb(GROUND), rgb(GROUND), rgb(GROUND));
-        c.bg_deep = rgb(CARD);
+        (c.page, c.bg_base, c.surface_base) = (rgb(p.ground), rgb(p.ground), rgb(p.ground));
+        c.bg_deep = rgb(p.card);
         for slot in [
             &mut c.layer_01,
             &mut c.layer_02,
@@ -118,15 +187,15 @@ pub fn kit() -> &'static Kit {
             &mut c.surface_raised_base,
             &mut c.surface_float,
         ] {
-            *slot = rgb(POPOVER);
+            *slot = rgb(p.popover);
         }
         (c.hover, c.surface_hover, c.surface_raised_hover) =
             (white(0.07), white(0.07), white(0.07));
         c.pressed = white(0.11);
         (c.border_base, c.border_muted, c.border_weak) = (white(0.12), white(0.08), white(0.06));
         (c.border_strong, c.border_hover) = (white(0.2), white(0.2));
-        c.border_focus = rgb(ACCENT);
-        (c.text_base, c.text_strong, c.icon_base) = (rgb(INK), rgb(INK), rgb(INK));
+        c.border_focus = rgb(p.accent);
+        (c.text_base, c.text_strong, c.icon_base) = (rgb(p.ink), rgb(p.ink), rgb(p.ink));
         for slot in [
             &mut c.text_muted,
             &mut c.text_faint,
@@ -135,12 +204,12 @@ pub fn kit() -> &'static Kit {
             &mut c.icon_faint,
             &mut c.icon_weaker,
         ] {
-            *slot = rgb(MUTED);
+            *slot = rgb(p.muted);
         }
-        (c.text_accent, c.icon_accent) = (rgb(ACCENT), rgb(ACCENT));
-        c.success.fg = rgb(LIVE);
-        c.warning.fg = rgb(WARNING);
-        c.danger.fg = rgb(DANGER);
+        (c.text_accent, c.icon_accent) = (rgb(p.accent), rgb(p.accent));
+        c.success.fg = rgb(p.live);
+        c.warning.fg = rgb(p.warning);
+        c.danger.fg = rgb(p.danger);
         k.radius.sm = 8.;
         k.radius.md = 10.;
         k
@@ -172,7 +241,7 @@ pub fn chip(e: El) -> El {
 /// A popover or dialog surface: frosted navy with a lit rim and a deep shadow.
 pub fn glass(e: El, radius: f32, blur: bool) -> El {
     let e = e
-        .fill(rgb(POPOVER).alpha(0.95))
+        .fill(rgb(popover()).alpha(0.95))
         .border_gradient(1., white(0.16), white(0.05))
         .radius(radius)
         .continuous_corners()
@@ -328,3 +397,35 @@ mark!(
     "rex-opencode",
     r#"<path fill="currentColor" fill-rule="evenodd" d="M4 2.5h12v15H4ZM7.5 6v8h5V6Z"/><path fill="currentColor" fill-opacity=".45" d="M7.5 10h5v4h-5Z"/>"#
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn midnight_keeps_its_token_values() {
+        let p = &MIDNIGHT;
+        assert_eq!(
+            [
+                p.ground,
+                p.card,
+                p.popover,
+                p.ink,
+                p.muted,
+                p.accent,
+                p.accent2,
+                p.live,
+                p.warning,
+                p.danger,
+                p.on_accent,
+                p.terminal_selection,
+            ],
+            [
+                0x001528, 0x001528, 0x0d1524, 0xe8eef6, 0x93a3b8, 0x7cc4ff, 0xa78bfa, 0x5eead4,
+                0xf5d48a, 0xff8a8a, 0x061220, 0x2f4a6e,
+            ]
+        );
+        assert_eq!(kit().c.page, rgb(0x001528));
+        assert_eq!(kit().c.text_muted, rgb(0x93a3b8));
+    }
+}

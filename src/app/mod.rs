@@ -62,7 +62,7 @@ pub(crate) fn view(s: &Workspace, cx: &mut Cx<Workspace>) -> El {
         .origin(0., 0.)
         .scale(scale)
         .scale_motion(STILL)
-        .fill(rgb(GROUND))
+        .fill(rgb(ground()))
         .on_window_focus(|s: &mut Workspace, focused, _| s.window_focus(focused))
         .child(
             col()
@@ -87,7 +87,7 @@ pub(crate) fn view(s: &Workspace, cx: &mut Cx<Workspace>) -> El {
         .on_key_up(input::on_key_up)
         .w_full()
         .h_full()
-        .fill(rgb(GROUND))
+        .fill(rgb(ground()))
         .on_layout(|s: &mut Workspace, r| s.viewport = [r[2], r[3]])
         .child(root);
     // Native resize targets stay in window points at every content zoom. The corner above
