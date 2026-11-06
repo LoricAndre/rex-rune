@@ -3,7 +3,7 @@ use anyhow::{Result, ensure};
 use ghostty_vt::{
     RenderState, Terminal,
     render::{CellIterator, CursorVisualStyle, RowIterator},
-    style::RgbColor,
+    style::{RgbColor, StyleColor},
     terminal::{Mode, Point, PointCoordinate},
 };
 use serde_json::Value;
@@ -225,6 +225,8 @@ pub struct Cell {
     pub spacer_tail: bool,
     pub fg: u32,
     pub bg: u32,
+    /// The SGR 58 underline colour; none draws underlines in the text colour.
+    pub underline_color: Option<u32>,
     pub style: ghostty_vt::style::Style,
     /// The cell's OSC 8 hyperlink target.
     pub link: Option<Arc<str>>,
@@ -434,11 +436,17 @@ impl Renderer {
                 } else {
                     None
                 };
+                let underline_color = match style.underline_color {
+                    StyleColor::None => None,
+                    StyleColor::Palette(index) => Some(rgb(colors.palette[index.0 as usize])),
+                    StyleColor::Rgb(color) => Some(rgb(color)),
+                };
                 line.push(Cell {
                     text,
                     spacer_tail: raw.wide()? == ghostty_vt::screen::CellWide::SpacerTail,
                     fg,
                     bg,
+                    underline_color,
                     style,
                     link,
                 });
@@ -561,6 +569,28 @@ mod tests {
         let frame = Renderer::new().unwrap().frame(&terminal).unwrap();
         assert_eq!(frame.selected_text(0, 25), "界 e\u{301}\nsecond");
         assert_eq!(frame.selected_text(25, 0), "界 e\u{301}\nsecond");
+    }
+
+    #[test]
+    fn underline_styles_colours_and_overlines_reach_the_frame() {
+        use ghostty_vt::style::Underline;
+        let mut terminal = Terminal::new(ghostty_vt::TerminalOptions {
+            cols: 12,
+            rows: 2,
+            ..Default::default()
+        })
+        .unwrap();
+        terminal.vt_write(b"\x1b[4:3;58:2::1:2:3mA\x1b[0;4:2;58:5:1mB\x1b[0;4:4mC\x1b[0;53mD");
+        let frame = Renderer::new().unwrap().frame(&terminal).unwrap();
+        let cell = |text: &str| frame.cells[0].iter().find(|c| c.text == text).unwrap();
+        assert_eq!(cell("A").style.underline, Underline::Curly);
+        assert_eq!(cell("A").underline_color, Some(0x010203));
+        assert_eq!(cell("B").style.underline, Underline::Double);
+        assert!(cell("B").underline_color.is_some());
+        assert_eq!(cell("C").style.underline, Underline::Dotted);
+        assert_eq!(cell("C").underline_color, None);
+        assert!(cell("D").style.overline);
+        assert_eq!(cell("D").style.underline, Underline::None);
     }
 
     #[test]

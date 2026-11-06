@@ -4,6 +4,7 @@ use super::{
     keys,
     theme::{MIDNIGHT, Palette, mix, rgb},
 };
+use ghostty_vt::style::Underline;
 use rex_linux::{
     connection::{Command, Connection},
     links::Link,
@@ -13,7 +14,9 @@ use rex_linux::{
     },
     terminal_theme::{TerminalTheme, is_light},
 };
-use rune::{El, Family, Mods, Span, TextStyle, el, memo, rich, text};
+use rune::{
+    El, Family, LineCap, Mods, Path, Shape, Span, TextStyle, canvas, el, memo, rich, text,
+};
 use serde_json::json;
 use std::{
     collections::HashMap,
@@ -396,14 +399,15 @@ pub enum CursorLook {
 
 fn hash_cell(cell: &Cell, h: &mut DefaultHasher) {
     cell.text.hash(h);
-    (cell.fg, cell.bg, cell.spacer_tail).hash(h);
+    (cell.fg, cell.bg, cell.underline_color, cell.spacer_tail).hash(h);
     let s = &cell.style;
     (
         s.bold,
         s.italic,
         s.faint,
         s.strikethrough,
-        s.underline != ghostty_vt::style::Underline::None,
+        s.underline,
+        s.overline,
     )
         .hash(h);
 }
@@ -414,7 +418,10 @@ struct RunStyle {
     bold: bool,
     italic: bool,
     faint: bool,
-    underline: bool,
+    underline: Underline,
+    /// None draws the underline in `fg`.
+    underline_color: Option<u32>,
+    overline: bool,
     strike: bool,
 }
 impl RunStyle {
@@ -433,7 +440,9 @@ impl RunStyle {
             bold: s.bold,
             italic: s.italic,
             faint: s.faint,
-            underline: s.underline != ghostty_vt::style::Underline::None,
+            underline: s.underline,
+            underline_color: cell.underline_color.map(tint),
+            overline: s.overline,
             strike: s.strikethrough,
         }
     }
@@ -443,17 +452,7 @@ fn glyph_run(content: String, style: RunStyle, x: f32, y: f32, m: &Metrics) -> E
     let font = face(m, style.bold, style.italic);
     let color = rgb(style.fg);
     let len = content.len();
-    let mut e = if style.underline {
-        rich(
-            content,
-            vec![Span {
-                underline: Some(color),
-                ..Span::new(0, len)
-            }],
-        )
-    } else {
-        text(content)
-    };
+    let mut e = text(content);
     if style.strike {
         e = e.strike(0, len, Some(color));
     }
@@ -530,9 +529,6 @@ impl Segment {
                     span.weight = Some(700.);
                 }
                 span.italic = style.italic;
-                if style.underline {
-                    span.underline = Some(color);
-                }
                 self.spans.push(span);
                 if style.strike {
                     self.strikes.push((self.start, end, style.fg));
@@ -550,26 +546,19 @@ impl Segment {
     }
     fn finish(mut self, m: &Metrics) -> Option<El> {
         self.close_span();
-        // Trailing undecorated blanks draw nothing.
+        // Trailing blanks need no glyph: underlines and overlines are drawn on their own.
         while self.text.ends_with(' ')
-            && self
-                .spans
-                .last()
-                .is_some_and(|s| s.underline.is_none() && (s.end as usize) == self.text.len())
             && !self.strikes.iter().any(|&(_, e, _)| e == self.text.len())
         {
             self.text.pop();
             if let Some(last) = self.spans.last_mut() {
-                last.end -= 1;
+                last.end = last.end.min(self.text.len() as u32);
                 if last.end <= last.start {
                     self.spans.pop();
                 }
             }
         }
-        if self.text.trim().is_empty()
-            && self.strikes.is_empty()
-            && !self.spans.iter().any(|s| s.underline.is_some())
-        {
+        if self.text.trim().is_empty() && self.strikes.is_empty() {
             return None;
         }
         let mut e = rich(self.text, self.spans)
@@ -647,17 +636,22 @@ fn row_pass(
     if pass == RowPass::Background {
         return row;
     }
-    let mut segment: Option<Segment> = None;
-    for (col, cell) in cells.iter().enumerate() {
-        if cell.spacer_tail || cell.text.starts_with('\u{10eeee}') {
-            continue;
-        }
-        let mut style = RunStyle::of(cell, frame_bg, body);
+    // Selected text takes the theme's selection foreground, decorations included.
+    let style_at = |col: usize| {
+        let mut style = RunStyle::of(&cells[col], frame_bg, body);
         if let (Some(fg), Some((a, b))) = (colors.selection_fg, sel)
             && (a..=b).contains(&col)
         {
             style.fg = fg;
         }
+        style
+    };
+    let mut segment: Option<Segment> = None;
+    for (col, cell) in cells.iter().enumerate() {
+        if cell.spacer_tail || cell.text.starts_with('\u{10eeee}') {
+            continue;
+        }
+        let style = style_at(col);
         let text = if cell.text.is_empty() {
             " "
         } else {
@@ -668,7 +662,7 @@ fn row_pass(
         let wide = cells.get(col + 1).is_some_and(|c| c.spacer_tail);
         let fits = !wide && single.is_some_and(|c| fits_cell(c, style.bold, style.italic, m));
         if fits {
-            if text == " " && segment.is_none() && !style.underline && !style.strike {
+            if text == " " && segment.is_none() && !style.strike {
                 continue;
             }
             segment
@@ -684,7 +678,83 @@ fn row_pass(
     if let Some(done) = segment.and_then(|s| s.finish(m)) {
         row = row.child(done);
     }
+    // Underlines and overlines in the style and colour the program asked for, rather than
+    // the font's single underline, one shape per run of cells that draw them alike.
+    let mut start = 0;
+    while start < cells.len() {
+        let style = style_at(start);
+        let mut end = start + 1;
+        while end < cells.len() && same_decoration(&style_at(end), &style) {
+            end += 1;
+        }
+        if !cells[start].text.starts_with('\u{10eeee}') {
+            let width = (end - start) as f32 * cw;
+            let shape = decoration_shape(&style, width, ch);
+            if !shape.is_empty() {
+                row = row.child(
+                    canvas(shape)
+                        .absolute(start as f32 * cw, 0.)
+                        .size(width, ch),
+                );
+            }
+        }
+        start = end;
+    }
     row
+}
+
+fn same_decoration(a: &RunStyle, b: &RunStyle) -> bool {
+    (a.underline, a.underline_color, a.overline, a.fg)
+        == (b.underline, b.underline_color, b.overline, b.fg)
+}
+
+/// A run's underline (single, double, curly, dotted or dashed) and overline, `width` wide in a
+/// cell `height` tall.
+fn decoration_shape(style: &RunStyle, width: f32, height: f32) -> Shape {
+    let mut shape = Shape::new();
+    let color = rgb(style.underline_color.unwrap_or(style.fg));
+    let y = height - 2.;
+    match style.underline {
+        Underline::Single => {
+            shape = shape.line([0., y], [width, y], 1., LineCap::Butt, color);
+        }
+        Underline::Double => {
+            shape = shape
+                .line([0., y - 2.], [width, y - 2.], 1., LineCap::Butt, color)
+                .line([0., y], [width, y], 1., LineCap::Butt, color);
+        }
+        Underline::Curly => {
+            // Half waves 4 points long, alternately below and above the line.
+            let mut path = Path::new().move_to([0., y]);
+            let (mut x, mut below) = (0., true);
+            while x < width {
+                let end = (x + 4.).min(width);
+                let bend = if below { 1.5 } else { -1.5 };
+                path = path.quad_to([(x + end) / 2., y + bend], [end, y]);
+                (x, below) = (end, !below);
+            }
+            shape = shape.stroke_path(&path, 1., LineCap::Round, color);
+        }
+        Underline::Dotted => {
+            let mut x = 0.;
+            while x < width {
+                shape = shape.line([x, y], [x + 0.1, y], 1.5, LineCap::Round, color);
+                x += 3.;
+            }
+        }
+        Underline::Dashed => {
+            let mut x = 0.;
+            while x < width {
+                shape = shape.line([x, y], [(x + 4.).min(width), y], 1., LineCap::Butt, color);
+                x += 7.;
+            }
+        }
+        _ => {}
+    }
+    if style.overline {
+        shape = shape.line([0., 1.], [width, 1.], 1., LineCap::Butt, rgb(style.fg));
+    }
+    shape
 }
 
 fn image_el(
