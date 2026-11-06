@@ -31,6 +31,9 @@ pub struct Term {
     pub last_size: Option<(u16, u16)>,
     /// The grid's rect in window points (inside the padding).
     pub rect: [f32; 4],
+    /// While this client owns a live pane, its frames stay hidden until one arrives at this
+    /// grid's size.
+    initial_size: InitialSize,
     pub selection: Option<(usize, usize)>,
     selection_anchor: Option<(usize, usize)>,
     selection_unit: SelectionUnit,
@@ -56,6 +59,36 @@ pub struct Term {
 #[derive(Clone, Copy)]
 pub struct MouseGesture {
     pub button: &'static str,
+}
+
+/// The first frame of a pane is at whatever size the server last had for it; the resize this
+/// client sends only lands a moment later. An owner hides frames until one matches its grid,
+/// once. A non-owner never resizes, so its frames may never match and are drawn as they come.
+#[derive(Default)]
+struct InitialSize {
+    expected: Option<(u16, u16)>,
+    ready: bool,
+}
+
+impl InitialSize {
+    fn layout(&mut self, size: (u16, u16), frame: Option<(u16, u16)>) {
+        if self.ready {
+            return;
+        }
+        self.expected = Some(size);
+        self.observe(frame);
+    }
+
+    fn observe(&mut self, frame: Option<(u16, u16)>) {
+        if self.expected.is_some() && self.expected == frame {
+            self.expected = None;
+            self.ready = true;
+        }
+    }
+
+    fn renders(&self, status: &Status) -> bool {
+        self.ready || !status.live || !status.owner
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -100,6 +133,7 @@ impl Term {
             frame,
             last_size: None,
             rect: [0.; 4],
+            initial_size: InitialSize::default(),
             selection: None,
             selection_anchor: None,
             selection_unit: SelectionUnit::Cell,
@@ -143,6 +177,8 @@ impl Term {
                 }
             }
         }
+        self.initial_size
+            .observe(frame.as_ref().map(|frame| (frame.cols, frame.rows)));
         self.frame = frame;
         // The same cell may hold a different link, or none, after output.
         if let Some((index, _)) = self.link.take() {
@@ -178,6 +214,14 @@ impl Term {
                 .iter()
                 .any(|image| Arc::as_ptr(&image.pixels) as usize == *key)
         });
+    }
+
+    fn display_frame(&self) -> Option<&Arc<Frame>> {
+        if self.initial_size.renders(&self.status()) {
+            self.frame.as_ref()
+        } else {
+            None
+        }
     }
 
     pub fn status(&self) -> Status {
@@ -223,6 +267,10 @@ impl Term {
         let status = self.status();
         let cols = (self.rect[2] / cell.0).floor().clamp(1., 65535.) as u16;
         let rows = (self.rect[3] / cell.1).floor().clamp(1., 65535.) as u16;
+        self.initial_size.layout(
+            (cols, rows),
+            self.frame.as_ref().map(|frame| (frame.cols, frame.rows)),
+        );
         if !status.owner || !status.live {
             self.last_size = None;
         } else if self.last_size != Some((cols, rows)) {
@@ -862,7 +910,7 @@ impl Term {
 
 /// The visible rows of `term`'s frame, each memoized by its content.
 pub fn grid(key: &str, term: &Term, m: &Metrics, look: GridLook) -> El {
-    let Some(frame) = &term.frame else {
+    let Some(frame) = term.display_frame() else {
         return el().w_full().h_full();
     };
     let (cw, ch) = m.cell;
@@ -1047,6 +1095,37 @@ mod tests {
         el().w_full()
             .h_full()
             .child(row_el(&s.cells, 0., 0, None, &m))
+    }
+
+    #[test]
+    fn an_owner_waits_once_for_a_frame_at_its_size_and_a_non_owner_never_waits() {
+        let status = |live, owner| Status {
+            live,
+            owner,
+            status: String::new(),
+        };
+        let mut size = InitialSize::default();
+        assert!(!size.renders(&status(true, true)), "hidden before layout");
+        assert!(
+            size.renders(&status(false, true)),
+            "retained output offline"
+        );
+        size.layout((80, 24), Some((160, 50)));
+        assert!(
+            !size.renders(&status(true, true)),
+            "stale size stays hidden"
+        );
+        assert!(
+            size.renders(&status(true, false)),
+            "a non-owner never resizes, so it draws the size it gets"
+        );
+        size.observe(Some((80, 24)));
+        assert!(size.renders(&status(true, true)), "this size shows");
+        size.layout((100, 30), Some((80, 24)));
+        assert!(
+            size.renders(&status(true, true)),
+            "a later resize keeps drawing the previous frame"
+        );
     }
 
     #[test]
