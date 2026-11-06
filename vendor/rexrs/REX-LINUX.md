@@ -7,12 +7,17 @@ Vendored from `https://github.com/a10y/rexrs` at
 
 Local changes:
 
-- `codegen/help.json` and `version.json` capture Rex `0.0.1793377904-ge6592f`,
-  API revision 8. `python3 codegen/generate.py` regenerates the committed types
-  and example tests. The API addition is `session.bootstrap.data_tickets`.
+- `codegen/help.json` and `version.json` capture Rex `0.0.1793910724-g2e71f8`,
+  API revision 11 (`rex api list --json` and `server.version` from a disposable
+  server). `python3 codegen/generate.py` regenerates the committed types and
+  example tests. The API additions since upstream are
+  `session.bootstrap.data_tickets` (8), layer `state` and
+  `session.set_layer_state` (9), the Tailscale `control_url` (10) and
+  `terminal.upload_begin` (11).
 - `ClientBuilder::api_revisions(min..=max)` passes an explicit supported range
   to HELLO. The SDK default still advertises only its generated revision.
-  Rex Linux advertises 7–8, validates WELCOME, and gates the new fields on 8.
+  Rex Linux advertises 7–11, validates WELCOME, gates bootstrap tickets on 8
+  and uploads on 11.
 - A focused negotiation test accompanies the builder change.
 - The generator preserves `attach_session_ids` as `Option<Vec<String>>`:
   omitting it selects a default session, while an explicit `[]` attaches none.

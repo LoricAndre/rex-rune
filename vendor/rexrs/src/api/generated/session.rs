@@ -185,6 +185,10 @@ pub struct Tailscale {
     /// older servers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub https: Option<Http>,
+    /// The control server the device uses, such as a Headscale server. Left out for Tailscale's
+    /// own, while built-in Tailscale is off, and by older servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_url: Option<String>,
 }
 
 /// The configuration file the server loaded most recently. Always present, even when there is no
@@ -2982,6 +2986,92 @@ impl crate::api::Method for SetLabel {
     type Response = SetLabelResponse;
 }
 
+/// The result of [`SetLayerState`].
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
+pub struct SetLayerStateResponse {
+    /// The session's revision after this call. It is unchanged if the call changed nothing that
+    /// session.view shows, unless the method's notes say otherwise.
+    pub revision: u64,
+}
+
+/// Minimize a floating layer or return it to normal, optionally raising and focusing it.
+///
+/// - Only a floating layer can be minimized. Minimizing the window's layout, the layer of kind
+///   `tiled` in `session.view`, fails with `bad_request`. Setting it to `normal` succeeds and
+///   changes nothing.
+/// - With `focus` set to `true`, the layer is also raised, the block last focused in it takes
+///   focus, or its first block, and its window becomes active, all in one revision. This also
+///   works on a layer that is already normal and on the tiled layer. `focus` with `minimized`, or
+///   on a layer with no blocks, fails with `bad_request` and changes nothing.
+/// - `state` must be `normal` or `minimized`. Any other value fails with `bad_request`.
+/// - A minimized layer stays in `session.view` with `state` set to `minimized`, its blocks keep
+///   running, and it keeps its bounds and its place in the stack. `state` is left out for a
+///   normal layer.
+/// - Minimizing the layer that has focus moves focus to the layer used before it, or to the
+///   nearest visible pane, and clears zoom. Returning a layer to normal leaves focus where it is.
+///   Setting the state the layer already has changes nothing.
+/// - A window must keep a visible pane, so minimizing the layer that holds its last visible panes
+///   fails with `bad_request`.
+/// - If the session doesn't exist, the call fails with `session_not_found`. If `layer_id` names
+///   no layer in the session, it fails with `not_found`.
+///
+/// Wire method: `session.set_layer_state`.
+///
+/// # Example
+///
+/// ```json
+/// {
+///   "session_id": "session:<uuid>",
+///   "layer_id": "layer:<uuid>",
+///   "state": "minimized"
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
+#[non_exhaustive]
+pub struct SetLayerState {
+    /// The session to act on.
+    pub session_id: String,
+    /// The layer to change.
+    #[serde(default)]
+    pub layer_id: Option<String>,
+    /// The state to set: 'normal' or 'minimized'.
+    pub state: String,
+    /// Whether to also raise the layer, focus the block last focused in it, and make its window
+    /// active, all in one change. Needs state to be 'normal' and the layer to have a block.
+    /// Defaults to false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus: Option<bool>,
+}
+
+impl SetLayerState {
+    /// Creates a `SetLayerState` with its required fields.
+    pub fn new(
+        session_id: impl Into<String>,
+        layer_id: impl Into<String>,
+        state: impl Into<String>,
+    ) -> Self {
+        Self {
+            session_id: session_id.into(),
+            layer_id: Some(layer_id.into()),
+            state: state.into(),
+            focus: Default::default(),
+        }
+    }
+
+    /// Whether to also raise the layer, focus the block last focused in it, and make its window
+    /// active, all in one change. Needs state to be 'normal' and the layer to have a block.
+    /// Defaults to false.
+    pub fn focus(mut self, value: bool) -> Self {
+        self.focus = Some(value);
+        self
+    }
+}
+
+impl crate::api::Method for SetLayerState {
+    const NAME: &'static str = "session.set_layer_state";
+    type Response = SetLayerStateResponse;
+}
+
 /// The result of [`SetWindowLabel`].
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
 pub struct SetWindowLabelResponse {
@@ -3180,6 +3270,11 @@ pub struct Layer {
     /// Where the layer sits, as \[x, y, w, h\] fractions of the window's width and height.
     #[serde(default, deserialize_with = "crate::api::nullable")]
     pub bounds: Vec<f64>,
+    /// How the layer is presented: 'minimized' means don't draw it, though its blocks keep running,
+    /// and only a floating layer can be minimized. Left out for a normal layer. Draw a state you
+    /// don't know as normal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
     /// How the layer divides its space between blocks, as a tree of splits. Null when the layer is
     /// empty.
     #[serde(default)]

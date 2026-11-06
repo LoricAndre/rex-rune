@@ -1068,6 +1068,82 @@ impl crate::api::BlockMethod for Title {
     type Response = TitleResponse;
 }
 
+/// The result of [`UploadBegin`].
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
+pub struct UploadBeginResponse {
+    /// A single-use ticket to send in the HELLO message that opens the data connection. Only a data
+    /// connection from the same user can use it.
+    pub ticket: String,
+    /// How long the ticket stays valid after the server issues it, in milliseconds.
+    pub expires_in_ms: u64,
+}
+
+/// Reserve a file to upload to the terminal's machine, such as one the user dropped on the
+/// terminal, and get a ticket for the rex.data.bytes.v1 data stream that carries its bytes. Once
+/// every file of the batch has arrived, the terminal types their paths as if the user had pasted
+/// them.
+///
+/// Wire method: `com.superlogical.terminal.upload_begin`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
+#[non_exhaustive]
+pub struct UploadBegin {
+    /// The data reference for the file's stream: upload: followed by a new UUID in lower-case
+    /// canonical form, which the client chooses.
+    pub r#ref: String,
+    /// The file's name. Only its last path component is used, without control characters.
+    pub name: String,
+    /// The file's exact size in bytes.
+    pub size: i64,
+    /// An ID the client chooses for a group of files whose paths are typed together. Left out, the
+    /// file is uploaded on its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch: Option<String>,
+    /// The file's position in its batch, from 0. Paths are typed in this order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<i64>,
+    /// How many files the batch has. Required with batch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<i64>,
+}
+
+impl UploadBegin {
+    /// Creates a `UploadBegin` with its required fields.
+    pub fn new(r#ref: impl Into<String>, name: impl Into<String>, size: i64) -> Self {
+        Self {
+            r#ref: r#ref.into(),
+            name: name.into(),
+            size,
+            batch: Default::default(),
+            index: Default::default(),
+            count: Default::default(),
+        }
+    }
+
+    /// An ID the client chooses for a group of files whose paths are typed together. Left out, the
+    /// file is uploaded on its own.
+    pub fn batch(mut self, value: impl Into<String>) -> Self {
+        self.batch = Some(value.into());
+        self
+    }
+
+    /// The file's position in its batch, from 0. Paths are typed in this order.
+    pub fn index(mut self, value: i64) -> Self {
+        self.index = Some(value);
+        self
+    }
+
+    /// How many files the batch has. Required with batch.
+    pub fn count(mut self, value: i64) -> Self {
+        self.count = Some(value);
+        self
+    }
+}
+
+impl crate::api::BlockMethod for UploadBegin {
+    const NAME: &'static str = "com.superlogical.terminal.upload_begin";
+    type Response = UploadBeginResponse;
+}
+
 /// The result of [`Write`].
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
 pub struct WriteResponse {

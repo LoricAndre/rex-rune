@@ -1960,6 +1960,30 @@ fn session_set_label_response() {
 }
 
 #[test]
+fn session_set_layer_state_request() {
+    let value: rexrs::api::session::SetLayerState = serde_json::from_str(
+        r##"{
+  "session_id": "session:<uuid>",
+  "layer_id": "layer:<uuid>",
+  "state": "minimized"
+}"##,
+    )
+    .unwrap();
+    let json = serde_json::to_value(&value).unwrap();
+    let again: rexrs::api::session::SetLayerState = serde_json::from_value(json).unwrap();
+    assert_eq!(value, again);
+}
+
+#[test]
+fn session_set_layer_state_response() {
+    let value: rexrs::api::session::SetLayerStateResponse =
+        serde_json::from_str(r##"{"revision": 42}"##).unwrap();
+    let json = serde_json::to_value(&value).unwrap();
+    let again: rexrs::api::session::SetLayerStateResponse = serde_json::from_value(json).unwrap();
+    assert_eq!(value, again);
+}
+
+#[test]
 fn session_set_window_label_request() {
     let value: rexrs::api::session::SetWindowLabel = serde_json::from_str(
         r##"{

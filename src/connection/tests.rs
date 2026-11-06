@@ -114,7 +114,7 @@ async fn send(ws: &mut WebSocketStream<TcpStream>, value: Value) {
 
 async fn welcome(ws: &mut WebSocketStream<TcpStream>, revision: u32) -> Value {
     let hello = recv(ws).await;
-    assert_eq!(hello["api_revision"], 8);
+    assert_eq!(hello["api_revision"], 11);
     assert_eq!(hello["api_min_revision"], 7);
     send(ws, json!({"type":"welcome", "protocol":"rex.control.v1", "api_revision":revision,
         "limits":{"max_message_bytes":65536}, "client":{"id":"client:test", "reconnect_token":"test-token"}})).await;
@@ -192,7 +192,7 @@ async fn bootstrap_is_first_and_newer_pre_response_events_survive() {
 
 #[tokio::test]
 async fn unsupported_negotiated_revision_is_rejected() {
-    for revision in [6, 9] {
+    for revision in [6, 12] {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {

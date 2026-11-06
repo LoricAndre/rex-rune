@@ -291,6 +291,10 @@ pub struct Tailscale {
     /// older servers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub https: Option<Http>,
+    /// The control server the device uses, such as a Headscale server. Left out for Tailscale's
+    /// own, while built-in Tailscale is off, and by older servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_url: Option<String>,
 }
 
 /// The configuration file the server loaded most recently. Always present, even when there is no
@@ -527,6 +531,11 @@ pub struct TailscaleEnable {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub advertise_tags: Vec<String>,
+    /// The control server to sign in with if this call starts the device, such as
+    /// <https://headscale.example.com>. If left out, the server uses its configured control server,
+    /// or Tailscale's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_url: Option<String>,
 }
 
 impl TailscaleEnable {
@@ -537,6 +546,7 @@ impl TailscaleEnable {
             allow_tailnet_members,
             auth_key: Default::default(),
             advertise_tags: Default::default(),
+            control_url: Default::default(),
         }
     }
 
@@ -558,6 +568,14 @@ impl TailscaleEnable {
     /// starts the device. Needs allow_tailnet_members set to true.
     pub fn advertise_tags(mut self, value: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.advertise_tags = value.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// The control server to sign in with if this call starts the device, such as
+    /// <https://headscale.example.com>. If left out, the server uses its configured control server,
+    /// or Tailscale's own.
+    pub fn control_url(mut self, value: impl Into<String>) -> Self {
+        self.control_url = Some(value.into());
         self
     }
 }
