@@ -40,7 +40,7 @@ Some probes and Python scripts in `scripts/` connect to the configured Rex serve
 - `examples/`: `chrome_spike` (borderless window chrome).
 - `scripts/`: integration and acceptance checks, and the desktop installer. `tools/`: small helpers for test scripts.
 - `resources/`: desktop entry and icons.
-- `vendor/`: patched copies of Rune and rexrs.
+- `vendor/`: patched copies of Rune, rexrs and ghostty-vt.
 
 ## Conventions
 
@@ -56,9 +56,9 @@ Some probes and Python scripts in `scripts/` connect to the configured Rex serve
 
 ## Vendored patches
 
-`vendor/rune` and `vendor/rexrs` are upstream snapshots plus small, documented patches, wired in through `[patch]` in `Cargo.toml`. Rules:
+`vendor/rune`, `vendor/rexrs` and `vendor/ghostty-vt` are upstream snapshots plus small, documented patches, wired in through `[patch]` in `Cargo.toml`. Rules:
 
-- Keep each patch minimal and describe it in the vendor directory's README (`vendor/rune/README.md`, `vendor/rexrs/REX-LINUX.md`).
+- Keep each patch minimal and describe it in the vendor directory's README (`vendor/rune/README.md`, `vendor/rexrs/REX-LINUX.md`, `vendor/ghostty-vt/REX-LINUX.md`).
 - Do not mix unrelated edits into vendored code; changes that could go upstream should.
 - Preserve upstream license files and attribution. When bumping a pinned revision, update `Cargo.toml`, the vendored copy and its README together, then re-run the tests above.
 - Remove a patch once upstream provides an equivalent.
