@@ -919,8 +919,8 @@ async fn prefetch_picks_up_new_sessions_and_restarts_after_reconnect() {
         reply(&mut ws, &list, 4, sessions.clone()).await;
         let view = prefetched(&mut ws, NEW).await;
         reply(&mut ws, &view, 5, view_of(NEW)).await;
-        // The client reconnects; a new connection fetches every view again.
-        drop(ws);
+        // The client drops this connection; a new one fetches every view again.
+        assert!(!matches!(ws.next().await, Some(Ok(Message::Text(_)))));
         let mut ws = accept(&listener, "rex.control.v1").await;
         welcome(&mut ws, 8).await;
         let boot = recv(&mut ws).await;
@@ -935,10 +935,11 @@ async fn prefetch_picks_up_new_sessions_and_restarts_after_reconnect() {
     connected(&host).await;
     prefetch(&host, &[OTHER, NEW]);
     until(&host, |m| m.views.contains_key(NEW)).await;
-    // The second one ends the reconnect delay.
-    for _ in 0..2 {
-        host.commands.send(HostCommand::Reconnect).unwrap();
-    }
+    host.commands.send(HostCommand::Reconnect).unwrap();
+    // Only a Reconnect that arrives during the delay ends it; any later one would drop the
+    // new connection too.
+    until(&host, |m| !m.connected).await;
+    host.commands.send(HostCommand::Reconnect).unwrap();
     until(&host, |m| {
         m.protocol.bootstrap_requests == 2
             && m.views.contains_key(OTHER)
