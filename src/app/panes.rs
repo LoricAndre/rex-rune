@@ -177,6 +177,7 @@ fn pane_card(
 ) -> El {
     let key = s.term_key(block);
     let id = block.to_owned();
+    let (drop_id, hover_id) = (block.to_owned(), block.to_owned());
     let focused = matches!(state, CardState::Focused);
     let mut c = col()
         .key(format!("pane:{block}"))
@@ -189,7 +190,21 @@ fn pane_card(
         .transition(no_presence())
         .on_secondary_press(move |s: &mut Workspace, p, _| {
             s.pane_menu(id.clone(), Some((p.x, p.y)))
+        })
+        .on_drop_hover(move |s: &mut Workspace, inside, _| {
+            if inside {
+                s.drop_hover = Some(hover_id.clone());
+            } else if s.drop_hover.as_ref() == Some(&hover_id) {
+                s.drop_hover = None;
+            }
+        })
+        .on_drop_files(move |s: &mut Workspace, paths, _| {
+            s.drop_hover = None;
+            s.drop_files(&drop_id, paths);
         });
+    if bleed && s.drop_hover.as_deref() == Some(block) {
+        c = c.border(1., rgb(accent()).alpha(0.85));
+    }
     if !bleed {
         c = c
             .radius(CARD_RADIUS)
@@ -581,7 +596,9 @@ pub fn area(s: &Workspace) -> El {
             card_rect(s, placement.rect)
         };
         let is_focus = focused.as_deref() == Some(placement.block.as_str());
-        let state = if target.as_deref() == Some(placement.block.as_str()) {
+        let state = if target.as_deref() == Some(placement.block.as_str())
+            || s.drop_hover.as_deref() == Some(placement.block.as_str())
+        {
             CardState::Target
         } else if is_focus && s.panel.is_none() {
             CardState::Focused

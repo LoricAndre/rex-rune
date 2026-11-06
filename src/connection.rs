@@ -329,6 +329,12 @@ pub enum HostCommand {
         block: String,
         command: Command,
     },
+    /// Upload files to the block's machine; Rex types their paths into it once all arrive.
+    Upload {
+        session: String,
+        block: String,
+        files: Vec<crate::upload::File>,
+    },
     Reconnect,
     /// The terminal theme to declare from now on, also while disconnected; none declares
     /// nothing (Follow server).
@@ -1243,6 +1249,13 @@ async fn run_host(
                         if matches!(command, HostCommand::Shutdown) { control.close().await?; return Ok(true); }
                         if matches!(command, HostCommand::Reconnect) { return Ok(false); }
                         if let HostCommand::PrefetchViews(sessions) = command { prefetch.set_eligible(sessions); continue; }
+                        if let HostCommand::Upload { session, block, files } = command {
+                            if let Err(error) = upload(&mut control, shared, &endpoint, &session, &block, files).await {
+                                shared.update(|m| m.notice = Some(format!("Upload failed: {error:#}")));
+                                if !matches!(error.downcast_ref::<rexrs::Error>(), Some(rexrs::Error::Api(_)) | None) { return Err(error); }
+                            }
+                            continue;
+                        }
                         if matches!(command, HostCommand::Select(_) | HostCommand::CreateSession { .. }) { preferred = None; }
                         let outcome = handle_command(command, &mut control, shared, &mut workers, &mut state, &mut theme).await;
                         if let Err(error) = outcome {
@@ -1307,6 +1320,73 @@ async fn run_host(
             }
         }
     }
+}
+
+/// Reserves every file of one drop or paste as a batch, then streams them off the control
+/// loop. Nothing is retried: a failure leaves nothing typed and nothing on the server.
+async fn upload(
+    control: &mut Client,
+    shared: &Shared,
+    endpoint: &str,
+    session: &str,
+    block: &str,
+    files: Vec<crate::upload::File>,
+) -> Result<()> {
+    use crate::upload;
+    if files.is_empty() {
+        return Ok(());
+    }
+    anyhow::ensure!(
+        control.welcome().api_revision >= upload::MIN_API_REVISION,
+        "this host's Rex server is too old to receive files; update Rex there"
+    );
+    let sizes = files
+        .iter()
+        .map(upload::File::size)
+        .collect::<Result<Vec<_>>>()?;
+    let batch = if files.len() > 1 {
+        Some(upload::new_uuid()?)
+    } else {
+        None
+    };
+    let mut tickets = Vec::with_capacity(files.len());
+    for (index, (file, size)) in files.iter().zip(&sizes).enumerate() {
+        let mut begin = rexrs::api::terminal::UploadBegin::new(
+            format!("upload:{}", upload::new_uuid()?),
+            file.name.clone(),
+            i64::try_from(*size).context("file too large")?,
+        );
+        if let Some(batch) = &batch {
+            begin = begin
+                .batch(batch.clone())
+                .index(index as i64)
+                .count(files.len() as i64);
+        }
+        let reply = tokio::time::timeout(
+            Duration::from_secs(8),
+            control.call(begin.on(session.to_owned(), block.to_owned())),
+        )
+        .await
+        .context("Rex request timed out; upload was not retried")??;
+        tickets.push(reply.ticket);
+    }
+    let shared = shared.clone();
+    let endpoint = endpoint.to_owned();
+    tokio::task::spawn_local(async move {
+        let sends = files
+            .iter()
+            .zip(&tickets)
+            .zip(&sizes)
+            .map(|((file, ticket), size)| upload::send(&endpoint, ticket, file, *size));
+        let failed = futures_util::future::join_all(sends)
+            .await
+            .into_iter()
+            .find_map(Result::err);
+        if let Some(error) = failed {
+            shared.update(|m| m.notice = Some(format!("Upload failed: {error:#}")));
+        }
+    });
+    Ok(())
 }
 
 async fn handle_command(
@@ -1520,7 +1600,10 @@ async fn handle_command(
                 }
             }
         }
-        HostCommand::Reconnect | HostCommand::Shutdown | HostCommand::PrefetchViews(_) => {
+        HostCommand::Reconnect
+        | HostCommand::Shutdown
+        | HostCommand::PrefetchViews(_)
+        | HostCommand::Upload { .. } => {
             unreachable!()
         }
     }

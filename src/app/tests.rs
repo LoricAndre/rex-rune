@@ -2615,3 +2615,64 @@ fn a_palette_round_trip_leaves_terminal_output_and_its_selection_alone() {
     assert!(std::sync::Arc::ptr_eq(term.frame.as_ref().unwrap(), &frame));
     std::fs::remove_file(&rt.state.settings_path).ok();
 }
+
+#[test]
+fn files_dropped_on_a_pane_upload_there_and_focus_it() {
+    use rex_linux::connection::{Connection, TerminalSender};
+    let (mut ws, rx) = tabbed_workspace("split");
+    let (sender, sent) = flume::unbounded();
+    for block in ["block:b", "block:c"] {
+        let connection = Connection {
+            model: Default::default(),
+            commands: TerminalSender::new(sender.clone(), "s".into(), block.into()),
+            wake: flume::unbounded().1,
+        };
+        {
+            let mut m = connection.model.lock().unwrap();
+            m.connected = true;
+            m.control_connected = true;
+        }
+        let key = ws.term_key(block);
+        ws.terminals.insert(key, super::term::Term::new(connection));
+    }
+    let mut rt = runtime(ws);
+    for _ in 0..60 {
+        rt.frame(1. / 60.);
+    }
+    let r = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("pane:block:c"))
+        .expect("the right pane")
+        .rect;
+    let at = (r[0] + r[2] / 2., r[1] + r[3] / 2.);
+    let path = std::path::PathBuf::from("/tmp/a b.png");
+    rt.drag_files(vec![path.clone()], Some(at));
+    rt.frame(1. / 60.);
+    assert_eq!(rt.state.drop_hover.as_deref(), Some("block:c"));
+    rt.drop_files(vec![path], Some(at));
+    rt.frame(1. / 60.);
+    assert_eq!(rt.state.drop_hover, None);
+    let uploads: Vec<_> = rx
+        .try_iter()
+        .filter_map(|c| match c {
+            HostCommand::Upload {
+                session,
+                block,
+                files,
+            } => Some((session, block, files[0].name.clone(), files.len())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        uploads,
+        [("s".into(), "block:c".into(), "a b.png".into(), 1)]
+    );
+    assert!(
+        sent.try_iter()
+            .any(|c| matches!(c, HostCommand::Request { method, payload }
+            if method == "session.focus_block" && payload["block_id"] == "block:c")),
+        "the pane a file is dropped on takes focus"
+    );
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}

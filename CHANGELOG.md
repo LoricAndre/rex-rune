@@ -6,6 +6,8 @@ Changes since the 0.2.0 public release on 2026-11-01. Many of them come from two
 
 ### Terminal
 
+- Drop files on a pane, or paste copied files or a screenshot with Ctrl+Shift+V, and Rex uploads them to the machine that terminal runs on and types their paths, local or remote, with no SSH setup. Needs a Rex server with API revision 11; older servers say so. ([#2](https://github.com/shuv1337/rex-rune/issues/2), requested by @joegoldin)
+- The client speaks Rex API revisions 7 to 11, and doesn't draw floating layers another client minimized.
 - Inline images with the Kitty graphics protocol, restored when you reattach. Adds a patched copy of `ghostty-vt` under `vendor/`. (@joegoldin)
 - Copies made by terminal programs (OSC 52) reach your clipboard, accepted only from the focused pane while the window is focused. Remote programs still can't read your clipboard. (@joegoldin)
 - Double-click selects a word or shell path and triple-click a line; a selection stays attached to its text while output scrolls, and dragging past the edge autoscrolls. (@joegoldin)

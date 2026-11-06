@@ -74,6 +74,8 @@ pub struct Workspace {
     pub claimed: HashSet<(HostId, String)>,
     pub handle: AppHandle<Workspace>,
     pub window_focused: bool,
+    /// The pane a file drag from another app is over.
+    pub drop_hover: Option<String>,
     /// The pane area in window points, for divider drags and target outlines.
     pub area: [f32; 4],
     pub viewport: [f32; 2],
@@ -190,6 +192,7 @@ impl Workspace {
             claimed: HashSet::new(),
             handle,
             window_focused: true,
+            drop_hover: None,
             area: [0.; 4],
             viewport: [1440., 900.],
             sidebar,

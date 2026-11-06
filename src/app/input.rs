@@ -110,23 +110,7 @@ fn shortcut(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
                 tx.copy(text);
             }
         } else if letter(ev, tx, 'v') {
-            // The read answers later: it pastes only into the pane that asked, if that pane
-            // is still focused by then.
-            if let Some(block) = s.focused_block()
-                && s.active_terminal().is_some_and(|t| t.status().live)
-            {
-                let asked = s.term_key(&block);
-                tx.read_clipboard(move |s: &mut Workspace, content, _| {
-                    let text = content.text().to_owned();
-                    let focused = s.focused_block().map(|block| s.term_key(&block));
-                    if !text.is_empty()
-                        && focused.as_ref() == Some(&asked)
-                        && let Some(term) = s.terminals.get_mut(&asked)
-                    {
-                        term.send(Command::Paste(text));
-                    }
-                });
-            }
+            s.paste_clipboard(tx);
         } else if letter(ev, tx, 'r') {
             if let Some(term) = s.active_terminal_mut() {
                 term.send(Command::Reconnect);

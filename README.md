@@ -37,7 +37,7 @@ It is written in Rust on [Rune](https://github.com/anomalyco/rune) (wgpu/winit, 
 - Rust 1.96 or newer (edition 2024; see `rust-version` in `Cargo.toml`).
 - [Zig](https://ziglang.org/) 0.17.x. The `ghostty-vt` crate builds Ghostty's VT library from a checksum-pinned source archive with Zig.
 - Linux with Wayland or X11, plus the usual graphics/input libraries: Vulkan, xkbcommon, fontconfig and the Wayland/X11 client libraries.
-- A running Rex server that supports API revision 7 or 8. The client negotiates revision 8 when available and falls back to 7, including on newer servers that offer compatibility.
+- A running Rex server that supports API revisions 7 to 11. The client negotiates the newest the server offers; uploading files needs revision 11, and bootstrap tickets and program activity need 8.
 
 ## Build
 
@@ -121,7 +121,7 @@ A host's default shell (empty means the server user's login shell) is used for e
 | Ctrl Shift W | Close the focused pane, or the tab when it has one pane (asks first) |
 | Ctrl , | Settings |
 | Ctrl Shift B | Collapse / restore the sidebar |
-| Ctrl Shift C / V | Copy selection / paste (bracketed-paste aware) |
+| Ctrl Shift C / V | Copy selection / paste text (bracketed-paste aware), or upload copied files or an image |
 | Ctrl Shift R | Resume the focused terminal's data stream |
 | Shift PageUp / PageDown, wheel | Scroll local history |
 | Ctrl + / Ctrl − / Ctrl 0 | Enlarge / shrink / reset the whole interface |
@@ -131,6 +131,8 @@ These chords are reserved by the client and do not reach terminal programs; ever
 Double-click selects a word (including shell paths), and triple-click selects a line. Selection stays attached to terminal content as history or output scrolls; dragging above or below the grid autoscrolls. Hold Shift to select locally or scroll local history when a fullscreen TUI owns the mouse. Without Shift, ordinary TUI mouse reporting is unchanged.
 
 Terminal-initiated clipboard writes are limited to 8 MiB and accepted only from the active session's focused pane while the app window is focused and no dialog is open. Background tabs cannot overwrite the clipboard. Clipboard read requests from terminal programs are not supported; the client never sends your clipboard to a remote program without a paste action.
+
+**Uploading files.** Drop files on a pane, or paste with Ctrl Shift V when the clipboard holds copied files or only an image, and Rex stores them on the machine that terminal runs on and types their shell-quoted paths into it, as a paste, without pressing Enter. This works the same for local and remote hosts and needs no SSH access: the bytes go over the Rex connection with `upload_begin` (API revision 11). The server keeps each file in a private directory under its state directory; files dropped together are typed together, and nothing is typed unless every file arrived. Folders can't be uploaded. A pasted image is uploaded as `clipboard.png`; when the clipboard holds text as well, the text is pasted instead. A failed upload shows a notice and is never retried. An older server shows a notice asking you to update Rex on that host.
 
 Other interactions: click the session/host identity for grouped navigation, or right-click it for the current session's actions; in the switcher, rename a session in place (right-click its row, F2 or the pencil; Enter saves, Esc cancels) or close it with its ×; right-click a pane for actions targeting that pane; drag dividers to resize splits and the sidebar's edge to resize it (double-click resets); double-click a tab to rename it. Closing a pane or tab asks for confirmation, with **Keep running** as the default. The active window takes size ownership of a terminal automatically. On the borderless window, the toolbar's empty space moves it (double-click maximizes; right-click requests the window manager's menu on Wayland).
 
@@ -172,7 +174,7 @@ See [AGENTS.md](AGENTS.md) for the code layout and contributor conventions, and 
 Three dependencies are vendored with small, documented patches and wired in through `[patch]` in `Cargo.toml`:
 
 - [`vendor/rune/`](vendor/rune/README.md): the `rune`, `rune-motion`, `rune-staging` and `procwatch` crates from `anomalyco/rune` at `100b7d9` (MIT), with dead-key forwarding and window-chrome additions for a borderless Linux window (maximize/restore, minimize, edge resize, window menu, native window icon).
-- [`vendor/rexrs/`](vendor/rexrs/REX-LINUX.md): `a10y/rexrs` at `780be3f` (MIT OR Apache-2.0), plus revision-8 generated types, explicit API-revision range negotiation and preservation of an empty `attach_session_ids`.
+- [`vendor/rexrs/`](vendor/rexrs/REX-LINUX.md): `a10y/rexrs` at `780be3f` (MIT OR Apache-2.0), plus revision-11 generated types, explicit API-revision range negotiation and preservation of an empty `attach_session_ids`.
 - [`vendor/ghostty-vt/`](vendor/ghostty-vt/REX-LINUX.md): the crates.io `ghostty-vt` 0.8.0 source (Apache-2.0; Ghostty itself is MIT), plus a safe wrapper for Ghostty's render-state image iterator, image-aware snapshot decoding, a fixed temporary-file medium setting and grayscale PNG normalization.
 
 Each patch is meant to be dropped once the corresponding upstream release has equivalent APIs.
@@ -198,7 +200,7 @@ Other crates are used under their own licenses; see `Cargo.lock`.
 
 ## Acknowledgements
 
-- [Superlogical Rex](https://www.superlogical.com/rex), the server and protocol this client speaks. The implementation follows the server's `/llms.txt` API revision 8 contract, with a tested revision-7 path.
+- [Superlogical Rex](https://www.superlogical.com/rex), the server and protocol this client speaks. The implementation follows the server's `/llms.txt` API revision 11 contract, with tested revision-7 and revision-8 paths.
 - [anomalyco/rune](https://github.com/anomalyco/rune) and [a10y/rexrs](https://github.com/a10y/rexrs).
 - [Ghostty](https://github.com/ghostty-org/ghostty) for the terminal core.
 - [m4nik1/rex-linux-client](https://github.com/m4nik1/rex-linux-client) and [noahdunnagan/rmx](https://github.com/noahdunnagan/rmx), whose protocol work served as references.

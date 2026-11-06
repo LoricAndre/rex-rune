@@ -306,6 +306,62 @@ async fn rejected_bundle_gets_fresh_ticket_and_new_socket() {
     server.await.unwrap();
 }
 
+/// A data server for one upload: the HELLO, then every byte until the empty end message,
+/// closed with `code`.
+async fn upload_server(listener: TcpListener, code: u16) -> Vec<u8> {
+    use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
+    let mut ws = accept(&listener, crate::upload::PROTOCOL).await;
+    let hello = ws.next().await.unwrap().unwrap().into_data();
+    assert_eq!((hello.len(), hello[0]), (17, 1));
+    let mut welcome = vec![0; 32];
+    welcome[0] = 0x81;
+    welcome[24] = 1;
+    ws.send(Message::Binary(welcome.into())).await.unwrap();
+    let mut received = Vec::new();
+    loop {
+        let bytes = ws.next().await.unwrap().unwrap().into_data();
+        if bytes.is_empty() {
+            break;
+        }
+        assert!(bytes.len() <= 64 * 1024);
+        received.extend_from_slice(&bytes);
+    }
+    let reason = if code == 1000 { "" } else { "too large" };
+    ws.close(Some(CloseFrame {
+        code: CloseCode::from(code),
+        reason: reason.into(),
+    }))
+    .await
+    .unwrap();
+    while ws.next().await.is_some() {}
+    received
+}
+
+#[tokio::test]
+async fn uploads_stream_exact_bytes_end_empty_and_succeed_only_on_a_normal_close() {
+    use crate::upload::{File, send};
+    let bytes: Vec<u8> = (0..200_000u32).map(|i| i as u8).collect();
+    let path = std::env::temp_dir().join(format!("rex-upload-test-{}", std::process::id()));
+    std::fs::write(&path, &bytes).unwrap();
+    for (file, code) in [
+        (File::path(path.clone()), 1000),
+        (File::bytes("clipboard.png", bytes.clone()), 1000),
+        (File::bytes("clipboard.png", bytes.clone()), 4009),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(upload_server(listener, code));
+        let size = file.size().unwrap();
+        let result = send(&endpoint, "AAAAAAAAAAAAAAAAAAAAAA", &file, size).await;
+        assert_eq!(server.await.unwrap(), bytes);
+        match code {
+            1000 => result.unwrap(),
+            _ => assert!(format!("{:#}", result.unwrap_err()).contains("too large")),
+        }
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
 const FIXTURE: &str = include_str!("fixtures/block_events.jsonl");
 const FIXTURE_BLOCK: &str = "block:01a19b73-2201-7d4a-9b0b-39967ffa0cd5";
 
