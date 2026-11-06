@@ -1624,3 +1624,47 @@ fn terminal_copies_reach_the_clipboard_once_and_only_in_the_foreground() {
         std::fs::remove_file(&rt.state.settings_path).ok();
     }
 }
+
+#[test]
+fn alt_arrows_belong_to_terminal_programs_and_ctrl_alt_arrows_move_pane_focus() {
+    let mut ws = workspace();
+    let rx = capture_host(&mut ws, 0);
+    ws.hosts[0].model.selected = Some("s".into());
+    for key in [Key::Up, Key::Down, Key::Left, Key::Right] {
+        super::input::on_key(
+            &mut ws,
+            &KeyEvent {
+                key,
+                mods: Mods {
+                    alt: true,
+                    ..Mods::default()
+                },
+            },
+            &mut rune::Tx::default(),
+        );
+    }
+    assert!(
+        requests(&rx).is_empty(),
+        "Alt+Arrow was intercepted before reaching the terminal"
+    );
+    for key in [Key::Up, Key::Down, Key::Left, Key::Right] {
+        super::input::on_key(
+            &mut ws,
+            &KeyEvent {
+                key,
+                mods: Mods {
+                    ctrl: true,
+                    alt: true,
+                    ..Mods::default()
+                },
+            },
+            &mut rune::Tx::default(),
+        );
+    }
+    let calls = requests(&rx);
+    assert_eq!(calls.len(), 4);
+    for (call, direction) in calls.iter().zip(["up", "down", "left", "right"]) {
+        assert_eq!(call.0, "session.focus_direction");
+        assert_eq!(call.2["direction"], direction);
+    }
+}

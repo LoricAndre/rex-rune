@@ -98,7 +98,7 @@ A host's default shell (empty means the server user's login shell) is used for e
 | Ctrl Shift N / T | New session on the active host / new tab |
 | Ctrl Shift D / Ctrl Alt D | Split right / down |
 | Ctrl PageUp / PageDown | Previous / next tab |
-| Alt arrows | Focus an adjacent pane |
+| Ctrl Alt arrows | Focus an adjacent pane (Alt arrows reach terminal programs) |
 | Ctrl Shift Enter | Zoom / restore the focused pane |
 | Ctrl Shift Space | Focused-pane actions |
 | Ctrl Shift W | Close the focused pane, or the tab when it has one pane (asks first) |
@@ -137,6 +137,7 @@ The `scripts/` directory holds integration checks; each script's docstring lists
 - `scroll-selection-x11.py`: private-server Unicode copy checks after scrolling, drag autoscroll, and Shift selection in a fullscreen mouse-tracking TUI without breaking ordinary mouse reports.
 - `kitty-graphics-x11.py`: private-server pixel checks for live RGBA, chunked PNG, image restoration after reattach and deletion.
 - `clipboard-x11.py`: isolated private-server acceptance check for this feature; see its docstring.
+- `alt-arrow-x11.py`: isolated private-server acceptance check for this feature; see its docstring.
 - `rune-acceptance-x11.py`: window-corner, terminal-key and frame-CPU acceptance checks on X11.
 - `chrome-spike-x11.py` (with the `chrome_spike` example): borderless window chrome on X11.
 - `wayland-seat-smoke.py`: Wayland seat/resource selection on a multi-seat compositor.
