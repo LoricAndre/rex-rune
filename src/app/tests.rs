@@ -1756,6 +1756,111 @@ fn removing_omp_previews_that_pi_loses_the_skill_too() {
     std::fs::remove_dir_all(&home).ok();
 }
 
+/// `SKILL_STATUS` with each listed agent's detection and Rex files set; unlisted agents are
+/// fully set up.
+fn skill_status(agents: &[(&str, bool, &str)]) -> String {
+    let mut status: serde_json::Value = serde_json::from_str(SKILL_STATUS).unwrap();
+    for harness in status["harnesses"].as_array_mut().unwrap() {
+        let (detected, state) = agents
+            .iter()
+            .find(|(id, ..)| harness["id"] == *id)
+            .map_or((true, "current"), |&(_, detected, state)| (detected, state));
+        harness["detected"] = detected.into();
+        for item in harness["items"].as_array_mut().unwrap() {
+            if item["state"] != "unsupported" {
+                item["state"] = state.into();
+            }
+        }
+    }
+    status.to_string()
+}
+
+#[test]
+fn set_up_all_names_agents_only_while_omp_is_pending() {
+    use super::integrations::{AgentStatus, setup_all};
+    let home = omp_home("all");
+    let not_pi = [("codex", false, "missing"), ("opencode", false, "missing")];
+    type Case<'a> = (&'a str, Vec<(&'a str, bool, &'a str)>, bool, &'a [&'a str]);
+    let cases: [Case; 5] = [
+        (
+            "OMP alone",
+            [&not_pi[..], &[("pi", false, "missing")]].concat(),
+            true,
+            &["--agent=pi"],
+        ),
+        (
+            "OMP and Codex without Pi",
+            vec![
+                ("codex", true, "missing"),
+                ("opencode", false, "missing"),
+                ("pi", false, "missing"),
+            ],
+            true,
+            &["--agent=codex", "--agent=pi"],
+        ),
+        (
+            "OMP and Pi",
+            [&not_pi[..], &[("pi", true, "missing")]].concat(),
+            true,
+            &["--agent=pi"],
+        ),
+        (
+            "no OMP",
+            vec![
+                ("codex", true, "missing"),
+                ("opencode", true, "missing"),
+                ("pi", true, "missing"),
+            ],
+            false,
+            &[],
+        ),
+        (
+            "OMP set up",
+            [&not_pi[..], &[("claude", true, "missing")]].concat(),
+            true,
+            &[],
+        ),
+    ];
+    for (case, agents, omp_found, expected) in cases {
+        let omp = if omp_found {
+            omp_at(&home)
+        } else {
+            Default::default()
+        };
+        let mut rt = integrations_open(Ok(skill_status(&agents)), omp);
+        // Settings scrolls, and longer agent rows push the button past its bottom edge.
+        rt.wheel(800., 500., -400.);
+        for _ in 0..30 {
+            rt.frame(1. / 60.);
+        }
+        click(&mut rt, "agents-setup-all");
+        assert_eq!(rt.state.integrations.ran.len(), 2, "{case}");
+        let preview = rt.state.integrations.ran.last().unwrap().clone();
+        let named: Vec<_> = preview
+            .iter()
+            .filter(|a| a.starts_with("--agent="))
+            .collect();
+        assert_eq!(named, expected.to_vec(), "{case}");
+        let AgentStatus::Ready(harnesses) = &rt.state.integrations.status else {
+            panic!("{case}: status not read");
+        };
+        let change = setup_all(harnesses).unwrap();
+        rt.state.show_agent_preview(
+            change,
+            Ok(r#"{"steps": [{"harnesses": ["pi"], "kind": "skill",
+                "path": "/home/user/.agents/skills/rex", "change": "created"}]}"#
+                .into()),
+        );
+        let mut rt = runtime_at(rt.state, (1280., 900.));
+        click(&mut rt, "agents-apply");
+        let applied = rt.state.integrations.ran.last().unwrap().clone();
+        let previewed: Vec<_> = preview.into_iter().filter(|a| a != "--dry-run").collect();
+        assert_eq!(applied, previewed, "{case}");
+        std::fs::remove_file(&rt.state.settings_path).ok();
+    }
+    std::fs::remove_dir_all(&home).ok();
+}
+
 #[test]
 fn a_missing_rex_explains_itself_and_naming_reapplies_to_installed_agents() {
     let rt = integrations_open(

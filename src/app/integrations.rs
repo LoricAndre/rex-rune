@@ -578,6 +578,29 @@ fn agent_row(s: &Workspace, harness: &Harness) -> El {
         .child(actions)
 }
 
+/// "Set up all detected", or nothing if every detected agent is set up. `rex` doesn't detect
+/// OMP, so while OMP is pending the change names every pending agent; otherwise it names
+/// none, which means every agent `rex` detects.
+pub fn setup_all(harnesses: &[Harness]) -> Option<AgentChange> {
+    let pending: Vec<String> = harnesses
+        .iter()
+        .filter(|h| h.detected && h.installed() != Installed::Yes)
+        .map(|h| h.id.clone())
+        .collect();
+    if pending.is_empty() {
+        return None;
+    }
+    let agents = if pending.iter().any(|id| id == "omp") {
+        pending
+    } else {
+        Vec::new()
+    };
+    Some(AgentChange::Setup {
+        agents,
+        force: false,
+    })
+}
+
 pub fn section(s: &Workspace) -> El {
     let mut body = col().gap(4.).child(
         text("On this machine, Rex can teach coding agents to use the rex command (a skill) and, where the agent supports it, tell each agent session which Rex session and terminal it runs in (a hook). Every change is shown before it's made.")
@@ -622,25 +645,15 @@ pub fn section(s: &Workspace) -> El {
                 }
                 body = body.child(agent_row(s, harness));
             }
-            let pending: Vec<String> = harnesses
-                .iter()
-                .filter(|h| h.detected && h.installed() != Installed::Yes)
-                .map(|h| h.id.clone())
-                .collect();
             let mut all = row().gap(8.).mt(10.).child(refresh);
-            if !pending.is_empty() {
+            if let Some(change) = setup_all(harnesses) {
                 all = all.child(wait(
                     pill(
                         "agents-setup-all",
                         "Set up all detected…",
                         Pill::Primary,
                         28.,
-                        move |s, _| {
-                            s.preview_agents(AgentChange::Setup {
-                                agents: pending.clone(),
-                                force: false,
-                            })
-                        },
+                        move |s, _| s.preview_agents(change.clone()),
                     ),
                     s.integrations.busy,
                 ));
