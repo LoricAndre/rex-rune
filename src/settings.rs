@@ -54,6 +54,40 @@ impl Default for NotificationsConfig {
     }
 }
 
+/// The terminal theme this client declares to the server, saved as `follow_server`,
+/// `builtin_default` or `named:<id>`. An id is a Ghostty theme's file name, or a built-in
+/// theme's after `rex/`. A value this version doesn't know reads as Follow server.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum TerminalThemeChoice {
+    /// Declare nothing: panes show whatever colours the server gives them.
+    #[default]
+    FollowServer,
+    /// Declare Rex's built-in colours.
+    RexDefault,
+    Named(String),
+}
+impl From<String> for TerminalThemeChoice {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "builtin_default" => Self::RexDefault,
+            _ => match value.strip_prefix("named:") {
+                Some(id) if !id.is_empty() => Self::Named(id.to_owned()),
+                _ => Self::FollowServer,
+            },
+        }
+    }
+}
+impl From<TerminalThemeChoice> for String {
+    fn from(choice: TerminalThemeChoice) -> Self {
+        match choice {
+            TerminalThemeChoice::FollowServer => "follow_server".into(),
+            TerminalThemeChoice::RexDefault => "builtin_default".into(),
+            TerminalThemeChoice::Named(id) => format!("named:{id}"),
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -72,6 +106,7 @@ pub struct Settings {
     pub notifications: NotificationsConfig,
     /// Passed to `rex skill setup` as `--session-naming`, always explicitly.
     pub agent_session_naming: bool,
+    pub terminal_theme: TerminalThemeChoice,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -97,6 +132,7 @@ impl Default for Settings {
             notice_position: NoticePosition::default(),
             notifications: NotificationsConfig::default(),
             agent_session_naming: false,
+            terminal_theme: TerminalThemeChoice::default(),
         }
     }
 }
@@ -259,5 +295,41 @@ mod tests {
         assert_eq!(json["notice_position"], "bottom_right");
         let back: Settings = serde_json::from_value(json).unwrap();
         assert_eq!(back.notice_position, NoticePosition::BottomRight);
+    }
+
+    #[test]
+    fn the_terminal_theme_round_trips_and_unknown_values_follow_the_server() {
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.terminal_theme, TerminalThemeChoice::FollowServer);
+        for (choice, saved) in [
+            (TerminalThemeChoice::FollowServer, "follow_server"),
+            (TerminalThemeChoice::RexDefault, "builtin_default"),
+            (
+                TerminalThemeChoice::Named("rex/midnight".into()),
+                "named:rex/midnight",
+            ),
+            (
+                TerminalThemeChoice::Named("Catppuccin Mocha".into()),
+                "named:Catppuccin Mocha",
+            ),
+        ] {
+            let s = Settings {
+                terminal_theme: choice.clone(),
+                ..Settings::default()
+            };
+            let json = serde_json::to_value(&s).unwrap();
+            assert_eq!(json["terminal_theme"], saved);
+            let back: Settings = serde_json::from_value(json).unwrap();
+            assert_eq!(back.terminal_theme, choice);
+        }
+        for unknown in ["follow_chrome", "named:", "Catppuccin Mocha"] {
+            let s: Settings =
+                serde_json::from_value(serde_json::json!({ "terminal_theme": unknown })).unwrap();
+            assert_eq!(
+                s.terminal_theme,
+                TerminalThemeChoice::FollowServer,
+                "{unknown}"
+            );
+        }
     }
 }

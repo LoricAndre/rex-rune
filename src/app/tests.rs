@@ -8,7 +8,8 @@ use super::{
 use clap::Parser;
 use rex_linux::{
     connection::{HostCommand, HostConnection, Options},
-    settings::{Host, Settings},
+    settings::{Host, Settings, TerminalThemeChoice},
+    terminal_theme::ThemeDirs,
 };
 use rune::{AppSpec, Env, Key, KeyEvent, Mods, Runtime};
 
@@ -407,7 +408,12 @@ fn tabs_and_splits_start_the_right_hosts_shell() {
     ws.perform(Intent::NewWindow, &mut tx);
     let sent = requests(&active);
     assert_eq!(sent[0].0, "session.new_window");
-    assert_eq!(sent[0].2["layout"]["block"]["options"]["shell"], "zsh");
+    assert_eq!(
+        sent[0].2["layout"]["block"]["options"],
+        serde_json::json!({"shell":"zsh"}),
+        "Follow server gives new blocks no theme"
+    );
+    ws.term_theme = Some(rex_linux::terminal_theme::TerminalTheme::midnight());
     let target = super::panel::PaneTarget {
         host: 1,
         session: "b".into(),
@@ -430,7 +436,11 @@ fn tabs_and_splits_start_the_right_hosts_shell() {
     );
     let sent = requests(&other);
     assert_eq!(sent[0].0, "session.new_split");
-    assert_eq!(sent[0].2["layout"]["block"]["options"]["shell"], "fish");
+    assert_eq!(
+        sent[0].2["layout"]["block"]["options"],
+        serde_json::json!({"shell":"fish","theme":{"background":"#001528","scheme":"dark"}}),
+        "a declared theme goes into new blocks' layouts"
+    );
     std::fs::remove_file(&ws.settings_path).ok();
 }
 
@@ -1125,6 +1135,108 @@ fn settings_sections_and_their_forms_return_to_settings() {
         "back in Settings after removing"
     );
     std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn the_theme_picker_filters_declares_to_every_host_and_returns_to_settings() {
+    let root = std::env::temp_dir().join(format!("rex-linux-picker-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("Rex Test Mocha"),
+        "background = #1e1e2e\nforeground = #cdd6f4\npalette = 1=#f38ba8\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("Paper"), "background = #f2eede\n").unwrap();
+    let mut ws = workspace_hosts(2);
+    ws.theme_dirs = ThemeDirs {
+        user: Some(root.clone()),
+        system: vec![],
+    };
+    let hosts = [capture_host(&mut ws, 0), capture_host(&mut ws, 1)];
+    ws.perform(Intent::Settings, &mut rune::Tx::default());
+    let mut rt = runtime(ws);
+    click(&mut rt, "settings-section:terminal");
+    click(&mut rt, "terminal-theme");
+    assert!(matches!(
+        rt.state.panel.as_ref().map(|p| &p.kind),
+        Some(PanelKind::Themes)
+    ));
+    let rows = |ws: &Workspace| {
+        ws.entries()
+            .into_iter()
+            .map(|e| (e.label, e.group, e.current))
+            .collect::<Vec<_>>()
+    };
+    let row = |label: &str, group: &str, current| (label.to_owned(), group.to_owned(), current);
+    assert_eq!(
+        rows(&rt.state),
+        [
+            row("Follow server", "Server", true),
+            row("Rex default colours", "Server", false),
+            row("Midnight", "Built in", false),
+            row("Rex Test Mocha", "Dark", false),
+            row("Paper", "Light", false),
+        ]
+    );
+    press(&mut rt, Key::Escape);
+    assert!(
+        matches!(
+            rt.state.panel.as_ref().map(|p| &p.kind),
+            Some(PanelKind::Settings)
+        ),
+        "Escape goes back to Settings"
+    );
+    assert!(hosts.iter().all(|h| h.is_empty()), "nothing was declared");
+
+    click(&mut rt, "terminal-theme");
+    rt.update(|s, _| {
+        s.panel.as_mut().unwrap().inputs[0] = rune::TextEdit::new("mocha");
+        s.query_changed();
+    });
+    assert_eq!(rows(&rt.state), [row("Rex Test Mocha", "Dark", false)]);
+    press(&mut rt, Key::Enter);
+    assert!(
+        matches!(
+            rt.state.panel.as_ref().map(|p| &p.kind),
+            Some(PanelKind::Settings)
+        ),
+        "applying goes back to Settings"
+    );
+    let theme = rt.state.term_theme.clone().expect("a declared theme");
+    assert_eq!(theme.background, Some(0x1e1e2e));
+    let declared = |host: &flume::Receiver<HostCommand>| {
+        host.try_iter()
+            .filter_map(|c| match c {
+                HostCommand::Theme(args) => Some(args),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    for host in &hosts {
+        assert_eq!(
+            declared(host),
+            [Some(theme.args())],
+            "every host is told once"
+        );
+    }
+    let saved = Settings::load(&rt.state.settings_path).unwrap();
+    assert_eq!(
+        saved.terminal_theme,
+        TerminalThemeChoice::Named("Rex Test Mocha".into())
+    );
+    assert_eq!(
+        relaunch(&rt.state).term_theme,
+        None,
+        "a theme missing at launch declares nothing but stays chosen"
+    );
+
+    rt.update(|s, tx| s.perform(Intent::Theme(TerminalThemeChoice::FollowServer), tx));
+    for host in &hosts {
+        assert_eq!(declared(host), [None], "Follow server stops declaring");
+    }
+    assert_eq!(rt.state.term_theme, None);
+    std::fs::remove_file(&rt.state.settings_path).ok();
+    std::fs::remove_dir_all(root).ok();
 }
 
 #[test]

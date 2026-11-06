@@ -308,6 +308,24 @@ fn terminal(s: &Workspace) -> El {
             text(if s.settings.font_fallbacks.is_empty() { "Automatic".into() } else { s.settings.font_fallbacks.join(", ") })
                 .font(medium(13.)).color(rgb(INK)).wrap().max_w(220.),
         ))
+        .child(divider())
+        .child(setting(
+            "Theme",
+            "Declared to Rex for panes this client owns or nobody owns. Follow server declares none, after resetting panes this client themed to Rex's colours.",
+            row()
+                .gap(10.)
+                .center_y()
+                .child(
+                    text(Workspace::theme_label(&s.settings.terminal_theme).to_owned())
+                        .font(medium(13.))
+                        .color(rgb(INK))
+                        .truncate()
+                        .max_w(160.),
+                )
+                .child(pill("terminal-theme", "Change…", Pill::Neutral, 26., |s, tx| {
+                    s.perform(Intent::ChooseTheme, tx)
+                })),
+        ))
         .child(group("Default shell"));
     for (i, host) in s.settings.hosts.iter().enumerate() {
         let detail = match &host.shell {

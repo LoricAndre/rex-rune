@@ -4,13 +4,17 @@ use super::{
     activity::TabStates,
     notify::{Note, Notifier},
     panel::*,
-    term::Term,
+    term::{Term, TermColors},
     widgets::ScrollFx,
 };
 use rex_linux::{
     connection::{Command, DEFAULT_TAB_LABEL, HostCommand, HostConnection, HostModel, Options},
     layout::{Divider, shell_layout},
-    settings::{Host, NoticePosition, Settings, normalize_font_preferences, validate_host},
+    settings::{
+        Host, NoticePosition, Settings, TerminalThemeChoice, normalize_font_preferences,
+        validate_host,
+    },
+    terminal_theme::{TerminalTheme, ThemeDirs, ThemeInfo},
 };
 use rune::{AppHandle, PhysicalKeyCode, TextEdit, Tx};
 use serde_json::{Value, json};
@@ -95,6 +99,12 @@ pub struct Workspace {
     /// Notifications headless tests would have sent.
     pub outbox: Vec<Note>,
     pub integrations: super::integrations::Integrations,
+    /// The terminal theme this client declares, from Settings; none is Follow server.
+    pub term_theme: Option<TerminalTheme>,
+    /// Where Ghostty themes are read from.
+    pub theme_dirs: ThemeDirs,
+    /// The Ghostty themes the theme picker lists, read when it opens.
+    pub themes: Vec<ThemeInfo>,
 }
 
 #[derive(Default)]
@@ -151,6 +161,13 @@ impl Workspace {
         } else {
             sidebar.collapsed()
         };
+        // A theme that can't be read leaves the setting alone: it applies again once its
+        // file is back.
+        let theme_dirs = ThemeDirs::from_env();
+        let (term_theme, theme_error) = match theme_dirs.resolve(&settings.terminal_theme) {
+            Ok(theme) => (theme, None),
+            Err(error) => (None, Some(error)),
+        };
         let mut this = Self {
             logo: None,
             images: None,
@@ -191,7 +208,13 @@ impl Workspace {
             notifier: None,
             outbox: Vec::new(),
             integrations: Default::default(),
+            term_theme,
+            theme_dirs,
+            themes: Vec::new(),
         };
+        if let Some(error) = theme_error {
+            this.notify(format!("{error:#}; following the server's colours"));
+        }
         for index in 0..this.settings.hosts.len() {
             this.connect_host(index, explicit);
         }
@@ -220,6 +243,7 @@ impl Workspace {
                 .map(|label| (label, host.shell.clone())),
             cli.then(|| self.options.block.clone()).flatten(),
             index == self.active,
+            self.term_theme.as_ref().map(TerminalTheme::args),
         );
         let id = HostId(self.next_host);
         self.next_host += 1;
@@ -657,6 +681,46 @@ impl Workspace {
         self.settings.hosts[host].shell.as_deref()
     }
 
+    /// One new terminal for `host`: its default shell, with the declared theme unless the
+    /// host refused themes.
+    pub fn new_terminal(&self, host: usize) -> Value {
+        let theme = self
+            .term_theme
+            .as_ref()
+            .filter(|_| !self.hosts[host].model.themes_unsupported)
+            .map(TerminalTheme::args);
+        shell_layout(self.shell(host), theme.as_ref())
+    }
+
+    pub fn term_colors(&self) -> TermColors {
+        TermColors::of(self.term_theme.as_ref())
+    }
+
+    /// Declare the theme `choice` names from now on, on every host, and remember it. Nothing
+    /// changes when the theme can't be read.
+    pub fn apply_theme(&mut self, choice: TerminalThemeChoice) -> anyhow::Result<()> {
+        let theme = self.theme_dirs.resolve(&choice)?;
+        let args = theme.as_ref().map(TerminalTheme::args);
+        self.term_theme = theme;
+        self.settings.terminal_theme = choice;
+        self.save();
+        for index in 0..self.hosts.len() {
+            self.send(index, HostCommand::Theme(args.clone()));
+        }
+        Ok(())
+    }
+
+    /// The Theme setting's name for `choice`.
+    pub fn theme_label(choice: &TerminalThemeChoice) -> &str {
+        match choice {
+            TerminalThemeChoice::FollowServer => "Follow server",
+            TerminalThemeChoice::RexDefault => "Rex default colours",
+            TerminalThemeChoice::Named(id) => {
+                rex_linux::terminal_theme::builtin(id).map_or(id, |b| b.name)
+            }
+        }
+    }
+
     pub fn terminal_command(&mut self, key: &(HostId, String), command: Command) {
         if let Some(term) = self.terminals.get_mut(key) {
             term.send(command);
@@ -730,7 +794,8 @@ impl Workspace {
     }
 
     pub fn perform(&mut self, action: Intent, tx: &mut Tx) {
-        if !action.opens_followup() && self.panel.is_some() {
+        // Applying a theme goes back to Settings itself.
+        if !action.opens_followup() && !matches!(action, Intent::Theme(_)) && self.panel.is_some() {
             self.close_panel(tx);
         }
         // Only pane actions carry a captured pane, and session actions a captured session,
@@ -758,6 +823,22 @@ impl Workspace {
                 self.open_panel(PanelKind::Hosts(query), &title, &[])
             }
             Intent::RetryHost(host) => self.send(host, HostCommand::Reconnect),
+            Intent::ChooseTheme => {
+                self.themes = self.theme_dirs.list();
+                self.open_panel(PanelKind::Themes, "Terminal theme", &[("", "Filter themes…", "")]);
+                if let Some(current) = self.entries().iter().position(|e| e.current) {
+                    let panel = self.panel.as_mut().unwrap();
+                    panel.selected = current;
+                    panel.reveal = true;
+                }
+            }
+            Intent::Theme(choice) => match self.apply_theme(choice) {
+                Ok(()) => match self.settings_back() {
+                    Some(back) => self.panel = Some(back),
+                    None => self.close_panel(tx),
+                },
+                Err(error) => self.notify(format!("{error:#}")),
+            },
             Intent::Fonts => {
                 let family = self.settings.font_family.clone();
                 let fallbacks = self.settings.font_fallbacks.join(", ");
@@ -788,11 +869,11 @@ impl Workspace {
             ),
             Intent::NewWindow => self.request(
                 "session.new_window",
-                json!({"window_label":DEFAULT_TAB_LABEL,"layout":shell_layout(self.shell(self.active)),"focus":true}),
+                json!({"window_label":DEFAULT_TAB_LABEL,"layout":self.new_terminal(self.active),"focus":true}),
             ),
             Intent::Split(direction) => {
                 if let Some(block) = self.focused_block() {
-                    self.request("session.new_split", split_payload(&block, direction, self.shell(self.active)));
+                    self.request("session.new_split", split_payload(&block, direction, self.new_terminal(self.active)));
                 }
             }
             Intent::RenameSession => {
@@ -1075,7 +1156,7 @@ impl Workspace {
             PaneAction::Split(direction) => request(
                 self,
                 "session.new_split",
-                split_payload(&target.block, direction, self.shell(target.host)),
+                split_payload(&target.block, direction, self.new_terminal(target.host)),
             ),
             PaneAction::Zoom => {
                 request(
@@ -1186,7 +1267,10 @@ impl Workspace {
         let keep_back = matches!(kind, PanelKind::Hosts(_))
             || (matches!(
                 kind,
-                PanelKind::Form(_) | PanelKind::RemoveHost(_) | PanelKind::AgentChange { .. }
+                PanelKind::Form(_)
+                    | PanelKind::RemoveHost(_)
+                    | PanelKind::AgentChange { .. }
+                    | PanelKind::Themes
             ) && previous
                 .as_ref()
                 .is_some_and(|p| matches!(p.kind, PanelKind::Settings)));
@@ -1559,6 +1643,6 @@ impl Workspace {
     }
 }
 
-fn split_payload(block: &str, direction: &str, shell: Option<&str>) -> Value {
-    json!({"anchor_id":block,"direction":direction,"side":"after","layout":shell_layout(shell),"focus":true})
+fn split_payload(block: &str, direction: &str, layout: Value) -> Value {
+    json!({"anchor_id":block,"direction":direction,"side":"after","layout":layout,"focus":true})
 }

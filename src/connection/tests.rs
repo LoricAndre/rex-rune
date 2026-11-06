@@ -177,7 +177,7 @@ async fn bootstrap_is_first_and_newer_pre_response_events_survive() {
         .await;
         assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
     });
-    let host = HostConnection::spawn(endpoint, None, None, None, false);
+    let host = HostConnection::spawn(endpoint, None, None, None, false, None);
     connected(&host).await;
     {
         let model = host.model.lock().unwrap();
@@ -250,7 +250,7 @@ async fn failed_bootstrap_closes_and_retries_without_old_identity() {
         .await;
         assert!(matches!(second.next().await, Some(Ok(Message::Close(_)))));
     });
-    let host = HostConnection::spawn(endpoint, None, None, None, false);
+    let host = HostConnection::spawn(endpoint, None, None, None, false, None);
     connected(&host).await;
     assert_eq!(host.model.lock().unwrap().protocol.bootstrap_requests, 2);
     drop(host);
@@ -523,7 +523,7 @@ async fn activity_follows_every_session_and_queries_the_selected_one() {
         // No second session.view: the next message is the client closing.
         assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
     });
-    let host = HostConnection::spawn(endpoint, None, None, None, false);
+    let host = HostConnection::spawn(endpoint, None, None, None, false, None);
     tokio::time::timeout(Duration::from_secs(8), async {
         loop {
             {
@@ -575,7 +575,7 @@ async fn destroying_a_session_forgets_it_without_an_error() {
         .await;
         assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
     });
-    let host = HostConnection::spawn(endpoint, None, None, None, false);
+    let host = HostConnection::spawn(endpoint, None, None, None, false, None);
     connected(&host).await;
     host.commands
         .send(HostCommand::Request {
@@ -854,7 +854,7 @@ async fn a_slow_prefetch_neither_delays_control_requests_nor_overlaps_another() 
         reply(&mut ws, &view, 5, view_of(THIRD)).await;
         assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
     });
-    let host = HostConnection::spawn(endpoint, None, None, None, false);
+    let host = HostConnection::spawn(endpoint, None, None, None, false, None);
     connected(&host).await;
     prefetch(&host, &[OTHER, THIRD]);
     started.recv().await.unwrap();
@@ -887,7 +887,7 @@ async fn leaving_eligibility_cancels_queued_and_in_flight_fetches() {
         // No fetch for THIRD: the next message is the client closing.
         assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
     });
-    let host = HostConnection::spawn(endpoint, None, None, None, false);
+    let host = HostConnection::spawn(endpoint, None, None, None, false, None);
     connected(&host).await;
     prefetch(&host, &[OTHER, THIRD]);
     started.recv().await.unwrap();
@@ -931,7 +931,7 @@ async fn prefetch_picks_up_new_sessions_and_restarts_after_reconnect() {
         }
         assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
     });
-    let host = HostConnection::spawn(endpoint, None, None, None, false);
+    let host = HostConnection::spawn(endpoint, None, None, None, false, None);
     connected(&host).await;
     prefetch(&host, &[OTHER, NEW]);
     until(&host, |m| m.views.contains_key(NEW)).await;
@@ -969,10 +969,402 @@ async fn a_failed_prefetch_is_retried_after_a_backoff() {
         reply(&mut ws, &view, 3, view_of(OTHER)).await;
         assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
     });
-    let host = HostConnection::spawn(endpoint, None, None, None, false);
+    let host = HostConnection::spawn(endpoint, None, None, None, false, None);
     connected(&host).await;
     prefetch(&host, &[OTHER, THIRD]);
     until(&host, |m| m.views.contains_key(OTHER)).await;
     drop(host);
     server.await.unwrap();
+}
+
+/// A scripted control server for theme declarations: it answers every request, records each
+/// one as (method, payload), sends the events the test pushes, and takes the client back
+/// after a reconnect. Data sockets are accepted and dropped.
+struct ThemeServer {
+    endpoint: String,
+    events: tokio::sync::mpsc::UnboundedSender<Value>,
+    requests: tokio::sync::mpsc::UnboundedReceiver<(String, Value)>,
+}
+
+impl ThemeServer {
+    /// Serves one session whose single window holds `blocks` (`[id, owner]`, owner none for
+    /// nobody); `set_theme` fails with `theme_error` when given.
+    #[allow(clippy::result_large_err)] // tungstenite's callback fixes the error type.
+    async fn start(blocks: &[(&str, Option<&str>)], theme_error: Option<&'static str>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let blocks: Vec<Value> = blocks
+            .iter()
+            .map(|(id, owner)| json!({"block_id":id,"creator_name":activity::TERMINAL,"owner":owner}))
+            .collect();
+        let view = json!({"session_id":SESSION,"label":"snapshot","revision":1,
+            "windows":[{"window_id":"w","layers":[{"kind":"tiled",
+                "layout":{"block_id":blocks[0]["block_id"]},"blocks":blocks}]}]});
+        let (events, mut pushed) = tokio::sync::mpsc::unbounded_channel::<Value>();
+        let (record, requests) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let mut seq = 1;
+            loop {
+                let (tcp, _) = listener.accept().await.unwrap();
+                let mut path = String::new();
+                let mut ws = tokio_tungstenite::accept_hdr_async(
+                    tcp,
+                    |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                     mut response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                        path = request.uri().path().to_owned();
+                        if let Some(protocol) = request.headers().get("Sec-WebSocket-Protocol") {
+                            response
+                                .headers_mut()
+                                .insert("Sec-WebSocket-Protocol", protocol.clone());
+                        }
+                        Ok(response)
+                    },
+                )
+                .await
+                .unwrap();
+                if path != "/api/control" {
+                    continue;
+                }
+                welcome(&mut ws, 8).await;
+                loop {
+                    let request: Value = tokio::select! {
+                        message = ws.next() => match message {
+                            Some(Ok(Message::Text(text))) => serde_json::from_str(&text).unwrap(),
+                            Some(Ok(_)) => continue,
+                            _ => break,
+                        },
+                        Some(event) = pushed.recv() => {
+                            seq += 1;
+                            send(&mut ws, json!({"type":"event","seq":seq,"payload":{"type":"session_event",
+                                "payload":{"session_id":SESSION,"event":event}}})).await;
+                            continue;
+                        }
+                    };
+                    seq += 1;
+                    let method = request["method"].as_str().unwrap_or_default().to_owned();
+                    let _ = record.send((method.clone(), request["payload"].clone()));
+                    let payload = match method.as_str() {
+                        "session.bootstrap" => {
+                            let mut boot = serde_json::to_value(boot()).unwrap();
+                            boot["selected_session"]["view"] = view.clone();
+                            boot
+                        }
+                        "session.attach_all" => {
+                            json!({"sessions":[{"session_id":SESSION,"label":"snapshot"},
+                                {"session_id":OTHER,"label":"other"}]})
+                        }
+                        "session.create" => json!({"session_id":OTHER}),
+                        "session.attach" => json!({"client_id":"client:test",
+                            "view":{"session_id":OTHER,"revision":1}}),
+                        "data.connect" => json!({"ticket":"AAAAAAAAAAAAAAAAAAAAAA"}),
+                        "com.superlogical.terminal.set_theme" if theme_error.is_some() => {
+                            send(
+                                &mut ws,
+                                json!({"type":"response","id":request["id"],
+                                "error":{"code":theme_error,"message":"no","status":404}}),
+                            )
+                            .await;
+                            continue;
+                        }
+                        _ => json!({}),
+                    };
+                    reply(&mut ws, &request, seq, payload).await;
+                }
+            }
+        });
+        Self {
+            endpoint,
+            events,
+            requests,
+        }
+    }
+
+    fn owner(&self, block: &str, owner: Option<&str>) {
+        self.events
+            .send(json!({"type":"block_owner_changed","payload":{"block_id":block,"owner":owner}}))
+            .unwrap();
+    }
+
+    /// The `set_theme` calls, as (block, args), up to the next `method` request, and that
+    /// request's payload.
+    async fn themes_until(&mut self, method: &str) -> (Vec<(String, Value)>, Value) {
+        let mut themes = Vec::new();
+        loop {
+            let (name, payload) =
+                tokio::time::timeout(Duration::from_secs(8), self.requests.recv())
+                    .await
+                    .unwrap_or_else(|_| panic!("no {method}"))
+                    .unwrap();
+            if name == "com.superlogical.terminal.set_theme" {
+                assert_eq!(payload["session_id"], SESSION);
+                themes.push((
+                    payload["block_id"].as_str().unwrap().to_owned(),
+                    payload["args"].clone(),
+                ));
+            } else if name == method {
+                return (themes, payload);
+            }
+        }
+    }
+
+    /// The `set_theme` calls an event caused: a session_created after it makes the client
+    /// list sessions once it has handled the event.
+    async fn themes_after_events(&mut self) -> Vec<(String, Value)> {
+        self.events
+            .send(json!({"type":"session_created","payload":{"session_id":OTHER}}))
+            .unwrap();
+        self.themes_until("session.attach_all").await.0
+    }
+}
+
+/// The `set_theme` calls a command caused: a request queued after it is handled after the
+/// declarations it triggers.
+async fn themes_after_command(
+    server: &mut ThemeServer,
+    host: &HostConnection,
+    command: HostCommand,
+) -> Vec<(String, Value)> {
+    host.commands.send(command).unwrap();
+    host.commands
+        .send(HostCommand::Request {
+            method: "test.sentinel".into(),
+            payload: json!({}),
+        })
+        .unwrap();
+    server.themes_until("test.sentinel").await.0
+}
+
+fn sorted(mut themes: Vec<(String, Value)>) -> Vec<(String, Value)> {
+    themes.sort_by(|a, b| a.0.cmp(&b.0));
+    themes
+}
+
+fn declared(blocks: &[&str], args: &Value) -> Vec<(String, Value)> {
+    blocks
+        .iter()
+        .map(|b| ((*b).to_owned(), args.clone()))
+        .collect()
+}
+
+#[tokio::test]
+async fn themes_go_only_to_blocks_this_client_may_theme_once_each() {
+    let mut server = ThemeServer::start(
+        &[
+            ("block:a", None),
+            ("block:b", Some("client:test")),
+            ("block:c", Some("client:other")),
+        ],
+        None,
+    )
+    .await;
+    let first = SetTheme::new().background("#111111");
+    let host = HostConnection::spawn(
+        server.endpoint.clone(),
+        None,
+        None,
+        None,
+        true,
+        Some(first.clone()),
+    );
+    let first = serde_json::to_value(&first).unwrap();
+    let (themes, _) = server
+        .themes_until("com.superlogical.terminal.program_status")
+        .await;
+    assert_eq!(
+        sorted(themes),
+        declared(&["block:a", "block:b"], &first),
+        "unowned and owned blocks, not another client's"
+    );
+
+    server.owner("block:c", Some("client:test"));
+    assert_eq!(
+        server.themes_after_events().await,
+        declared(&["block:c"], &first),
+        "taking a block declares to it, with no resize"
+    );
+    server.owner("block:a", Some("client:other"));
+    server.owner("block:a", Some("client:test"));
+    assert_eq!(
+        server.themes_after_events().await,
+        [],
+        "Rex keeps this client's declaration while another owns the block"
+    );
+
+    server.owner("block:b", Some("client:other"));
+    assert_eq!(server.themes_after_events().await, []);
+    let second = SetTheme::new().background("#eeeeee").foreground("#222222");
+    let themes =
+        themes_after_command(&mut server, &host, HostCommand::Theme(Some(second.clone()))).await;
+    let second_json = serde_json::to_value(&second).unwrap();
+    assert_eq!(
+        sorted(themes),
+        declared(&["block:a", "block:c"], &second_json)
+    );
+    assert_eq!(
+        themes_after_command(&mut server, &host, HostCommand::Theme(Some(second.clone()))).await,
+        [],
+        "the same theme again is not repeated"
+    );
+
+    let created = {
+        host.commands
+            .send(HostCommand::CreateSession {
+                label: None,
+                shell: None,
+            })
+            .unwrap();
+        server.themes_until("session.create").await.1
+    };
+    assert_eq!(
+        created["initial_windows"][0]["layout"]["block"]["options"]["theme"], second_json,
+        "new blocks start with the declared theme"
+    );
+
+    let empty = json!({});
+    let themes = themes_after_command(
+        &mut server,
+        &host,
+        HostCommand::Theme(Some(SetTheme::new())),
+    )
+    .await;
+    assert_eq!(
+        sorted(themes),
+        declared(&["block:a", "block:c"], &empty),
+        "Rex default colours declare an empty theme"
+    );
+    assert_eq!(
+        themes_after_command(&mut server, &host, HostCommand::Theme(None)).await,
+        [],
+        "Follow server after Rex default has nothing to reset"
+    );
+    server.owner("block:b", Some("client:test"));
+    assert_eq!(
+        server.themes_after_events().await,
+        declared(&["block:b"], &empty),
+        "under Follow server a block taken back is reset once, not left in the old theme"
+    );
+    drop(host);
+}
+
+#[tokio::test]
+async fn follow_server_declares_nothing_and_resets_what_it_declared() {
+    let mut server = ThemeServer::start(&[("block:a", None)], None).await;
+    let host = HostConnection::spawn(server.endpoint.clone(), None, None, None, true, None);
+    let (themes, _) = server
+        .themes_until("com.superlogical.terminal.program_status")
+        .await;
+    assert_eq!(themes, []);
+    let theme = SetTheme::new().background("#111111");
+    let themes =
+        themes_after_command(&mut server, &host, HostCommand::Theme(Some(theme.clone()))).await;
+    assert_eq!(
+        themes,
+        declared(&["block:a"], &serde_json::to_value(&theme).unwrap())
+    );
+    assert_eq!(
+        themes_after_command(&mut server, &host, HostCommand::Theme(None)).await,
+        declared(&["block:a"], &json!({})),
+        "one empty theme undoes the declaration"
+    );
+    assert_eq!(
+        themes_after_command(&mut server, &host, HostCommand::Theme(None)).await,
+        []
+    );
+    host.commands
+        .send(HostCommand::CreateSession {
+            label: None,
+            shell: None,
+        })
+        .unwrap();
+    let created = server.themes_until("session.create").await.1;
+    assert_eq!(
+        created["initial_windows"][0]["layout"]["block"].get("options"),
+        None
+    );
+    drop(host);
+}
+
+#[tokio::test]
+async fn themes_are_declared_again_after_reconnect_with_the_latest_choice() {
+    let mut server = ThemeServer::start(&[("block:a", None)], None).await;
+    let first = SetTheme::new().background("#111111");
+    let host = HostConnection::spawn(
+        server.endpoint.clone(),
+        None,
+        None,
+        None,
+        true,
+        Some(first.clone()),
+    );
+    let (themes, _) = server
+        .themes_until("com.superlogical.terminal.program_status")
+        .await;
+    assert_eq!(
+        themes,
+        declared(&["block:a"], &serde_json::to_value(&first).unwrap())
+    );
+    host.commands.send(HostCommand::Reconnect).unwrap();
+    // Changed while disconnected: the next connection declares it, and only it.
+    let second = SetTheme::new().background("#222222");
+    host.commands
+        .send(HostCommand::Theme(Some(second.clone())))
+        .unwrap();
+    host.commands.send(HostCommand::Reconnect).unwrap();
+    server.themes_until("session.bootstrap").await;
+    let (themes, _) = server
+        .themes_until("com.superlogical.terminal.program_status")
+        .await;
+    assert_eq!(
+        themes,
+        declared(&["block:a"], &serde_json::to_value(&second).unwrap())
+    );
+    drop(host);
+}
+
+#[tokio::test]
+async fn a_server_without_set_theme_is_told_once_and_never_again() {
+    let mut server = ThemeServer::start(
+        &[("block:a", None), ("block:b", None)],
+        Some("method_not_found"),
+    )
+    .await;
+    let host = HostConnection::spawn(
+        server.endpoint.clone(),
+        None,
+        None,
+        None,
+        true,
+        Some(SetTheme::new().background("#111111")),
+    );
+    let (themes, _) = server
+        .themes_until("com.superlogical.terminal.program_status")
+        .await;
+    assert_eq!(themes.len(), 1, "the first refusal stops declaring");
+    {
+        let m = host.model.lock().unwrap();
+        assert!(m.themes_unsupported);
+        assert!(
+            m.notice
+                .as_deref()
+                .is_some_and(|n| n.contains("terminal themes"))
+        );
+    }
+    let other = SetTheme::new().background("#333333");
+    assert_eq!(
+        themes_after_command(&mut server, &host, HostCommand::Theme(Some(other))).await,
+        []
+    );
+    host.commands
+        .send(HostCommand::CreateSession {
+            label: None,
+            shell: None,
+        })
+        .unwrap();
+    let created = server.themes_until("session.create").await.1;
+    assert_eq!(
+        created["initial_windows"][0]["layout"]["block"].get("options"),
+        None,
+        "new blocks carry no theme either"
+    );
+    drop(host);
 }

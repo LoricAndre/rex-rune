@@ -90,7 +90,7 @@ async fn run() -> Result<()> {
     let mut created = Vec::new();
     let result:Result<()>=async {
         if observer.call(session::AttachAll::new("session")).await?.sessions.is_empty() {
-            let empty = HostConnection::spawn(endpoint.clone(), None, None, None, true);
+            let empty = HostConnection::spawn(endpoint.clone(), None, None, None, true, None);
             wait(&empty, "empty host connected", |m| m.connected).await?;
             ensure!(model(&empty).sessions.is_empty() && model(&empty).selected.is_none() && model(&empty).terminals.is_empty(), "empty server opened a session");
             println!("PASS empty server connects without creating a session");
@@ -103,7 +103,7 @@ async fn run() -> Result<()> {
         observer.call(session::Attach::new(a)).await?;
         observer.call(session::Attach::new(b)).await?;
         let started = Instant::now();
-        let host=HostConnection::spawn(endpoint.clone(),Some(a.clone()),None,None,true);
+        let host=HostConnection::spawn(endpoint.clone(),Some(a.clone()),None,None,true,None);
         let original=ready(&host).await?;
         println!("STARTUP first terminal frame in {} ms (controller probe polling)", started.elapsed().as_millis());
         let stats = model(&host).protocol;
@@ -177,7 +177,7 @@ async fn run() -> Result<()> {
         let default_session = observer.call(session::AttachAll::new("session")).await?.sessions.first().map(|s|s.session_id.clone());
         for (wanted, expected) in [(None, default_session), (Some(format!("rex-workspace-probe-{}-a", std::process::id())), Some(a.clone())),
             (Some("session:00000000-0000-0000-0000-000000000000".into()), None), (Some("missing-label".into()), None)] {
-            let host = HostConnection::spawn(endpoint.clone(), wanted, None, None, true);
+            let host = HostConnection::spawn(endpoint.clone(), wanted, None, None, true, None);
             wait(&host, "selection connected", |m| m.connected).await?;
             ensure!(model(&host).selected == expected, "startup changed exact selection semantics");
             if expected.is_some() { ready(&host).await?; }
@@ -193,11 +193,11 @@ async fn run() -> Result<()> {
         let duplicate = format!("probe-duplicate-{}", std::process::id());
         observer.call_raw("session.set_label", json!({"session_id":a,"label":duplicate})).await?;
         observer.call_raw("session.set_label", json!({"session_id":b,"label":duplicate})).await?;
-        let ambiguous = HostConnection::spawn(endpoint.clone(), Some(duplicate), None, None, true);
+        let ambiguous = HostConnection::spawn(endpoint.clone(), Some(duplicate), None, None, true, None);
         wait(&ambiguous, "ambiguous selection", |m| m.connected).await?;
         ensure!(model(&ambiguous).selected.is_none() && model(&ambiguous).terminals.is_empty(), "ambiguous label selected an arbitrary session");
         drop(ambiguous);
-        let created_host = HostConnection::spawn(endpoint.clone(), None, Some((format!("probe-created-{}", std::process::id()), None)), None, true);
+        let created_host = HostConnection::spawn(endpoint.clone(), None, Some((format!("probe-created-{}", std::process::id()), None)), None, true, None);
         ready(&created_host).await?;
         created.push(model(&created_host).selected.context("created selection")?);
         ensure!(model(&created_host).protocol.data_connect_requests == 1, "new terminal did not fall back to data.connect");
@@ -216,7 +216,7 @@ async fn run() -> Result<()> {
         observer.call_raw("session.new_split", json!({"session_id":multi.session_id,"anchor_id":windows[0].focused_block_id,
             "direction":"horizontal","side":"after","layout":Layout::shell(),"focus":true})).await?;
         observer.call_raw("session.focus_window", json!({"session_id":multi.session_id,"window_id":first_window})).await?;
-        let multi_host = HostConnection::spawn(endpoint.clone(), Some(multi.session_id.clone()), None, None, true);
+        let multi_host = HostConnection::spawn(endpoint.clone(), Some(multi.session_id.clone()), None, None, true, None);
         wait(&multi_host, "two bundled panes", |m| m.terminals.len() == 2 && m.terminals.values().all(|c| c.model.lock().unwrap().connected)).await?;
         request(&multi_host, &multi.session_id, "session.focus_window", json!({"window_id":second_window}))?;
         wait(&multi_host, "inactive window ticket", |m| m.terminals.len() == 3 && m.terminals.values().all(|c| c.model.lock().unwrap().connected)).await?;

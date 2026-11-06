@@ -123,6 +123,7 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
         PanelKind::Picker(true) => "switcher",
         PanelKind::Picker(false) => "commands",
         PanelKind::Hosts(_) => "hosts",
+        PanelKind::Themes => "themes",
         PanelKind::Session => "session-menu",
         PanelKind::Host(_) => "host-menu",
         PanelKind::Window(_) => "tab-menu",
@@ -260,12 +261,16 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
         }
     }
     if list_rows == 0 {
+        let empty = if matches!(panel.kind, PanelKind::Themes) {
+            "No matching themes."
+        } else {
+            "No matches. Try another name or create a session."
+        };
         list = list.child(
-            row().px(12.).py(16.).child(
-                text("No matches. Try another name or create a session.")
-                    .font(ui(13.))
-                    .color(rgb(MUTED)),
-            ),
+            row()
+                .px(12.)
+                .py(16.)
+                .child(text(empty).font(ui(13.)).color(rgb(MUTED))),
         );
         y += 52.;
     }

@@ -1,28 +1,45 @@
 //! Translate authoritative Rex split trees to normalized native pane geometry.
-use rexrs::api::session::{ViewLayoutNode, Window};
+use rexrs::api::{
+    session::{ViewLayoutNode, Window},
+    terminal::SetTheme,
+};
 use serde_json::{Value, json};
 
 /// One new terminal block for a layout, starting `shell` when one is set (else the server
-/// user's login shell).
-pub fn shell_layout(shell: Option<&str>) -> Value {
+/// user's login shell), with this client's declared `theme` when it has one. Rex counts a
+/// layout's theme as its creator's declaration.
+pub fn shell_layout(shell: Option<&str>, theme: Option<&SetTheme>) -> Value {
     let mut block = json!({"flavor": "com.superlogical.terminal.shell"});
     if let Some(shell) = shell.map(str::trim).filter(|s| !s.is_empty()) {
-        block["options"] = json!({"shell": shell});
+        block["options"]["shell"] = json!(shell);
+    }
+    if let Some(theme) = theme {
+        block["options"]["theme"] = json!(theme);
     }
     json!({"block": block})
 }
 
 #[cfg(test)]
 #[test]
-fn shell_layout_sets_the_shell_only_when_given() {
+fn shell_layout_sets_the_shell_and_theme_only_when_given() {
     assert_eq!(
-        shell_layout(None),
+        shell_layout(None, None),
         json!({"block":{"flavor":"com.superlogical.terminal.shell"}})
     );
-    assert_eq!(shell_layout(Some("  ")), shell_layout(None));
+    assert_eq!(shell_layout(Some("  "), None), shell_layout(None, None));
     assert_eq!(
-        shell_layout(Some("zsh"))["block"]["options"]["shell"],
-        "zsh"
+        shell_layout(Some("zsh"), None)["block"]["options"],
+        json!({"shell":"zsh"})
+    );
+    let theme = SetTheme::new().background("#001528");
+    assert_eq!(
+        shell_layout(Some("zsh"), Some(&theme))["block"]["options"],
+        json!({"shell":"zsh","theme":{"background":"#001528"}})
+    );
+    assert_eq!(
+        shell_layout(None, Some(&SetTheme::new()))["block"]["options"],
+        json!({"theme":{}}),
+        "Rex's own colours"
     );
 }
 

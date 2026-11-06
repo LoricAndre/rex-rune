@@ -11,6 +11,7 @@ use rex_linux::{
         Cell, Frame, SelectionUnit,
         graphics::{Image as TermImage, ImagePixels},
     },
+    terminal_theme::{TerminalTheme, is_light},
 };
 use rune::{El, Family, Mods, Span, TextStyle, el, memo, rich, text};
 use serde_json::json;
@@ -416,11 +417,11 @@ struct RunStyle {
     strike: bool,
 }
 impl RunStyle {
-    /// `default_bg` is the server's default background, which draws as the card colour
-    /// wherever it shows (inverse video's foreground included).
-    fn of(cell: &Cell, default_bg: u32) -> Self {
+    /// `default_bg` is the server's default background, which draws as `body` wherever it
+    /// shows (inverse video's foreground included).
+    fn of(cell: &Cell, default_bg: u32, body: u32) -> Self {
         let s = &cell.style;
-        let tint = |c: u32| if c == default_bg { CARD } else { c };
+        let tint = |c: u32| if c == default_bg { body } else { c };
         Self {
             // Faint text is pre-mixed toward its cell in sRGB.
             fg: if s.faint {
@@ -591,7 +592,15 @@ enum RowPass {
 
 #[cfg(test)]
 fn row_el(cells: &[Cell], y: f32, frame_bg: u32, sel: Option<(usize, usize)>, m: &Metrics) -> El {
-    row_pass(cells, y, frame_bg, sel, m, RowPass::All)
+    row_pass(
+        cells,
+        y,
+        frame_bg,
+        sel,
+        m,
+        RowPass::All,
+        &TermColors::default(),
+    )
 }
 
 fn row_pass(
@@ -601,7 +610,9 @@ fn row_pass(
     sel: Option<(usize, usize)>,
     m: &Metrics,
     pass: RowPass,
+    colors: &TermColors,
 ) -> El {
+    let body = colors.body(frame_bg);
     let (cw, ch) = m.cell;
     // Memoized rows are flattened on their own, so each says again that it never animates:
     // otherwise a glyph run that leaves a changed row fades out over its replacement.
@@ -628,7 +639,7 @@ fn row_pass(
             row = row.child(
                 el().absolute(a as f32 * cw, 0.)
                     .size((b + 1 - a) as f32 * cw, ch)
-                    .fill(rgb(TERMINAL_SELECTION)),
+                    .fill(rgb(colors.selection_bg)),
             );
         }
     }
@@ -640,7 +651,12 @@ fn row_pass(
         if cell.spacer_tail || cell.text.starts_with('\u{10eeee}') {
             continue;
         }
-        let style = RunStyle::of(cell, frame_bg);
+        let mut style = RunStyle::of(cell, frame_bg, body);
+        if let (Some(fg), Some((a, b))) = (colors.selection_fg, sel)
+            && (a..=b).contains(&col)
+        {
+            style.fg = fg;
+        }
         let text = if cell.text.is_empty() {
             " "
         } else {
@@ -706,6 +722,58 @@ fn image_el(
 pub struct GridLook {
     pub cursor: Option<CursorLook>,
     pub ime: bool,
+    pub colors: TermColors,
+}
+
+/// The colours the client draws in the terminal area itself. The terminal's own colours reach
+/// the frame through the server; these are the default background's stand-in and the
+/// selection and cursor-text colours, which the protocol has no field for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TermColors {
+    /// The declared theme's background, else the card.
+    pub background: u32,
+    pub selection_bg: u32,
+    pub selection_fg: Option<u32>,
+    pub cursor_text: Option<u32>,
+}
+impl Default for TermColors {
+    fn default() -> Self {
+        Self::of(None)
+    }
+}
+impl TermColors {
+    /// For the theme this client declares, if any.
+    pub fn of(theme: Option<&TerminalTheme>) -> Self {
+        let theme = theme.cloned().unwrap_or_default();
+        Self {
+            background: theme.background.unwrap_or(CARD),
+            selection_bg: theme.selection_background.unwrap_or(TERMINAL_SELECTION),
+            selection_fg: theme.selection_foreground,
+            cursor_text: theme.cursor_text,
+        }
+    }
+
+    /// What the server's default background `frame_bg` draws as: `background` when both are
+    /// equally dark or light (Rex's built-in black, or another owner's theme), so a single
+    /// pane reads as one surface with the chrome; otherwise the server's own, so the default
+    /// text drawn for it stays readable. Only that exact colour is replaced, so explicit
+    /// backgrounds and inverse video's block keep theirs.
+    pub fn body(&self, frame_bg: u32) -> u32 {
+        if is_light(frame_bg) == is_light(self.background) {
+            self.background
+        } else {
+            frame_bg
+        }
+    }
+}
+
+impl Term {
+    /// The fill behind this pane's grid.
+    pub fn body(&self, colors: &TermColors) -> u32 {
+        self.frame
+            .as_ref()
+            .map_or(colors.background, |f| colors.body(f.bg))
+    }
 }
 
 /// The visible rows of `term`'s frame, each memoized by its content.
@@ -717,6 +785,8 @@ pub fn grid(key: &str, term: &Term, m: &Metrics, look: GridLook) -> El {
     let visible = term.visible_rows(m.cell);
     let start = frame.display_row_start(visible);
     let cols = frame.cols as usize;
+    let colors = &look.colors;
+    let body = colors.body(frame.bg);
     let selection = term.selection.map(|(a, b)| (a.min(b), a.max(b)));
     let rows = |mut grid: El, pass: RowPass| {
         for (y, cells) in frame.cells.iter().enumerate().skip(start).take(visible) {
@@ -734,11 +804,20 @@ pub fn grid(key: &str, term: &Term, m: &Metrics, look: GridLook) -> El {
             for cell in cells {
                 hash_cell(cell, &mut h);
             }
-            (sel, frame.bg, cw.to_bits(), ch.to_bits(), m.style, pass).hash(&mut h);
+            (
+                sel,
+                frame.bg,
+                cw.to_bits(),
+                ch.to_bits(),
+                m.style,
+                pass,
+                colors,
+            )
+                .hash(&mut h);
             let top = (y - start) as f32 * ch;
             let id = format!("{key}/r{}:{pass:?}", y - start);
             grid = grid.child(memo(id, h.finish(), || {
-                row_pass(cells, top, frame.bg, sel, m, pass)
+                row_pass(cells, top, frame.bg, sel, m, pass, colors)
             }));
         }
         grid
@@ -769,7 +848,7 @@ pub fn grid(key: &str, term: &Term, m: &Metrics, look: GridLook) -> El {
         grid = images(grid, 2);
     }
     if let Some((_, link)) = &term.link {
-        for mark in link_marks(key, frame, link, start..start + visible, m) {
+        for mark in link_marks(key, frame, link, start..start + visible, m, body) {
             grid = grid.child(mark);
         }
     }
@@ -798,8 +877,8 @@ pub fn grid(key: &str, term: &Term, m: &Metrics, look: GridLook) -> El {
                 cell.filter(|c| !c.text.is_empty() && !c.text.starts_with('\u{10eeee}'))
         {
             let style = RunStyle {
-                fg: CARD,
-                ..RunStyle::of(cell, frame.bg)
+                fg: colors.cursor_text.unwrap_or(body),
+                ..RunStyle::of(cell, frame.bg, body)
             };
             grid = grid.child(glyph_run(cell.text.clone(), style, px, py, m));
         }
@@ -816,7 +895,7 @@ pub fn grid(key: &str, term: &Term, m: &Metrics, look: GridLook) -> El {
                 .no_wrap()
                 .font(m.style)
                 .color(rgb(frame.fg))
-                .fill(rgb(CARD))
+                .fill(rgb(body))
                 .absolute(px, py),
             );
         }
@@ -833,6 +912,7 @@ fn link_marks(
     link: &Link,
     rows: std::ops::Range<usize>,
     m: &Metrics,
+    body: u32,
 ) -> Vec<El> {
     let (cw, ch) = m.cell;
     let cols = frame.cols as usize;
@@ -841,7 +921,7 @@ fn link_marks(
         .cells
         .get(link.start / cols)
         .and_then(|row| row.get(link.start % cols))
-        .map_or(frame.fg, |c| RunStyle::of(c, frame.bg).fg);
+        .map_or(frame.fg, |c| RunStyle::of(c, frame.bg, body).fg);
     (link.start / cols..=link.end / cols)
         .filter(|y| rows.contains(y))
         .map(|y| {
@@ -950,7 +1030,7 @@ mod tests {
         }
         let view = |s: &LinkState, _: &mut Cx<LinkState>| {
             let m = metrics(15.);
-            let marks = link_marks("g", &s.frame, &s.link, 0..2, &m);
+            let marks = link_marks("g", &s.frame, &s.link, 0..2, &m, CARD);
             el().w_full().h_full().children(marks)
         };
         let mut rt = Runtime::new(
@@ -962,5 +1042,78 @@ mod tests {
         rt.frame(0.);
         let help: Vec<String> = rt.elements().into_iter().filter_map(|e| e.help).collect();
         assert_eq!(help, ["Ctrl+click to open https://evil.example/"]);
+    }
+
+    /// A frame of default text, an explicit red background and inverse video, on a server
+    /// whose default colours are `bg` and `fg`.
+    fn themed_frame(bg: u32, fg: u32) -> Frame {
+        let color = |c: u32| {
+            Some(ghostty_vt::style::RgbColor {
+                r: (c >> 16) as u8,
+                g: (c >> 8) as u8,
+                b: c as u8,
+            })
+        };
+        let mut terminal = ghostty_vt::Terminal::new(ghostty_vt::TerminalOptions {
+            cols: 4,
+            rows: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        terminal.set_default_bg_color(color(bg)).unwrap();
+        terminal.set_default_fg_color(color(fg)).unwrap();
+        terminal.vt_write(b"x\x1b[48;2;200;0;0mR\x1b[0m\x1b[7mI\x1b[0m");
+        rex_linux::terminal::Renderer::new()
+            .unwrap()
+            .frame(&terminal)
+            .unwrap()
+    }
+
+    #[test]
+    fn the_default_background_takes_the_chromes_only_on_its_own_side() {
+        let follow = TermColors::default();
+        assert_eq!(follow.body(0x000000), CARD, "Rex's built-in black");
+        assert_eq!(follow.body(0x1e1e2e), CARD, "another owner's dark theme");
+        assert_eq!(
+            follow.body(0xfdf6e3),
+            0xfdf6e3,
+            "another owner's light theme"
+        );
+        let light = TermColors::of(Some(&TerminalTheme {
+            background: Some(0xfdf6e3),
+            ..TerminalTheme::default()
+        }));
+        assert_eq!(light.body(0xfdf6e3), 0xfdf6e3);
+        assert_eq!(light.body(0xeeeeee), 0xfdf6e3);
+        assert_eq!(
+            light.body(0x000000),
+            0x000000,
+            "a server without set_theme keeps its black under its light default text"
+        );
+        let midnight = TermColors::of(Some(&TerminalTheme::midnight()));
+        assert_eq!(midnight, follow, "Midnight's background is the card's");
+        assert_eq!(
+            TermColors::of(Some(&TerminalTheme::default())),
+            follow,
+            "Rex's own colours draw like Follow server"
+        );
+
+        for (bg, fg, body) in [(0x1e1e2e, 0xcdd6f4, CARD), (0xfdf6e3, 0x586e75, 0xfdf6e3)] {
+            let frame = themed_frame(bg, fg);
+            assert_eq!(frame.bg, bg);
+            let body_drawn = follow.body(frame.bg);
+            assert_eq!(body_drawn, body);
+            let [plain, red, inverse] = [0, 1, 2].map(|i| &frame.cells[0][i]);
+            assert_eq!(plain.bg, frame.bg, "drawn as the pane's fill, {body:06x}");
+            assert_eq!(red.bg, 0xc80000, "an explicit background is drawn as it is");
+            assert_eq!(inverse.bg, fg, "inverse video's block keeps its colour");
+            assert_eq!(RunStyle::of(plain, frame.bg, body_drawn).fg, fg);
+            assert_eq!(RunStyle::of(red, frame.bg, body_drawn).fg, fg);
+            assert_eq!(
+                RunStyle::of(inverse, frame.bg, body_drawn).fg,
+                body,
+                "inverse text is cut out of the block in the pane's fill"
+            );
+        }
     }
 }

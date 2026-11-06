@@ -6,7 +6,7 @@ use crate::{
 };
 use activity::{BlockEvent, DesktopNotice, StatusRecord};
 use anyhow::{Context, Result};
-use rexrs::api::session;
+use rexrs::api::{BlockMethod, session, terminal::SetTheme};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -186,8 +186,41 @@ pub struct HostModel {
     /// Bumped whenever `activity` is dropped wholesale (on reconnect), so the UI starts its
     /// before-and-after comparison over instead of reading the gap as programs finishing.
     pub activity_epoch: u64,
+    /// The server refused `set_theme`, so this host is never sent a theme again.
+    pub themes_unsupported: bool,
 }
 impl HostModel {
+    /// Record a block's owner (none when nobody owns it), in its session's view and its pane.
+    fn set_owner(&mut self, block: &str, owner: Option<&str>) {
+        for view in self.views.values_mut() {
+            for b in view
+                .windows
+                .iter_mut()
+                .flat_map(|w| w.layers.iter_mut())
+                .flat_map(|l| l.blocks.iter_mut())
+                .filter(|b| b.block_id.as_deref() == Some(block))
+            {
+                b.owner = owner.map(str::to_owned);
+            }
+        }
+        if let Some(pane) = self.terminals.get(block) {
+            pane.model.lock().expect("terminal model").owner = owner == Some(&self.client_id);
+        }
+    }
+
+    /// Whether Rex applies this client's theme to `block` at once: this client owns it, or
+    /// nobody does.
+    fn themable(&self, session: &str, block: &str) -> bool {
+        self.views.get(session).is_some_and(|view| {
+            view.windows
+                .iter()
+                .flat_map(|w| &w.layers)
+                .flat_map(|l| &l.blocks)
+                .find(|b| b.block_id.as_deref() == Some(block))
+                .is_some_and(|b| b.owner.as_deref().is_none_or(|o| o == self.client_id))
+        })
+    }
+
     pub fn apply_block_event(&mut self, session: &str, block: String, event: BlockEvent) {
         match event {
             BlockEvent::StatusChanged { id, record } => {
@@ -295,6 +328,9 @@ pub enum HostCommand {
         command: Command,
     },
     Reconnect,
+    /// The terminal theme to declare from now on, also while disconnected; none declares
+    /// nothing (Follow server).
+    Theme(Option<SetTheme>),
     Shutdown,
     Ticket {
         session: String,
@@ -323,6 +359,8 @@ struct ControlState {
     queried: HashSet<String>,
     /// Unattached sessions fetched once with session.view to place their block events.
     viewed: HashSet<String>,
+    /// The theme last declared to each block on this connection.
+    themed: HashMap<String, SetTheme>,
     // This pool is scoped to the terminal data ref and subprotocol; other sources
     // are filtered out before insertion. It lives only as long as this control socket.
     tickets: HashMap<(String, String), PendingTicket>,
@@ -529,6 +567,8 @@ impl HostConnection {
         create: Option<(String, Option<String>)>,
         block: Option<String>,
         visible: bool,
+        // The terminal theme to declare; none declares nothing.
+        theme: Option<SetTheme>,
     ) -> Self {
         let model = Arc::new(Mutex::new(HostModel {
             visible,
@@ -542,6 +582,12 @@ impl HostConnection {
             wake,
         };
         let sender = commands.clone();
+        let startup = Startup {
+            preferred,
+            create,
+            block,
+            theme,
+        };
         std::thread::Builder::new()
             .name("rex-host".into())
             .spawn(move || {
@@ -552,9 +598,7 @@ impl HostConnection {
                     .and_then(|runtime| {
                         tokio::task::LocalSet::new().block_on(
                             &runtime,
-                            run_host(
-                                endpoint, preferred, create, block, receiver, sender, &shared,
-                            ),
+                            run_host(endpoint, startup, receiver, sender, &shared),
                         )
                     });
                 if let Err(error) = result {
@@ -825,6 +869,60 @@ async fn query_activity(
     }
 }
 
+/// Declare `theme` to each streamed block Rex would apply it to at once: blocks this client
+/// owns or nobody owns. A block another client owns is left alone; Rex would hold the theme
+/// until this client takes it, and taking it brings the block here again. Under Follow server
+/// (`theme` none), a block this connection declared to gets one empty theme, Rex's own
+/// colours, so the last declaration doesn't stay behind. Repeats are skipped.
+async fn declare_themes(
+    control: &mut Client,
+    shared: &Shared,
+    state: &mut ControlState,
+    workers: &HashMap<String, PaneWorker>,
+    theme: Option<&SetTheme>,
+) {
+    let due: Vec<_> = {
+        let m = shared.model.lock().expect("host model");
+        if m.themes_unsupported || !m.connected {
+            return;
+        }
+        workers
+            .iter()
+            .filter_map(|(block, worker)| {
+                let last = state.themed.get(block);
+                let wanted = match theme {
+                    Some(theme) => theme.clone(),
+                    None if last.is_some_and(|t| *t != SetTheme::new()) => SetTheme::new(),
+                    None => return None,
+                };
+                (last != Some(&wanted) && m.themable(&worker.session, block))
+                    .then(|| (worker.session.clone(), block.clone(), wanted))
+            })
+            .collect()
+    };
+    for (session, block, wanted) in due {
+        let call = control.call(wanted.clone().on(session, block.clone()));
+        match tokio::time::timeout(Duration::from_secs(8), call).await {
+            Ok(Err(rexrs::Error::Api(
+                rexrs::ApiError::MethodNotFound { .. } | rexrs::ApiError::NotSupported { .. },
+            ))) => {
+                shared.update(|m| {
+                    m.themes_unsupported = true;
+                    m.notice = Some(
+                        "This Rex server doesn't take terminal themes; its panes keep the server's colours."
+                            .into(),
+                    );
+                });
+                return;
+            }
+            // A block that closed meanwhile or a slow reply isn't retried on this connection.
+            _ => {
+                state.themed.insert(block, wanted);
+            }
+        }
+    }
+}
+
 fn remove_session(shared: &Shared, workers: &mut HashMap<String, PaneWorker>, id: &str) {
     let blocks: Vec<_> = workers
         .iter()
@@ -991,14 +1089,10 @@ async fn handle_event(
                 let _ = refresh(control, shared, state, id).await;
             }
         }
+        // Becoming the owner, even without a resize, makes the block themable.
         "block_owner_changed" => {
             if let Some(block) = event.payload["block_id"].as_str() {
-                shared.update(|m| {
-                    if let Some(pane) = m.terminals.get(block) {
-                        pane.model.lock().expect("terminal model").owner =
-                            event.payload["owner"] == m.client_id;
-                    }
-                });
+                shared.update(|m| m.set_owner(block, event.payload["owner"].as_str()));
             }
         }
         _ => {}
@@ -1006,15 +1100,27 @@ async fn handle_event(
     Ok(())
 }
 
+/// What a host connection starts with.
+struct Startup {
+    preferred: Option<String>,
+    create: Option<(String, Option<String>)>,
+    block: Option<String>,
+    theme: Option<SetTheme>,
+}
+
 async fn run_host(
     endpoint: String,
-    mut preferred: Option<String>,
-    mut create: Option<(String, Option<String>)>,
-    mut initial_block: Option<String>,
+    startup: Startup,
     commands: flume::Receiver<HostCommand>,
     sender: flume::Sender<HostCommand>,
     shared: &Shared,
 ) -> Result<()> {
+    let Startup {
+        mut preferred,
+        mut create,
+        block: mut initial_block,
+        mut theme,
+    } = startup;
     let mut token: Option<String> = None;
     let mut workers = HashMap::<String, PaneWorker>::new();
     let mut retry = 0;
@@ -1062,7 +1168,8 @@ async fn run_host(
             }
             if let Some((label, shell)) = create.take() {
                 // Take before calling: an uncertain response must never create twice.
-                let created = request(&mut control, "session.create", json!({"label":label,"initial_windows":[{"layout":crate::layout::shell_layout(shell.as_deref())}]})).await?;
+                let layout = crate::layout::shell_layout(shell.as_deref(), new_block_theme(shared, theme.as_ref()));
+                let created = request(&mut control, "session.create", json!({"label":label,"initial_windows":[{"layout":layout}]})).await?;
                 preferred = created["session_id"].as_str().map(str::to_owned);
                 list(&mut control, shared, &mut state).await?;
             }
@@ -1094,6 +1201,7 @@ async fn run_host(
                 if let Some((cols, rows, w, h)) = worker.size { resize(&mut control, &worker.session, block, cols, rows, w, h).await?; }
             }
             reconcile(&endpoint, shared, &sender, &mut workers);
+            declare_themes(&mut control, shared, &mut state, &workers, theme.as_ref()).await;
             query_activity(&mut control, shared, &mut state, &workers).await;
             retry = 0;
             prefetch.reset();
@@ -1124,6 +1232,7 @@ async fn run_host(
                         handle_event(event?, &mut control, shared, &mut workers, &mut state).await?;
                         state.prune(&shared.model.lock().expect("host model"));
                         reconcile(&endpoint, shared, &sender, &mut workers);
+                        declare_themes(&mut control, shared, &mut state, &workers, theme.as_ref()).await;
                         query_activity(&mut control, shared, &mut state, &workers).await;
                     }
                     command = commands.recv_async() => {
@@ -1132,13 +1241,14 @@ async fn run_host(
                         if matches!(command, HostCommand::Reconnect) { return Ok(false); }
                         if let HostCommand::PrefetchViews(sessions) = command { prefetch.set_eligible(sessions); continue; }
                         if matches!(command, HostCommand::Select(_) | HostCommand::CreateSession { .. }) { preferred = None; }
-                        let outcome = handle_command(command, &mut control, shared, &mut workers, &mut state).await;
+                        let outcome = handle_command(command, &mut control, shared, &mut workers, &mut state, &mut theme).await;
                         if let Err(error) = outcome {
                             shared.update(|m| m.notice = Some(format!("{error:#}")));
                             if !matches!(error.downcast_ref::<rexrs::Error>(), Some(rexrs::Error::Api(_))) { return Err(error); }
                         }
                         state.prune(&shared.model.lock().expect("host model"));
                         reconcile(&endpoint, shared, &sender, &mut workers);
+                        declare_themes(&mut control, shared, &mut state, &workers, theme.as_ref()).await;
                         query_activity(&mut control, shared, &mut state, &workers).await;
                     }
                 }
@@ -1166,6 +1276,7 @@ async fn run_host(
                     Ok(HostCommand::Select(id)) => preferred = Some(id),
                     Ok(HostCommand::Visibility(visible)) => shared.update(|m|m.visible=visible),
                     Ok(HostCommand::PrefetchViews(sessions)) => prefetch.set_eligible(sessions),
+                    Ok(HostCommand::Theme(new)) => theme = new,
                     Ok(HostCommand::Ticket { reply, .. }) => { let _ = reply.send(Err("Host is reconnecting".into())); }
                     Ok(HostCommand::Claim { .. }) => {}
                     Ok(HostCommand::Terminal { block, command: Command::Selection(input), .. }) => {
@@ -1185,6 +1296,7 @@ async fn run_host(
                 HostCommand::Select(id) => preferred = Some(id),
                 HostCommand::Visibility(visible) => shared.update(|m| m.visible = visible),
                 HostCommand::PrefetchViews(sessions) => prefetch.set_eligible(sessions),
+                HostCommand::Theme(new) => theme = new,
                 HostCommand::Ticket { reply, .. } => {
                     let _ = reply.send(Err("Host is reconnecting".into()));
                 }
@@ -1200,9 +1312,12 @@ async fn handle_command(
     shared: &Shared,
     workers: &mut HashMap<String, PaneWorker>,
     state: &mut ControlState,
+    theme: &mut Option<SetTheme>,
 ) -> Result<()> {
     match command {
         HostCommand::Visibility(visible) => shared.update(|m| m.visible = visible),
+        // Declared to every block it is due for right after this command.
+        HostCommand::Theme(new) => *theme = new,
         HostCommand::Claim { session, blocks } => {
             if blocks.is_empty() {
                 return Ok(());
@@ -1218,11 +1333,8 @@ async fn handle_command(
             };
             shared.update(|m| {
                 for b in result["blocks"].as_array().into_iter().flatten() {
-                    if let Some(id) = b["block_id"].as_str()
-                        && let Some(connection) = m.terminals.get(id)
-                    {
-                        connection.model.lock().expect("terminal model").owner =
-                            b["owner"] == m.client_id;
+                    if let Some(id) = b["block_id"].as_str() {
+                        m.set_owner(id, b["owner"].as_str());
                     }
                 }
             });
@@ -1235,7 +1347,12 @@ async fn handle_command(
             });
         }
         HostCommand::CreateSession { label, shell } => {
-            let mut payload = json!({"initial_windows":[{"window_label":DEFAULT_TAB_LABEL,"layout":crate::layout::shell_layout(shell.as_deref())}]});
+            let layout = crate::layout::shell_layout(
+                shell.as_deref(),
+                new_block_theme(shared, theme.as_ref()),
+            );
+            let mut payload =
+                json!({"initial_windows":[{"window_label":DEFAULT_TAB_LABEL,"layout":layout}]});
             if let Some(label) = label.filter(|l| !l.trim().is_empty()) {
                 payload["label"] = json!(label);
             }
@@ -1341,12 +1458,17 @@ async fn handle_command(
                         )
                         .await?;
                         shared.update(|m| {
-                            let owner = result["blocks"]
+                            match result["blocks"]
                                 .as_array()
                                 .and_then(|blocks| blocks.iter().find(|b| b["block_id"] == block))
-                                .is_some_and(|b| b["owner"] == m.client_id);
-                            if let Some(connection) = m.terminals.get(&block) {
-                                connection.model.lock().expect("terminal model").owner = owner;
+                            {
+                                Some(b) => m.set_owner(&block, b["owner"].as_str()),
+                                None => {
+                                    if let Some(connection) = m.terminals.get(&block) {
+                                        connection.model.lock().expect("terminal model").owner =
+                                            false;
+                                    }
+                                }
                             }
                         });
                     }
@@ -1400,6 +1522,11 @@ async fn handle_command(
         }
     }
     Ok(())
+}
+
+/// The theme a block this client creates starts with, unless the server refused themes.
+fn new_block_theme<'a>(shared: &Shared, theme: Option<&'a SetTheme>) -> Option<&'a SetTheme> {
+    theme.filter(|_| !shared.model.lock().expect("host model").themes_unsupported)
 }
 
 async fn resize(

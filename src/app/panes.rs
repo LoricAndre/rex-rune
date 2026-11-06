@@ -217,9 +217,11 @@ fn card(
             } else {
                 CursorLook::Hollow
             };
+            let colors = s.term_colors();
             let look = GridLook {
                 cursor: Some(cursor),
                 ime: input && s.window_focused,
+                colors,
             };
             let (k1, k2, k3) = (key.clone(), key.clone(), key.clone());
             let (k4, k5, k6) = (key.clone(), key.clone(), key.clone());
@@ -428,14 +430,32 @@ fn card(
                     true
                 })
                 .child(term::grid(&format!("g{block}"), t, m, look));
-            c.child(
+            let top = if bleed { PADDING } else { 0. };
+            // The card draws a background of its own colour, edge included; any other sits
+            // inside the card's border, never over it.
+            let fill = t.body(&colors);
+            let body = if fill == CARD {
+                col().w_full().px(PADDING + 4.).pb(PADDING)
+            } else {
+                let (edge, radius) = if bleed {
+                    (0., 0.)
+                } else {
+                    (1., CARD_RADIUS - 1.)
+                };
                 col()
-                    .grow(1.)
-                    .w_full()
+                    .self_stretch()
+                    .mx(edge)
+                    .mb(edge)
+                    .px(PADDING + 4. - edge)
+                    .pb(PADDING - edge)
+                    .corners([0., 0., radius, radius])
+                    .continuous_corners()
+                    .fill(rgb(fill))
+            };
+            c.child(
+                body.grow(1.)
                     .min_h(0.)
-                    .px(PADDING + 4.)
-                    .pt(if bleed { PADDING } else { 0. })
-                    .pb(PADDING)
+                    .pt(top)
                     .instant_changes()
                     .motion(STILL)
                     .child(grid),

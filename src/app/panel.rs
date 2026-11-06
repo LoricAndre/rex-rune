@@ -1,6 +1,10 @@
 //! Popup and dialog state, and the action lists the switcher, Commands and menus show.
 use super::theme::{MONITOR, SERVER};
 use super::workspace::Workspace;
+use rex_linux::{
+    settings::TerminalThemeChoice,
+    terminal_theme::{BUILTIN_PREFIX, BUILTINS},
+};
 use rune::TextEdit;
 use serde_json::Value;
 
@@ -31,6 +35,10 @@ pub enum Intent {
     EditHost(usize),
     RemoveHost(usize),
     Retry,
+    /// The terminal theme picker, from Settings.
+    ChooseTheme,
+    /// Declare this terminal theme from now on, then return to Settings.
+    Theme(TerminalThemeChoice),
 }
 impl Intent {
     /// Actions that open another panel instead of closing the current one.
@@ -45,6 +53,7 @@ impl Intent {
                 | Intent::CloseWindow(_)
                 | Intent::Settings
                 | Intent::Fonts
+                | Intent::ChooseTheme
                 | Intent::AddHost
                 | Intent::EditHost(_)
                 | Intent::RemoveHost(_)
@@ -158,6 +167,8 @@ pub enum PanelKind {
     Window(String),
     Form(Form),
     Settings,
+    /// The terminal themes, filtered by the search field.
+    Themes,
     /// Confirm forgetting a saved host; its server and programs are untouched.
     RemoveHost(usize),
     Confirm {
@@ -226,6 +237,7 @@ impl Panel {
                 | PanelKind::Session
                 | PanelKind::Host(_)
                 | PanelKind::Window(_)
+                | PanelKind::Themes
         )
     }
 }
@@ -358,12 +370,56 @@ impl Workspace {
         }
     }
 
+    /// The server's own colours, the built-in themes, then the dark and the light Ghostty
+    /// themes, each kept when its name contains `lower`.
+    fn theme_entries(&self, lower: &str) -> Vec<Entry> {
+        let current = &self.settings.terminal_theme;
+        let mut entries = Vec::new();
+        let mut add = |label: &str, detail: &str, group: &str, choice: TerminalThemeChoice| {
+            if label.to_lowercase().contains(lower) {
+                let mut e = Entry::new(label, detail, group, Intent::Theme(choice.clone()));
+                e.current = *current == choice;
+                entries.push(e);
+            }
+        };
+        add(
+            "Follow server",
+            "Declares nothing",
+            "Server",
+            TerminalThemeChoice::FollowServer,
+        );
+        add(
+            "Rex default colours",
+            "",
+            "Server",
+            TerminalThemeChoice::RexDefault,
+        );
+        for builtin in BUILTINS {
+            let id = format!("{BUILTIN_PREFIX}{}", builtin.id);
+            add(builtin.name, "", "Built in", TerminalThemeChoice::Named(id));
+        }
+        for (group, light) in [("Dark", false), ("Light", true)] {
+            for theme in self.themes.iter().filter(|t| t.light == light) {
+                add(
+                    &theme.name,
+                    if theme.custom { "Custom" } else { "" },
+                    group,
+                    TerminalThemeChoice::Named(theme.name.clone()),
+                );
+            }
+        }
+        entries
+    }
+
     pub fn entries(&self) -> Vec<Entry> {
         let Some(panel) = &self.panel else {
             return vec![];
         };
         let query = self.query();
         let lower = query.to_lowercase();
+        if matches!(panel.kind, PanelKind::Themes) {
+            return self.theme_entries(&lower);
+        }
         if let PanelKind::Hosts(name) = &panel.kind {
             return self
                 .hosts
