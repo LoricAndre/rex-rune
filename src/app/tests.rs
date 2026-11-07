@@ -2165,25 +2165,132 @@ fn alt_arrows_belong_to_terminal_programs_and_ctrl_alt_arrows_move_pane_focus() 
     }
 }
 
+/// Make `block` a connected terminal whose input lands on `sender`.
+fn live_terminal(ws: &mut Workspace, block: &str, sender: &flume::Sender<HostCommand>) {
+    use rex_linux::connection::{Connection, TerminalSender};
+    let connection = Connection {
+        model: Default::default(),
+        commands: TerminalSender::new(sender.clone(), "s".into(), block.into()),
+        wake: flume::unbounded().1,
+    };
+    {
+        let mut m = connection.model.lock().unwrap();
+        m.connected = true;
+        m.control_connected = true;
+    }
+    let key = ws.term_key(block);
+    ws.terminals.insert(key, super::term::Term::new(connection));
+}
+
+/// The `client.key` payloads terminals were sent, drained from `rx`.
+fn sent_keys(rx: &flume::Receiver<HostCommand>) -> Vec<serde_json::Value> {
+    rx.try_iter()
+        .filter_map(|c| match c {
+            HostCommand::Terminal {
+                command: rex_linux::connection::Command::Key(key),
+                ..
+            } => Some(key),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn modified_terminal_keys_reach_the_pty_and_reserved_combinations_stay_local() {
+    let (mut ws, _rx) = tabbed_workspace("split");
+    let (sender, sent) = flume::unbounded();
+    for block in ["block:b", "block:c"] {
+        live_terminal(&mut ws, block, &sender);
+    }
+    let mut rt = runtime(ws);
+    let m = |shift, ctrl, alt| Mods {
+        shift,
+        ctrl,
+        cmd: ctrl,
+        alt,
+        ..Mods::default()
+    };
+    let (shift, ctrl, alt) = (
+        m(true, false, false),
+        m(false, true, false),
+        m(false, false, true),
+    );
+    let mut send = |rt: &mut Runtime<Workspace>, key: Key, mods: Mods, repeat: bool| {
+        let ev = KeyEvent { key, mods };
+        if repeat {
+            rt.repeat_key(ev);
+        } else {
+            rt.key(ev);
+        }
+        for _ in 0..3 {
+            rt.frame(1. / 60.);
+        }
+        sent_keys(&sent)
+    };
+    for (key, mods, expected) in [
+        (Key::Tab, shift, ("tab", "shift")),
+        (Key::Enter, shift, ("enter", "shift")),
+        (Key::Enter, ctrl, ("enter", "ctrl")),
+        (Key::Enter, alt, ("enter", "alt")),
+        (Key::Text(" ".into()), shift, ("space", "shift")),
+        (Key::Up, shift, ("arrow_up", "shift")),
+        (Key::Left, ctrl, ("arrow_left", "ctrl")),
+        (Key::Right, alt, ("arrow_right", "alt")),
+        (Key::Home, shift, ("home", "shift")),
+        (Key::End, ctrl, ("end", "ctrl")),
+        (Key::Backspace, shift, ("backspace", "shift")),
+        (Key::Delete, ctrl, ("delete", "ctrl")),
+        (Key::PageUp, alt, ("page_up", "alt")),
+    ] {
+        let label = format!("{key:?} {mods:?}");
+        let keys = send(&mut rt, key, mods, false);
+        assert_eq!(keys.len(), 1, "{label} sent {keys:?}");
+        let k = &keys[0];
+        assert_eq!(
+            (
+                k["key"].as_str(),
+                k["mods"].as_str(),
+                k["consumed_mods"].as_str()
+            ),
+            (Some(expected.0), Some(expected.1), Some("")),
+            "{label}"
+        );
+        assert_eq!(k["action"], "press", "{label}");
+        assert_eq!(focused(&rt), None, "{label} moved focus");
+        assert!(rt.state.panel.is_none(), "{label} opened a panel");
+    }
+    let keys = send(&mut rt, Key::Tab, shift, true);
+    assert_eq!(keys.len(), 1, "Shift+Tab repeat sent {keys:?}");
+    assert_eq!(
+        (
+            keys[0]["key"].as_str(),
+            keys[0]["mods"].as_str(),
+            keys[0]["action"].as_str()
+        ),
+        (Some("tab"), Some("shift"), Some("repeat"))
+    );
+    // Workspace shortcuts: zoom, scrollback, next tab, focus left.
+    for (key, mods) in [
+        (Key::Enter, m(true, true, false)),
+        (Key::PageUp, shift),
+        (Key::PageDown, ctrl),
+        (Key::Left, m(false, true, true)),
+    ] {
+        let label = format!("{key:?} {mods:?}");
+        let keys = send(&mut rt, key, mods, false);
+        assert!(keys.is_empty(), "{label} reached the PTY: {keys:?}");
+    }
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
 #[test]
 fn a_clipboard_paste_reaches_only_the_pane_that_asked_while_it_stays_focused() {
-    use rex_linux::connection::{Command, Connection, TerminalSender};
+    use rex_linux::connection::Command;
     for (move_focus, expected) in [(false, Some("pasted")), (true, None)] {
         let (mut ws, _rx) = tabbed_workspace("split");
         let (sender, sent) = flume::unbounded();
         for block in ["block:b", "block:c"] {
-            let connection = Connection {
-                model: Default::default(),
-                commands: TerminalSender::new(sender.clone(), "s".into(), block.into()),
-                wake: flume::unbounded().1,
-            };
-            {
-                let mut m = connection.model.lock().unwrap();
-                m.connected = true;
-                m.control_connected = true;
-            }
-            let key = ws.term_key(block);
-            ws.terminals.insert(key, super::term::Term::new(connection));
+            live_terminal(&mut ws, block, &sender);
         }
         let mut rt = runtime(ws);
         let clipboard = rune::clipboard::memory();
