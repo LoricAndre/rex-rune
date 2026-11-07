@@ -449,3 +449,345 @@ fn press_repeat_and_release_carry_the_same_identity() {
         assert_eq!(release["text"], "", "{label} release types nothing");
     }
 }
+
+/// The bytes Ghostty's encoder (the library the Rex server encodes `client.key` with) writes
+/// for a payload, in legacy mode or with Kitty flags `CSI > 3 u`.
+fn encode(p: &Value, kitty: bool) -> Vec<u8> {
+    use ghostty_vt::key::{self as g, Encoder, Event, KittyKeyFlags};
+    let key = match p["key"].as_str().unwrap() {
+        "tab" => g::Key::Tab,
+        "enter" => g::Key::Enter,
+        "space" => g::Key::Space,
+        "arrow_up" => g::Key::ArrowUp,
+        "arrow_left" => g::Key::ArrowLeft,
+        "arrow_right" => g::Key::ArrowRight,
+        "home" => g::Key::Home,
+        "end" => g::Key::End,
+        "page_up" => g::Key::PageUp,
+        "page_down" => g::Key::PageDown,
+        "backspace" => g::Key::Backspace,
+        "delete" => g::Key::Delete,
+        "key_a" => g::Key::A,
+        "digit_1" => g::Key::Digit1,
+        other => panic!("no Ghostty key for {other}"),
+    };
+    let mods = |field: &str| {
+        p[field]
+            .as_str()
+            .unwrap()
+            .split('+')
+            .filter(|m| !m.is_empty())
+            .fold(g::Mods::empty(), |all, m| {
+                all | match m {
+                    "shift" => g::Mods::SHIFT,
+                    "ctrl" => g::Mods::CTRL,
+                    "alt" => g::Mods::ALT,
+                    "super" => g::Mods::SUPER,
+                    other => panic!("unknown modifier {other}"),
+                }
+            })
+    };
+    let action = match p["action"].as_str().unwrap() {
+        "press" => g::Action::Press,
+        "repeat" => g::Action::Repeat,
+        _ => g::Action::Release,
+    };
+    let text = p["text"].as_str().unwrap();
+    let mut event = Event::new().unwrap();
+    event
+        .set_action(action)
+        .set_key(key)
+        .set_mods(mods("mods"))
+        .set_consumed_mods(mods("consumed_mods"))
+        .set_utf8((!text.is_empty()).then(|| text.to_owned()));
+    if let Some(c) =
+        char::from_u32(p["unshifted_codepoint"].as_u64().unwrap() as u32).filter(|&c| c != '\0')
+    {
+        event.set_unshifted_codepoint(c);
+    }
+    let mut encoder = Encoder::new().unwrap();
+    if kitty {
+        encoder.set_kitty_flags(KittyKeyFlags::DISAMBIGUATE | KittyKeyFlags::REPORT_EVENTS);
+    }
+    let mut out = Vec::new();
+    encoder.encode_to_vec(&event, &mut out).unwrap();
+    out
+}
+
+#[test]
+fn modified_keys_encode_distinctly_in_legacy_and_kitty_modes() {
+    use Action::{Press, Release, Repeat};
+    // (label, event, code, base, action, legacy bytes, Kitty bytes); `None` = not checked.
+    // Legacy Shift+Backspace is a bare DEL: the legacy encoding has no way to say Shift there.
+    type Row<'a> = (
+        &'a str,
+        KeyEvent,
+        C,
+        Option<char>,
+        Action,
+        Option<&'a [u8]>,
+        &'a [u8],
+    );
+    let rows: Vec<Row> = vec![
+        (
+            "Tab",
+            ev(Key::Tab, NONE),
+            C::Tab,
+            None,
+            Press,
+            Some(b"\t"),
+            b"\t",
+        ),
+        (
+            "Shift+Tab",
+            ev(Key::Tab, SHIFT),
+            C::Tab,
+            None,
+            Press,
+            Some(b"\x1b[Z"),
+            b"\x1b[9;2u",
+        ),
+        (
+            "Shift+Tab repeat",
+            ev(Key::Tab, SHIFT),
+            C::Tab,
+            None,
+            Repeat,
+            None,
+            b"\x1b[9;2:2u",
+        ),
+        (
+            "Enter",
+            ev(Key::Enter, NONE),
+            C::Enter,
+            None,
+            Press,
+            Some(b"\r"),
+            b"\r",
+        ),
+        (
+            "Shift+Enter",
+            ev(Key::Enter, SHIFT),
+            C::Enter,
+            None,
+            Press,
+            Some(b"\x1b[27;2;13~"),
+            b"\x1b[13;2u",
+        ),
+        (
+            "Ctrl+Enter",
+            ev(Key::Enter, CTRL),
+            C::Enter,
+            None,
+            Press,
+            Some(b"\x1b[27;5;13~"),
+            b"\x1b[13;5u",
+        ),
+        (
+            "Alt+Enter",
+            ev(Key::Enter, ALT),
+            C::Enter,
+            None,
+            Press,
+            Some(b"\x1b\r"),
+            b"\x1b[13;3u",
+        ),
+        (
+            "Ctrl+Shift+Enter",
+            ev(Key::Enter, with(CTRL, SHIFT)),
+            C::Enter,
+            None,
+            Press,
+            Some(b"\x1b[27;6;13~"),
+            b"\x1b[13;6u",
+        ),
+        (
+            "Space",
+            ev(text(" "), NONE),
+            C::Space,
+            Some(' '),
+            Press,
+            Some(b" "),
+            b" ",
+        ),
+        (
+            "Shift+Space",
+            ev(text(" "), SHIFT),
+            C::Space,
+            Some(' '),
+            Press,
+            Some(b" "),
+            b"\x1b[32;2u",
+        ),
+        (
+            "Shift+Space release",
+            ev(text(" "), SHIFT),
+            C::Space,
+            Some(' '),
+            Release,
+            None,
+            b"\x1b[32;2:3u",
+        ),
+        (
+            "Shift+Up",
+            ev(Key::Up, SHIFT),
+            C::ArrowUp,
+            None,
+            Press,
+            Some(b"\x1b[1;2A"),
+            b"\x1b[1;2:1A",
+        ),
+        (
+            "Ctrl+Left",
+            ev(Key::Left, CTRL),
+            C::ArrowLeft,
+            None,
+            Press,
+            Some(b"\x1b[1;5D"),
+            b"\x1b[1;5:1D",
+        ),
+        (
+            "Alt+Right",
+            ev(Key::Right, ALT),
+            C::ArrowRight,
+            None,
+            Press,
+            Some(b"\x1b[1;3C"),
+            b"\x1b[1;3:1C",
+        ),
+        (
+            "Shift+Home",
+            ev(Key::Home, SHIFT),
+            C::Home,
+            None,
+            Press,
+            Some(b"\x1b[1;2H"),
+            b"\x1b[1;2:1H",
+        ),
+        (
+            "Ctrl+End",
+            ev(Key::End, CTRL),
+            C::End,
+            None,
+            Press,
+            Some(b"\x1b[1;5F"),
+            b"\x1b[1;5:1F",
+        ),
+        (
+            "Shift+PageUp",
+            ev(Key::PageUp, SHIFT),
+            C::PageUp,
+            None,
+            Press,
+            Some(b"\x1b[5;2~"),
+            b"\x1b[5;2~",
+        ),
+        (
+            "Ctrl+PageDown",
+            ev(Key::PageDown, CTRL),
+            C::PageDown,
+            None,
+            Press,
+            Some(b"\x1b[6;5~"),
+            b"\x1b[6;5~",
+        ),
+        (
+            "Backspace",
+            ev(Key::Backspace, NONE),
+            C::Backspace,
+            None,
+            Press,
+            Some(b"\x7f"),
+            b"\x7f",
+        ),
+        (
+            "Shift+Backspace",
+            ev(Key::Backspace, SHIFT),
+            C::Backspace,
+            None,
+            Press,
+            Some(b"\x7f"),
+            b"\x1b[127;2u",
+        ),
+        (
+            "Ctrl+Backspace",
+            ev(Key::Backspace, CTRL),
+            C::Backspace,
+            None,
+            Press,
+            Some(b"\x08"),
+            b"\x1b[127;5u",
+        ),
+        (
+            "Alt+Backspace",
+            ev(Key::Backspace, ALT),
+            C::Backspace,
+            None,
+            Press,
+            Some(b"\x1b\x7f"),
+            b"\x1b[127;3u",
+        ),
+        (
+            "Shift+Delete",
+            ev(Key::Delete, SHIFT),
+            C::Delete,
+            None,
+            Press,
+            Some(b"\x1b[3;2~"),
+            b"\x1b[3;2~",
+        ),
+        (
+            "Ctrl+Delete",
+            ev(Key::Delete, CTRL),
+            C::Delete,
+            None,
+            Press,
+            Some(b"\x1b[3;5~"),
+            b"\x1b[3;5~",
+        ),
+        (
+            "Shift+a",
+            ev(text("A"), SHIFT),
+            C::KeyA,
+            Some('a'),
+            Press,
+            Some(b"A"),
+            b"A",
+        ),
+        (
+            "Shift+a release",
+            ev(text("A"), SHIFT),
+            C::KeyA,
+            Some('a'),
+            Release,
+            None,
+            b"\x1b[97;2:3u",
+        ),
+        (
+            "Shift+1",
+            ev(text("!"), SHIFT),
+            C::Digit1,
+            Some('1'),
+            Press,
+            Some(b"!"),
+            b"!",
+        ),
+        (
+            "Alt+Shift+a",
+            ev(text("A"), with(ALT, SHIFT)),
+            C::KeyA,
+            Some('a'),
+            Press,
+            None,
+            b"\x1b[97;4u",
+        ),
+    ];
+    let show = |b: &[u8]| String::from_utf8_lossy(b).escape_debug().to_string();
+    for (label, event, code, base, action, legacy, kitty) in rows {
+        let p = payload(&event, Some(code), base, action).unwrap();
+        if let Some(legacy) = legacy {
+            assert_eq!(show(&encode(&p, false)), show(legacy), "{label} (legacy)");
+        }
+        assert_eq!(show(&encode(&p, true)), show(kitty), "{label} (Kitty)");
+    }
+}
