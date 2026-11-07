@@ -101,7 +101,11 @@ pub struct PaneTarget {
     pub host: usize,
     pub session: String,
     pub block: String,
+    pub window: String,
+    /// The server's label for the pane, which Rename starts from.
     pub label: String,
+    /// What the pane is called on screen (`activity::pane_name`).
+    pub name: String,
     pub tab: String,
 }
 
@@ -576,7 +580,7 @@ impl Workspace {
             let group = if pane_only {
                 String::new()
             } else {
-                format!("Pane · {}", target.label)
+                format!("Pane · {}", target.name)
             };
             let zoomed = model
                 .window()

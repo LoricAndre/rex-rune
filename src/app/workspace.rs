@@ -1106,7 +1106,9 @@ impl Workspace {
             host: self.active,
             session: model.selected.clone()?,
             block: block.into(),
+            window: model.window()?.window_id.clone()?,
             label: self.block_label(block),
+            name: self.pane_name(block),
             tab: model
                 .window()?
                 .label
@@ -1134,7 +1136,7 @@ impl Workspace {
         let Some(target) = self.target(&block) else {
             return;
         };
-        let title = format!("{} · {}", target.tab, target.label);
+        let title = format!("{} · {}", target.tab, target.name);
         self.open_panel(PanelKind::Pane, &title, &[]);
         let panel = self.panel.as_mut().unwrap();
         panel.target = Some(target);
@@ -1285,7 +1287,7 @@ impl Workspace {
                 self.panel.as_mut().unwrap().target = Some(target);
             }
             PaneAction::Close => {
-                let title = format!("Close {} in {}?", target.label, target.tab);
+                let title = format!("Close {} in {}?", target.name, target.tab);
                 let description = format!(
                     "Ends the program in this pane on {}. Closing the app itself keeps programs running.",
                     self.settings.hosts[target.host].label
@@ -1314,6 +1316,21 @@ impl Workspace {
             .find(|b| b.block_id.as_deref() == Some(id))
             .and_then(|b| b.label.clone())
             .unwrap_or_else(|| "Terminal".into())
+    }
+
+    /// What pane `id` of the active tab is called on screen (`activity::pane_name`).
+    pub fn pane_name(&self, id: &str) -> String {
+        let model = self.model();
+        model
+            .window()
+            .into_iter()
+            .flat_map(|w| &w.layers)
+            .flat_map(|l| &l.blocks)
+            .find(|b| b.block_id.as_deref() == Some(id))
+            .map_or_else(
+                || "Terminal".into(),
+                |b| super::activity::pane_name(model, b),
+            )
     }
 
     fn confirm(&mut self, title: &str, method: &str, payload: Value, description: &str) {

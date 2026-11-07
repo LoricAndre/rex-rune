@@ -8,7 +8,9 @@ use super::{
 };
 use rex_linux::connection::{
     DEFAULT_TAB_LABEL, HostModel,
-    activity::{BlockedKind, ProgramState, StatusRecord, TerminalProgress},
+    activity::{
+        BlockedKind, ProgramState, StatusRecord, TERMINAL as TERMINAL_CREATOR, TerminalProgress,
+    },
 };
 use rexrs::api::session;
 use rune::Tx;
@@ -63,6 +65,20 @@ pub fn tab_name(model: &HostModel, window: &session::Window) -> String {
         });
     let title = (generated || label.is_none_or(|l| l == DEFAULT_TAB_LABEL))
         .then(|| focused_block(window).and_then(|b| model.title(b)))
+        .flatten();
+    title.or(label).unwrap_or("Terminal").to_owned()
+}
+
+/// What a pane is called: its server label, or while that is still the default its terminal
+/// gets (its flavor's last word, such as `shell`), its program's terminal title. Display only:
+/// the server label is never changed.
+pub fn pane_name(model: &HostModel, block: &session::LayerBlock) -> String {
+    let label = block.label.as_deref().filter(|l| !l.is_empty());
+    let default = block.creator_name.as_deref() == Some(TERMINAL_CREATOR)
+        && label
+            .is_none_or(|l| block.flavor.as_deref().and_then(|f| f.rsplit('.').next()) == Some(l));
+    let title = default
+        .then(|| block.block_id.as_deref().and_then(|b| model.title(b)))
         .flatten();
     title.or(label).unwrap_or("Terminal").to_owned()
 }
@@ -502,6 +518,56 @@ mod tests {
             .insert("block".into(), ("stale".into(), Some(42)));
         model.foreground.insert("block".into(), vec![99]);
         assert_eq!(tab_name(&model, &window), "Window 9dcd0a4c");
+    }
+
+    fn pane(label: Option<&str>) -> (HostModel, session::LayerBlock) {
+        let mut model = HostModel::default();
+        model
+            .titles
+            .insert("block".into(), ("Claude Code".into(), Some(7)));
+        model.foreground.insert("block".into(), vec![7, 1]);
+        let block = session::LayerBlock {
+            block_id: Some("block".into()),
+            label: label.map(str::to_owned),
+            creator_name: Some("com.superlogical.terminal".into()),
+            flavor: Some("com.superlogical.terminal.shell".into()),
+            ..Default::default()
+        };
+        (model, block)
+    }
+
+    #[test]
+    fn default_pane_labels_show_the_current_terminal_title() {
+        for label in [Some("shell"), None, Some("")] {
+            let (model, block) = pane(label);
+            assert_eq!(pane_name(&model, &block), "Claude Code");
+        }
+    }
+
+    #[test]
+    fn renamed_panes_keep_their_labels() {
+        for label in ["build", "Shell", "server", "Claude"] {
+            let (model, block) = pane(Some(label));
+            assert_eq!(pane_name(&model, &block), label);
+        }
+    }
+
+    #[test]
+    fn pane_titles_go_stale_with_their_program() {
+        let (mut model, block) = pane(Some("shell"));
+        model.foreground.insert("block".into(), vec![1]);
+        assert_eq!(pane_name(&model, &block), "shell");
+        model.titles.clear();
+        let (_, mut bare) = pane(None);
+        bare.flavor = None;
+        assert_eq!(pane_name(&model, &bare), "Terminal");
+    }
+
+    #[test]
+    fn only_terminal_blocks_take_titles() {
+        let (model, mut block) = pane(Some("shell"));
+        block.creator_name = Some("com.example.other".into());
+        assert_eq!(pane_name(&model, &block), "shell");
     }
 
     #[test]

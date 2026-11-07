@@ -418,7 +418,9 @@ fn tabs_and_splits_start_the_right_hosts_shell() {
         host: 1,
         session: "b".into(),
         block: "block:1".into(),
+        window: "w".into(),
         label: "shell".into(),
+        name: "shell".into(),
         tab: "Shell".into(),
     };
     ws.hosts[1].model.views.insert(
@@ -1524,6 +1526,23 @@ fn a_tabs_progress_report_shows_below_trouble_and_above_done() {
         [("".into(), record(Blocked, true))].into(),
     );
     assert_eq!(word(model, 0, false).as_deref(), Some("Needs input"));
+    std::fs::remove_file(&ws.settings_path).ok();
+}
+
+#[test]
+fn a_titled_pane_shows_its_title_but_renames_from_its_label() {
+    let (mut ws, _rx) = tabbed_workspace("split");
+    let model = &mut ws.hosts[0].model;
+    let block = &mut model.views.get_mut("s").unwrap().windows[1].layers[0].blocks[0];
+    block.label = Some("shell".into());
+    block.creator_name = Some("com.superlogical.terminal".into());
+    block.flavor = Some("com.superlogical.terminal.shell".into());
+    model
+        .titles
+        .insert("block:b".into(), ("Claude Code".into(), None));
+    let target = ws.target("block:b").unwrap();
+    assert_eq!(target.label, "shell", "Rename prefills the server label");
+    assert_eq!(target.name, "Claude Code");
     std::fs::remove_file(&ws.settings_path).ok();
 }
 
