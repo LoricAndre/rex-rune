@@ -2215,7 +2215,7 @@ fn modified_terminal_keys_reach_the_pty_and_reserved_combinations_stay_local() {
         m(false, true, false),
         m(false, false, true),
     );
-    let mut send = |rt: &mut Runtime<Workspace>, key: Key, mods: Mods, repeat: bool| {
+    let send = |rt: &mut Runtime<Workspace>, key: Key, mods: Mods, repeat: bool| {
         let ev = KeyEvent { key, mods };
         if repeat {
             rt.repeat_key(ev);
