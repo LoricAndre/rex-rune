@@ -8,7 +8,7 @@ use super::{
 };
 use rex_linux::connection::{
     DEFAULT_TAB_LABEL, HostModel,
-    activity::{BlockedKind, ProgramState, TerminalProgress},
+    activity::{BlockedKind, ProgramState, StatusRecord, TerminalProgress},
 };
 use rexrs::api::session;
 use rune::Tx;
@@ -30,7 +30,7 @@ pub struct TabActivity {
     pub progress: Option<TerminalProgress>,
 }
 
-fn blocks(window: &session::Window) -> impl Iterator<Item = &str> {
+fn blocks(window: &session::Window) -> impl Iterator<Item = &str> + Clone {
     window
         .layers
         .iter()
@@ -69,21 +69,49 @@ pub fn tab_name(model: &HostModel, window: &session::Window) -> String {
 
 /// Fold a tab's records with Blocked > Error > Working > Done > Idle.
 pub fn tab_activity(model: &HostModel, window: &session::Window) -> TabActivity {
-    let top = blocks(window)
-        .filter_map(|b| model.activity.get(b))
-        .flat_map(|records| records.values())
-        .max_by_key(|r| r.state);
-    let program = focused_block(window).and_then(|b| {
+    fold_activity(model, blocks(window), focused_block(window))
+}
+
+/// One pane's activity: the same fold as its tab's, over its own records.
+#[cfg_attr(not(test), allow(dead_code))] // Until the pane header shows it.
+pub fn pane_activity(model: &HostModel, block: &str) -> TabActivity {
+    fold_activity(model, std::iter::once(block), Some(block))
+}
+
+/// The record that speaks for a set: the highest state, and among equals one that reports
+/// progress, so a percentage doesn't depend on record or pane order.
+fn deciding<'a>(records: impl Iterator<Item = &'a StatusRecord>) -> Option<&'a StatusRecord> {
+    records.max_by_key(|r| (r.state, r.progress.is_some()))
+}
+
+fn fold_activity<'a>(
+    model: &'a HostModel,
+    blocks: impl Iterator<Item = &'a str> + Clone,
+    focused: Option<&str>,
+) -> TabActivity {
+    let top = deciding(
+        blocks
+            .clone()
+            .filter_map(|b| model.activity.get(b))
+            .flat_map(|records| records.values()),
+    );
+    let program = focused.and_then(|b| {
         model
             .activity
             .get(b)
-            .and_then(|records| records.values().max_by_key(|r| r.state))
+            .and_then(|records| deciding(records.values()))
             .and_then(|r| r.app.clone())
             .or_else(|| model.programs.get(b).cloned())
     });
-    let progress = blocks(window)
+    // A program's own OSC 9;4 report wins over the percentage in its status record.
+    let progress = blocks
         .filter_map(|b| model.progress.get(b).copied())
-        .max_by_key(|p| p.rank());
+        .max_by_key(|p| p.rank())
+        .or_else(|| {
+            top.filter(|r| r.state == ProgramState::Working)
+                .and_then(|r| r.progress)
+                .map(|n| TerminalProgress::Set(Some(n)))
+        });
     TabActivity {
         state: top.map(|r| r.state).unwrap_or_default(),
         kind: top.and_then(|r| r.kind),
@@ -98,10 +126,11 @@ pub fn tab_activity(model: &HostModel, window: &session::Window) -> TabActivity 
 /// The icon for a program; shells and anything unknown keep the terminal glyph.
 pub fn program_icon(program: Option<&str>) -> &'static rune::Icon {
     match program.map(str::to_ascii_lowercase).as_deref() {
-        Some("claude") => &CLAUDE,
+        Some("claude" | "claude-code") => &CLAUDE,
         Some("codex") => &CODEX,
         Some("opencode") => &OPENCODE,
-        Some("pi") => &PI,
+        // OMP is built on Pi and shares its skill.
+        Some("pi" | "omp") => &PI,
         Some("nvim" | "vim" | "vi") => &VIM,
         Some("git" | "lazygit" | "tig") => &GIT,
         Some("cargo" | "rustc" | "rustup") => &CRATE,

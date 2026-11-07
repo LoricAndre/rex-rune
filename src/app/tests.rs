@@ -1528,6 +1528,77 @@ fn a_tabs_progress_report_shows_below_trouble_and_above_done() {
 }
 
 #[test]
+fn each_pane_reports_its_own_activity_and_osc_7501_progress() {
+    use super::activity::{pane_activity, program_icon, tab_activity, tab_word};
+    use rex_linux::connection::activity::{BlockedKind, ProgramState::*, TerminalProgress::Set};
+    let (mut ws, _rx) = tabbed_workspace("split");
+    let model = &mut ws.hosts[0].model;
+    let mut blocked = record(Blocked, true);
+    blocked.kind = Some(BlockedKind::Permission);
+    blocked.progress = Some(50);
+    let mut working = record(Working, true);
+    working.progress = Some(40);
+    model
+        .activity
+        .insert("block:b".into(), [("".into(), blocked)].into());
+    model
+        .activity
+        .insert("block:c".into(), [("".into(), working)].into());
+    let word = |a| tab_word(&a, false, false).map(|(w, _)| w.into_owned());
+    assert_eq!(
+        word(pane_activity(model, "block:b")).as_deref(),
+        Some("Needs approval")
+    );
+    assert_eq!(
+        word(pane_activity(model, "block:c")).as_deref(),
+        Some("40%")
+    );
+    let view = model.view().unwrap().clone();
+    assert_eq!(
+        word(tab_activity(model, &view.windows[1])).as_deref(),
+        Some("Needs approval")
+    );
+    // An OSC 9;4 report beats the record's own progress.
+    model.progress.insert("block:c".into(), Set(Some(10)));
+    assert_eq!(
+        word(pane_activity(model, "block:c")).as_deref(),
+        Some("10%")
+    );
+    // A pane with nothing to report says nothing.
+    assert_eq!(word(pane_activity(model, "block:a")), None);
+    // Equal Working records: the one with progress decides, whatever its id order.
+    model.progress.clear();
+    for ids in [("a", "z"), ("z", "a")] {
+        let mut with = record(Working, true);
+        with.progress = Some(25);
+        model.activity.insert(
+            "block:c".into(),
+            [(ids.0.into(), with), (ids.1.into(), record(Working, true))].into(),
+        );
+        assert_eq!(
+            word(pane_activity(model, "block:c")).as_deref(),
+            Some("25%")
+        );
+    }
+    // Across panes too: block:b Working without progress, block:c Working with 25%.
+    model.activity.insert(
+        "block:b".into(),
+        [("".into(), record(Working, true))].into(),
+    );
+    let view = model.view().unwrap().clone();
+    assert_eq!(
+        word(tab_activity(model, &view.windows[1])).as_deref(),
+        Some("25%")
+    );
+    assert!(std::ptr::eq(
+        program_icon(Some("claude-code")),
+        &super::theme::CLAUDE
+    ));
+    assert!(std::ptr::eq(program_icon(Some("omp")), &super::theme::PI));
+    std::fs::remove_file(&ws.settings_path).ok();
+}
+
+#[test]
 fn background_tabs_latch_done_and_notify_only_about_live_changes() {
     use rex_linux::connection::activity::ProgramState::*;
     let (mut ws, _rx) = tabbed_workspace("single");
