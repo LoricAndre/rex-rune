@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2 — 2026-11-06
+
+- First prebuilt Linux releases for x86-64 and ARM64: user-installable tarballs and Debian/Ubuntu packages, with SHA-256 checksums.
+- Automated native builds and tests on Ubuntu 24.04. No application behavior changes since 0.3.1.
+
 ## 0.3.1 — 2026-11-06
 
 - Only Rex API revisions 10 and 11 are supported; servers older than revision 10 are refused with a message to update Rex. The revision-7 and revision-8 compatibility paths and `scripts/revision8-check.py` are gone.
