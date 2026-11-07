@@ -2368,6 +2368,41 @@ fn font_preferences_save_from_settings_without_server_requests() {
     std::fs::remove_file(&rt.state.settings_path).unwrap();
 }
 
+/// Rendered text containing `needle`.
+fn shown(rt: &Runtime<Workspace>, needle: &str) -> bool {
+    rt.elements()
+        .iter()
+        .any(|e| e.text.as_deref().is_some_and(|t| t.contains(needle)))
+}
+
+#[test]
+fn font_family_row_says_a_saved_font_waits_for_the_next_launch() {
+    let mut ws = workspace();
+    ws.perform(Intent::Settings, &mut rune::Tx::default());
+    let mut rt = runtime(ws);
+    click(&mut rt, "settings-section:terminal");
+    assert!(shown(
+        &rt,
+        "JetBrainsMono Nerd Font isn't installed, so terminals use IBM Plex Mono (bundled)."
+    ));
+
+    click(&mut rt, "font-change");
+    rt.state.panel.as_mut().unwrap().inputs[0].text = "MonoLisaCode Variable".into();
+    click(&mut rt, "save-form");
+    assert!(shown(
+        &rt,
+        "MonoLisaCode Variable is saved and applies when you reopen the client."
+    ));
+    let notices: Vec<_> = rt.state.notices.iter().map(|n| n.text.as_str()).collect();
+    assert_eq!(notices, ["Fonts saved. Reopen the client to use them."]);
+
+    // Saving without a change doesn't repeat the notice.
+    click(&mut rt, "font-change");
+    click(&mut rt, "save-form");
+    assert_eq!(rt.state.notices.len(), 1);
+    std::fs::remove_file(&rt.state.settings_path).unwrap();
+}
+
 #[test]
 fn font_preferences_validate_cancel_and_clear_optional_fallbacks() {
     let mut ws = workspace();

@@ -80,7 +80,13 @@ pub struct Workspace {
     pub area: [f32; 4],
     pub viewport: [f32; 2],
     pub sidebar: rune_kit::PaneState,
+    /// The resolved terminal family, or None when the requested one isn't installed.
     pub terminal_family: Option<&'static str>,
+    /// The family this launch asked for, after `--font`.
+    pub launch_font: String,
+    /// The saved family when the client started, to tell a pending font change from the
+    /// active one.
+    pub launch_saved_font: String,
     pub title: String,
     /// (active tab, pane width, sidebar open) when the active tab was last revealed.
     pub last_tab: (Option<String>, i32, bool),
@@ -132,6 +138,8 @@ impl Workspace {
         handle: AppHandle<Workspace>,
         terminal_family: Option<&'static str>,
     ) -> Self {
+        let launch_font = options.fonts(&settings).0.to_owned();
+        let launch_saved_font = settings.font_family.clone();
         let explicit = options.session.is_some()
             || options.new.is_some()
             || options.endpoint != rex_linux::transport::local_endpoint();
@@ -199,6 +207,8 @@ impl Workspace {
             viewport: [1440., 900.],
             sidebar,
             terminal_family,
+            launch_font,
+            launch_saved_font,
             title: "Rex".into(),
             last_tab: (None, 0, false),
             reveal_tab_again: false,
@@ -1561,9 +1571,14 @@ impl Workspace {
                         let (family, fallbacks) = font_preferences
                             .expect("font form")
                             .expect("validated above");
+                        let changed = family != self.settings.font_family
+                            || fallbacks != self.settings.font_fallbacks;
                         self.settings.font_family = family;
                         self.settings.font_fallbacks = fallbacks;
                         self.save();
+                        if changed {
+                            self.inform("Fonts saved. Reopen the client to use them.");
+                        }
                     }
                     Form::HostShell(host) => {
                         self.settings.hosts[host].shell =
