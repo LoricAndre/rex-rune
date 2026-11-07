@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.1 — 2026-11-06
 
 - Only Rex API revisions 10 and 11 are supported; servers older than revision 10 are refused with a message to update Rex. The revision-7 and revision-8 compatibility paths and `scripts/revision8-check.py` are gone.
 
