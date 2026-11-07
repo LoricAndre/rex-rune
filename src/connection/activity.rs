@@ -68,6 +68,8 @@ pub struct StatusRecord {
     /// The program's own words; shown only as plain text.
     pub title: Option<String>,
     pub msg: Option<String>,
+    /// How far along the program says it is, 0–100; only working and blocked records have one.
+    pub progress: Option<u8>,
     /// Reported while this client was listening, not read back by a query: only live
     /// changes are news worth a notification.
     pub live: bool,
@@ -92,6 +94,10 @@ impl StatusRecord {
             app: text("effective_app").or_else(|| text("app")),
             title: text("title"),
             msg: text("msg"),
+            progress: value["progress"]
+                .as_u64()
+                .filter(|p| *p <= 100)
+                .map(|p| p as u8),
             live: false,
         }
     }

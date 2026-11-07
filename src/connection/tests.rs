@@ -481,6 +481,25 @@ fn unknown_states_kinds_and_events_stay_quiet() {
 }
 
 #[test]
+fn status_records_keep_their_progress() {
+    use activity::StatusRecord;
+    let parse = |v: Value| StatusRecord::parse(&v).progress;
+    assert_eq!(parse(json!({"state":"working","progress":42})), Some(42));
+    assert_eq!(parse(json!({"state":"working","progress":100})), Some(100));
+    assert_eq!(parse(json!({"state":"working","progress":101})), None);
+    assert_eq!(parse(json!({"state":"working","progress":null})), None);
+    assert_eq!(parse(json!({"state":"working"})), None);
+    // The live event path carries it too.
+    let (_, event) = activity::parse_block_event(&json!({"block_id":"b",
+        "creator_name":activity::TERMINAL,"name":"program_status_changed",
+        "payload":{"id":"","record":{"state":"working","progress":7}}}))
+    .unwrap();
+    assert!(
+        matches!(event, activity::BlockEvent::StatusChanged { record, .. } if record.progress == Some(7))
+    );
+}
+
+#[test]
 fn progress_reports_set_and_clear_a_blocks_progress() {
     use activity::TerminalProgress::*;
     let report = |payload: Value| {
