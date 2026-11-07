@@ -791,3 +791,31 @@ fn modified_keys_encode_distinctly_in_legacy_and_kitty_modes() {
         assert_eq!(show(&encode(&p, true)), show(kitty), "{label} (Kitty)");
     }
 }
+
+#[test]
+fn a_composed_press_and_its_plain_release_may_differ_in_consumption_but_not_in_bytes() {
+    // Dead `~` then Shift+Space: winit gives the press the composed text and the release only
+    // the plain key, so each decides on its own text. Ghostty ignores consumption on a
+    // release, so the Kitty release is the same either way.
+    let press = payload(
+        &ev(text("~"), SHIFT),
+        Some(C::Space),
+        Some(' '),
+        Action::Press,
+    )
+    .unwrap();
+    let release = payload(
+        &ev(text(" "), SHIFT),
+        Some(C::Space),
+        Some(' '),
+        Action::Release,
+    )
+    .unwrap();
+    assert_eq!(fields(&press), ("space", "shift", "shift", "~", 32));
+    assert_eq!(fields(&release), ("space", "shift", "", "", 32));
+    assert_eq!(encode(&press, true), b"~");
+    let mut consumed_release = release.clone();
+    consumed_release["consumed_mods"] = "shift".into();
+    assert_eq!(encode(&release, true), b"\x1b[32;2:3u");
+    assert_eq!(encode(&consumed_release, true), encode(&release, true));
+}

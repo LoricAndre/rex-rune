@@ -113,11 +113,15 @@ fn text(ev: &KeyEvent) -> String {
 }
 
 /// Whether the layout used Shift to produce the text `ev` types, which the encoder then leaves
-/// out of the modifiers it reports. Decided from the press's text even on a release, so all
-/// three actions agree. On a cased key Shift always counts (Shift and Caps Lock pick the
-/// case, as xkb reports); otherwise only when the text differs from what the key types alone
-/// (`!` from `1`), so Shift+Space stays visible. Enter and Tab type the same text either way.
-/// Without a layout base (logical-only events), any text but a space counts.
+/// out of the modifiers it reports. A heuristic from the event's text and the key's unmodified
+/// character, not the layout's own record: on a cased key Shift always counts (Shift and Caps
+/// Lock pick the case, as xkb reports); otherwise only when the text differs from what the key
+/// types alone (`!` from `1`), so Shift+Space stays visible. Text a dead key composed also
+/// differs, so Shift held for it counts too. Enter and Tab type the same text either way.
+/// Without a layout base (logical-only events), any text but a space counts. Each action
+/// decides on its own event's text, ignoring that a release types nothing; a release can still
+/// differ from its press when only the press carried composed text, which Ghostty's release
+/// encoding ignores.
 fn shift_consumed(ev: &KeyEvent, typed: &str, base: Option<char>) -> bool {
     let Key::Text(t) = &ev.key else {
         return false;
