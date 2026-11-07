@@ -112,6 +112,25 @@ fn text(ev: &KeyEvent) -> String {
     }
 }
 
+/// Whether the layout used Shift to produce the text `ev` types, which the encoder then leaves
+/// out of the modifiers it reports. Decided from the press's text even on a release, so all
+/// three actions agree. On a cased key Shift always counts (Shift and Caps Lock pick the
+/// case, as xkb reports); otherwise only when the text differs from what the key types alone
+/// (`!` from `1`), so Shift+Space stays visible. Enter and Tab type the same text either way.
+/// Without a layout base (logical-only events), any text but a space counts.
+fn shift_consumed(ev: &KeyEvent, typed: &str, base: Option<char>) -> bool {
+    let Key::Text(t) = &ev.key else {
+        return false;
+    };
+    if !ev.mods.shift || typed.is_empty() {
+        return false;
+    }
+    match base {
+        Some(b) => b.is_lowercase() || b.is_uppercase() || t.chars().ne(std::iter::once(b)),
+        None => t != " ",
+    }
+}
+
 pub enum Action {
     Press,
     Repeat,
@@ -131,10 +150,12 @@ pub fn payload(
         Action::Repeat => "repeat",
         Action::Release => "release",
     };
+    let typed = text(ev);
+    let consumed = shift_consumed(ev, &typed, base);
     let text = if action == "release" {
         String::new()
     } else {
-        text(ev)
+        typed
     };
     let unshifted = base
         .or_else(|| match &ev.key {
@@ -143,9 +164,6 @@ pub fn payload(
             _ => None,
         })
         .map_or(0, |c| c as u32);
-    // Shift is consumed only when the layout used it to pick the text (`A`); Enter and Tab type
-    // the same text either way, so their shift must stay visible to the encoder.
-    let consumed = ev.mods.shift && !text.is_empty() && matches!(ev.key, Key::Text(_));
     Some(json!({
         "key": name,
         "mods": mods(ev.mods),
@@ -158,127 +176,4 @@ pub fn payload(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use PhysicalKeyCode as C;
-
-    #[test]
-    fn physical_codes_use_ghostty_names() {
-        for (code, name) in [
-            (C::KeyA, "key_a"),
-            (C::Digit7, "digit_7"),
-            (C::ArrowUp, "arrow_up"),
-            (C::PageDown, "page_down"),
-            (C::BracketLeft, "bracket_left"),
-            (C::Backquote, "backquote"),
-            (C::F12, "f12"),
-            (C::Numpad0, "numpad_0"),
-            (C::NumpadAdd, "numpad_add"),
-            (C::IntlBackslash, "intl_backslash"),
-            (C::Enter, "enter"),
-        ] {
-            assert_eq!(code_name(code), name);
-        }
-    }
-
-    #[test]
-    fn key_payloads() {
-        let shift = Mods {
-            shift: true,
-            ..Default::default()
-        };
-        let ctrl = Mods {
-            ctrl: true,
-            cmd: true,
-            ..Default::default()
-        };
-        let typed = KeyEvent {
-            key: Key::Text("A".into()),
-            mods: shift,
-        };
-        let p = payload(&typed, Some(C::KeyA), Some('a'), Action::Press).unwrap();
-        assert_eq!(p["key"], "key_a");
-        assert_eq!(p["mods"], "shift");
-        assert_eq!(p["consumed_mods"], "shift");
-        assert_eq!(p["text"], "A");
-        assert_eq!(p["unshifted_codepoint"], 'a' as u32);
-
-        let interrupt = KeyEvent {
-            key: Key::Command('c'),
-            mods: ctrl,
-        };
-        let p = payload(&interrupt, Some(C::KeyC), None, Action::Press).unwrap();
-        assert_eq!(
-            (p["key"].as_str(), p["mods"].as_str(), p["text"].as_str()),
-            (Some("key_c"), Some("ctrl"), Some(""))
-        );
-
-        let enter = KeyEvent {
-            key: Key::Enter,
-            mods: Mods::default(),
-        };
-        let p = payload(&enter, Some(C::Enter), None, Action::Repeat).unwrap();
-        assert_eq!(
-            (p["text"].as_str(), p["action"].as_str()),
-            (Some("\n"), Some("repeat"))
-        );
-        let p = payload(&enter, None, None, Action::Release).unwrap();
-        assert_eq!(
-            (p["key"].as_str(), p["text"].as_str()),
-            (Some("enter"), Some(""))
-        );
-    }
-
-    #[test]
-    fn shift_enter_keeps_shift_for_the_encoder() {
-        // With shift marked consumed, Ghostty's Kitty encoder sends a bare `\r` and apps
-        // cannot tell Shift+Enter from Enter.
-        let shift_enter = KeyEvent {
-            key: Key::Enter,
-            mods: Mods {
-                shift: true,
-                ..Default::default()
-            },
-        };
-        let p = payload(&shift_enter, Some(C::Enter), None, Action::Press).unwrap();
-        assert_eq!(
-            (
-                p["mods"].as_str(),
-                p["consumed_mods"].as_str(),
-                p["text"].as_str()
-            ),
-            (Some("shift"), Some(""), Some("\n"))
-        );
-    }
-
-    #[test]
-    fn dead_key_waits_for_the_composed_text() {
-        let dead = KeyEvent {
-            key: Key::Dead(Some('~')),
-            mods: Mods::default(),
-        };
-        let first = payload(&dead, Some(C::Backquote), None, Action::Press).unwrap();
-        assert_eq!(
-            (
-                first["key"].as_str(),
-                first["text"].as_str(),
-                first["composing"].as_bool()
-            ),
-            (Some("backquote"), Some(""), Some(true))
-        );
-
-        let completed = KeyEvent {
-            key: Key::Text("~".into()),
-            mods: Mods::default(),
-        };
-        let last = payload(&completed, Some(C::Space), Some(' '), Action::Press).unwrap();
-        assert_eq!(
-            (
-                last["key"].as_str(),
-                last["text"].as_str(),
-                last["composing"].as_bool()
-            ),
-            (Some("space"), Some("~"), Some(false))
-        );
-    }
-}
+mod tests;
