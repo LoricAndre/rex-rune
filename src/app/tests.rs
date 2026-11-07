@@ -515,6 +515,35 @@ fn a_single_pane_is_full_bleed_and_a_split_keeps_its_cards() {
 }
 
 #[test]
+fn split_pane_headers_show_their_own_status_word() {
+    use rex_linux::connection::activity::{BlockedKind, ProgramState::*};
+    let (mut ws, _rx) = tabbed_workspace("split");
+    let mut blocked = record(Blocked, true);
+    blocked.kind = Some(BlockedKind::Question);
+    ws.hosts[0]
+        .model
+        .activity
+        .insert("block:c".into(), [("".into(), blocked)].into());
+    let mut rt = runtime(ws);
+    assert!(has(&rt, "pane-word:block:c"));
+    assert!(
+        !has(&rt, "pane-word:block:b"),
+        "only the pane that reported"
+    );
+    // A direct field write doesn't invalidate the view; go through update.
+    rt.update(|s, _| s.settings.notifications.show_in_tabs = false);
+    // Let the word's exit transition finish.
+    for _ in 0..90 {
+        rt.frame(1. / 60.);
+    }
+    assert!(
+        !has(&rt, "pane-word:block:c"),
+        "the activity switch hides it"
+    );
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
 fn a_tabs_menu_and_middle_click_act_on_that_tab() {
     let (ws, rx) = tabbed_workspace("single");
     let mut rt = runtime(ws);

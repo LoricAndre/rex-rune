@@ -89,7 +89,6 @@ pub fn tab_activity(model: &HostModel, window: &session::Window) -> TabActivity 
 }
 
 /// One pane's activity: the same fold as its tab's, over its own records.
-#[cfg_attr(not(test), allow(dead_code))] // Until the pane header shows it.
 pub fn pane_activity(model: &HostModel, block: &str) -> TabActivity {
     fold_activity(model, std::iter::once(block), Some(block))
 }

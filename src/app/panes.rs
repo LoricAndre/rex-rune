@@ -3,6 +3,7 @@
 //! with a single pane draws it edge to edge instead.
 //! Cards spring when the layout changes; the terminal grid inside never animates.
 use super::{
+    activity::{pane_activity, tab_word},
     panel::{Form, Intent, PanelKind},
     term::{self, CursorLook, GridLook, Metrics, MouseGesture, PADDING},
     theme::*,
@@ -69,7 +70,21 @@ pub fn full_bleed(window: &Window) -> bool {
 }
 
 fn header(s: &Workspace, block: &str, width: f32, focused: bool, m: &Metrics) -> El {
-    let label = s.block_label(block);
+    let label = s.pane_name(block);
+    // The tab's words for this pane alone; Done and Bell stay with the tab, which they latch.
+    let activity = pane_activity(s.model(), block);
+    let word = tab_word(&activity, false, false)
+        .filter(|_| s.settings.notifications.show_in_tabs)
+        .map(|(word, colour)| {
+            let w = text(word)
+                .key(format!("pane-word:{block}"))
+                .font(medium(11.))
+                .color(rgb(colour));
+            match activity.msg.clone() {
+                Some(msg) => w.help(msg),
+                None => w,
+            }
+        });
     let id = block.to_owned();
     let menu_id = block.to_owned();
     let h = row()
@@ -98,8 +113,13 @@ fn header(s: &Workspace, block: &str, width: f32, focused: bool, m: &Metrics) ->
                 .truncate()
                 .help_when_truncated(label)
                 .shrink(),
-        )
-        .child(el().grow(1.));
+        );
+    // The label truncates first; the word always stays whole.
+    let h = match word {
+        Some(word) => h.child(word),
+        None => h,
+    }
+    .child(el().grow(1.));
     match strip(s, block, width, m) {
         Some(strip) => h.child(strip),
         None => h,
