@@ -149,6 +149,15 @@ fn poll(s: &mut Workspace, _: f64, tx: &mut Tx) -> bool {
     if s.notices.iter().any(|n| !n.sticky) {
         tx.wake_after(Duration::from_secs(1));
     }
+    // A pane waiting for a frame at its size draws anyway at its deadline; be awake for it.
+    let now = std::time::Instant::now();
+    for deadline in s.terminals.values().filter_map(|t| t.draws_anyway_at()) {
+        if deadline <= now {
+            changed = true;
+        } else {
+            tx.wake_after(deadline - now);
+        }
+    }
     changed
 }
 

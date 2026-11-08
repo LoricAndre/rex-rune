@@ -21,6 +21,7 @@ use std::{
     collections::HashMap,
     hash::{DefaultHasher, Hash, Hasher},
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 pub const PADDING: f32 = 8.;
@@ -65,11 +66,18 @@ pub struct MouseGesture {
 /// client sends only lands a moment later. During each uninterrupted live ownership epoch, an
 /// owner hides frames until one matches its first grid size. A non-owner never resizes, so its
 /// frames may never match and are drawn as they come.
+/// A frame at the asked size may never come (the server clamps or drops a resize), so the
+/// wait is bounded: after this long the frame is drawn as it is, which is at worst the brief
+/// flash of a stale size the gate exists to avoid.
+const INITIAL_SIZE_PATIENCE: Duration = Duration::from_millis(500);
+
 #[derive(Default)]
 struct InitialSize {
     expected: Option<(u16, u16)>,
     ready: bool,
     live_owner: bool,
+    /// When the wait began, for the bound above.
+    since: Option<Instant>,
 }
 
 impl InitialSize {
@@ -78,6 +86,7 @@ impl InitialSize {
         if live_owner != self.live_owner {
             self.expected = None;
             self.ready = false;
+            self.since = None;
             self.live_owner = live_owner;
         }
     }
@@ -87,18 +96,34 @@ impl InitialSize {
             return;
         }
         self.expected = Some(size);
+        self.since.get_or_insert_with(Instant::now);
         self.observe(frame);
     }
 
     fn observe(&mut self, frame: Option<(u16, u16)>) {
         if self.expected.is_some() && self.expected == frame {
             self.expected = None;
+            self.since = None;
             self.ready = true;
         }
     }
 
     fn renders(&self, status: &Status) -> bool {
-        !status.live || !status.owner || (self.live_owner && self.ready)
+        self.renders_at(status, Instant::now())
+    }
+
+    fn renders_at(&self, status: &Status, now: Instant) -> bool {
+        !status.live
+            || !status.owner
+            || (self.live_owner && self.ready)
+            || self.deadline().is_some_and(|deadline| now >= deadline)
+    }
+
+    /// When the wait gives up, while one is on.
+    fn deadline(&self) -> Option<Instant> {
+        self.since
+            .filter(|_| self.live_owner && !self.ready)
+            .map(|since| since + INITIAL_SIZE_PATIENCE)
     }
 }
 
@@ -233,6 +258,11 @@ impl Term {
         } else {
             None
         }
+    }
+
+    /// When this pane stops waiting for a frame at its size and draws anyway, while it waits.
+    pub fn draws_anyway_at(&self) -> Option<Instant> {
+        self.initial_size.deadline()
     }
 
     pub fn status(&self) -> Status {
@@ -1154,6 +1184,25 @@ mod tests {
             !size.renders(&status(true, true)),
             "reconnecting starts a new wait"
         );
+
+        // A frame at the asked size may never come; the wait is bounded.
+        let deadline = size.deadline().expect("a wait is on");
+        assert!(
+            !size.renders_at(&status(true, true), deadline - Duration::from_millis(1)),
+            "hidden until the bound"
+        );
+        assert!(
+            size.renders_at(&status(true, true), deadline),
+            "drawn as it is once the bound passes"
+        );
+        size.layout((100, 30), Some((80, 24)));
+        assert_eq!(
+            size.deadline(),
+            Some(deadline),
+            "a relayout keeps the first wait's bound"
+        );
+        size.observe(Some((100, 30)));
+        assert_eq!(size.deadline(), None, "no bound once the size arrived");
     }
 
     #[test]
