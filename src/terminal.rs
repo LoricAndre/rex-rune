@@ -594,6 +594,28 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_with_kitty_image_in_history_installs_a_terminal() {
+        // A Kitty image payload record follows READY in the snapshot; decoding every record
+        // kind (not only page progress) is what makes such a snapshot usable.
+        let mut terminal = Terminal::new(ghostty_vt::TerminalOptions {
+            cols: 10,
+            rows: 3,
+            max_scrollback: 1 << 20,
+        })
+        .unwrap();
+        terminal.set_kitty_image_storage_limit(1 << 20).unwrap();
+        terminal.vt_write(b"\x1b_Ga=T,f=24,s=1,v=1;CQkJ\x1b\\\r\n");
+        for line in 0..2000 {
+            terminal.vt_write(format!("line {line}\r\n").as_bytes());
+        }
+        let snapshot = ghostty_vt::snapshot::encode(&terminal).unwrap();
+        let mut stream = TerminalStream::new(42);
+        stream.feed(&snapshot).unwrap();
+        assert!(stream.terminal.is_some());
+        assert!(stream.text().unwrap().contains("line 0\n"));
+    }
+
+    #[test]
     fn corrupted_snapshot_never_installs_a_terminal() {
         let terminal = Terminal::new(ghostty_vt::TerminalOptions::default()).unwrap();
         let mut bytes = ghostty_vt::snapshot::encode(&terminal).unwrap().to_vec();
