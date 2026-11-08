@@ -75,6 +75,22 @@ fn form(s: &Workspace, form: &Form) -> El {
                 .wrap(),
         );
     }
+    if let Form::AddSsh(index) = form {
+        body = body.child(
+            text(s.machine_form_note(*index))
+                .font(ui(12.))
+                .color(rgb(muted()))
+                .wrap(),
+        );
+    }
+    if let Form::AddHost = form {
+        body = body.child(
+            text("https:// reaches a Rex server over the network (a bare host name is tried on port 443, then 7297); ssh://user@host[/socket] forwards a server's socket over SSH; unix:// is a socket on this machine.")
+                .font(ui(12.))
+                .color(rgb(muted()))
+                .wrap(),
+        );
+    }
     if let Form::HostShell(_) = form {
         body = body.child(
             text("Used for new sessions, tabs and splits on this host. Running terminals are unchanged.")
@@ -91,7 +107,11 @@ fn form(s: &Workspace, form: &Form) -> El {
                 .wrap(),
         );
     }
-    let primary = "Save";
+    let primary = if matches!(form, Form::AddHost | Form::AddSsh(_)) {
+        "Connect"
+    } else {
+        "Save"
+    };
     body.child(
         row()
             .gap(8.)

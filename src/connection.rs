@@ -1117,7 +1117,7 @@ struct Startup {
 }
 
 async fn run_host(
-    endpoint: String,
+    configured: String,
     startup: Startup,
     commands: flume::Receiver<HostCommand>,
     sender: flume::Sender<HostCommand>,
@@ -1133,8 +1133,22 @@ async fn run_host(
     let mut workers = HashMap::<String, PaneWorker>::new();
     let mut retry = 0;
     let mut prefetch = prefetch::Prefetch::default();
+    // An ssh:// host is reached through a forward of its Rex socket; every attempt opens a
+    // fresh one, and its end is a disconnect like any other.
+    let ssh = crate::ssh::Target::parse(&configured)?;
+    let mut tunnel: Option<crate::ssh::Tunnel> = None;
     loop {
         let result: Result<bool> = async {
+            let endpoint = match &ssh {
+                Some(target) => {
+                    shared.status("Connecting over SSH…", false);
+                    let opened = crate::ssh::Tunnel::open(target).await?;
+                    let local = opened.endpoint().to_owned();
+                    tunnel = Some(opened);
+                    local
+                }
+                None => configured.clone(),
+            };
             let mut control = transport::control(&endpoint, token.as_deref()).await?;
             let identity = control.welcome().client.as_ref().context("Rex client identity")?;
             token = Some(identity.reconnect_token.clone());
@@ -1239,6 +1253,7 @@ async fn run_host(
                         declare_themes(&mut control, shared, &mut state, &workers, theme.as_ref()).await;
                         query_activity(&mut control, shared, &mut state, &workers).await;
                     }
+                    error = crate::ssh::closed(&mut tunnel) => return Err(error),
                     command = commands.recv_async() => {
                         let Ok(command) = command else { control.close().await?; return Ok(true); };
                         if matches!(command, HostCommand::Shutdown) { control.close().await?; return Ok(true); }
@@ -1265,6 +1280,7 @@ async fn run_host(
                 }
             }
         }.await;
+        tunnel = None;
         if matches!(result, Ok(true)) {
             return Ok(());
         }

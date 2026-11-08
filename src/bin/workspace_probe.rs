@@ -79,6 +79,11 @@ async fn run() -> Result<()> {
     let endpoint = std::env::args()
         .nth(1)
         .unwrap_or_else(transport::local_endpoint);
+    // An ssh:// endpoint is reached through a forward of the server's socket.
+    let _tunnel = rex_linux::ssh::Tunnel::for_endpoint(&endpoint).await?;
+    let endpoint = _tunnel
+        .as_ref()
+        .map_or(endpoint, |t| t.endpoint().to_owned());
     let mut observer = transport::control(&endpoint, None).await?;
     let revision = observer.welcome().api_revision;
     if let Ok(expected) = std::env::var("REX_EXPECT_REVISION") {

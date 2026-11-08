@@ -75,10 +75,11 @@ SCREENS = [
         "script": [OPEN_SIDEBAR, {"t": 1.0, "type": "tap", "key": "commands"}, {"t": 1.8, "tap_text": "Add host…"}],
         "at": 3.0,
         "annotations": [
-            ({"text": "Host name"}, "A short name for the server"),
-            ({"text": "Endpoint"}, "unix:///path/to/rex.sock or https://host.example.ts.net"),
+            ({"key": "popup-search"}, "Search the machines on your tailnet"),
+            ({"text": "Enter an endpoint…"}, "Or type an endpoint by hand"),
         ],
     },
+
 ]
 
 

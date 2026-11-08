@@ -125,6 +125,7 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
         PanelKind::Hosts(_) => "hosts",
         PanelKind::Themes => "themes",
         PanelKind::Chromes => "chromes",
+        PanelKind::Discover => "discover",
         PanelKind::Session => "session-menu",
         PanelKind::Host(_) => "host-menu",
         PanelKind::Window(_) => "tab-menu",
@@ -262,10 +263,10 @@ pub fn list_popup(s: &Workspace, viewport: [f32; 2]) -> El {
         }
     }
     if list_rows == 0 {
-        let empty = if matches!(panel.kind, PanelKind::Themes) {
-            "No matching themes."
-        } else {
-            "No matches. Try another name or create a session."
+        let empty = match panel.kind {
+            PanelKind::Themes => "No matching themes.".to_owned(),
+            PanelKind::Discover => s.discovery_empty_message(),
+            _ => "No matches. Try another name or create a session.".to_owned(),
         };
         list = list.child(
             row()

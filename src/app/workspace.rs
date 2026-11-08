@@ -103,6 +103,8 @@ pub struct Workspace {
     /// Notifications headless tests would have sent.
     pub outbox: Vec<Note>,
     pub integrations: super::integrations::Integrations,
+    /// The tailnet's machines, for Add host.
+    pub discovery: super::discover::Discovery,
     /// The terminal theme this client declares, from Settings; none is Follow server.
     pub term_theme: Option<TerminalTheme>,
     /// Where Ghostty themes are read from.
@@ -139,7 +141,7 @@ impl Workspace {
             .any(|h| h.endpoint == options.endpoint)
         {
             settings.hosts.push(Host {
-                label: options.endpoint.trim_start_matches("https://").into(),
+                label: rex_linux::settings::endpoint_label(&options.endpoint),
                 endpoint: options.endpoint.clone(),
                 collapsed: false,
                 shell: None,
@@ -215,6 +217,7 @@ impl Workspace {
             notifier: None,
             outbox: Vec::new(),
             integrations: Default::default(),
+            discovery: Default::default(),
             term_theme,
             theme_dirs,
             themes: Vec::new(),
@@ -228,7 +231,7 @@ impl Workspace {
         this
     }
 
-    fn connect_host(&mut self, index: usize, explicit: bool) {
+    pub(super) fn connect_host(&mut self, index: usize, explicit: bool) {
         let state = self.spawn_host(index, explicit);
         self.hosts.push(state);
     }
@@ -945,10 +948,13 @@ impl Workspace {
             }
             Intent::Pane(target, action) => self.pane_action(target, action, tx),
             Intent::Session(target, action) => self.session_action(target, action, tx),
-            Intent::AddHost => self.open_panel(
+            Intent::AddHost => self.open_add_host(),
+            Intent::AddMachine(index) => self.add_machine(index, tx),
+            Intent::MachineForm(index) => self.machine_form(index),
+            Intent::AddHostManually => self.open_panel(
                 PanelKind::Form(Form::AddHost),
-                "Add host",
-                &[("Host name", "my-host", ""), ("Endpoint", "https://host.example.ts.net or unix:///path", "")],
+                "Add host by endpoint",
+                &[("Host name", "my-host", ""), ("Endpoint", "https://host.example.ts.net, ssh://user@host[/socket] or unix:///path", "")],
             ),
             Intent::NewWindow => {
                 let layout = self.new_terminal(self.active);
@@ -997,7 +1003,7 @@ impl Workspace {
                     &format!("Edit {}", h.label),
                     &[
                         ("Host name", "my-host", &h.label),
-                        ("Endpoint", "https://host.example.ts.net or unix:///path", &h.endpoint),
+                        ("Endpoint", "https://host.example.ts.net, ssh://user@host or unix:///path", &h.endpoint),
                         ("Default shell", "Server default — e.g. zsh or /bin/zsh", h.shell.as_deref().unwrap_or("")),
                     ],
                 );
@@ -1350,7 +1356,8 @@ impl Workspace {
         }
         let previous = self.panel.take();
         let target = previous.as_ref().and_then(|p| p.target.clone());
-        // Forms and confirmations opened from Settings go back to it.
+        // Forms and confirmations opened from Settings go back to it; the Add host list
+        // does too, and its own forms go back to the list.
         let keep_back = matches!(kind, PanelKind::Hosts(_))
             || (matches!(
                 kind,
@@ -1359,9 +1366,14 @@ impl Workspace {
                     | PanelKind::AgentChange { .. }
                     | PanelKind::Themes
                     | PanelKind::Chromes
+                    | PanelKind::Discover
             ) && previous
                 .as_ref()
-                .is_some_and(|p| matches!(p.kind, PanelKind::Settings)));
+                .is_some_and(|p| matches!(p.kind, PanelKind::Settings)))
+            || (matches!(kind, PanelKind::Form(Form::AddSsh(_) | Form::AddHost))
+                && previous
+                    .as_ref()
+                    .is_some_and(|p| matches!(p.kind, PanelKind::Discover)));
         let mut panel = Panel::new(kind, title, fields);
         panel.target = target;
         panel.back = if keep_back {
@@ -1375,13 +1387,17 @@ impl Workspace {
         }
     }
 
-    /// The Settings panel a form or confirmation was opened from, to return to after it.
-    fn settings_back(&mut self) -> Option<Panel> {
-        self.panel
-            .as_mut()
-            .and_then(|p| p.back.take())
-            .filter(|b| matches!(b.kind, PanelKind::Settings))
-            .map(|b| *b)
+    /// The Settings panel a form or confirmation was opened from, to return to after it,
+    /// also through the Add host list.
+    pub(super) fn settings_back(&mut self) -> Option<Panel> {
+        let mut back = self.panel.as_mut().and_then(|p| p.back.take());
+        while let Some(panel) = back {
+            if matches!(panel.kind, PanelKind::Settings) {
+                return Some(*panel);
+            }
+            back = panel.back;
+        }
+        None
     }
 
     /// Show a Settings section; Integrations reads the agents' state when first shown.
@@ -1502,6 +1518,8 @@ impl Workspace {
                         .then(|| "Enter one shell name or path, without arguments.".to_owned())
                 } else if values.first().is_none_or(|s| s.is_empty()) {
                     Some("Enter a name".to_owned())
+                } else if let Form::AddSsh(index) = form {
+                    self.machine_form_error(index, &values)
                 } else if let Form::AddHost | Form::EditHost(_) = form {
                     let editing = match form {
                         Form::EditHost(i) => Some(i),
@@ -1569,17 +1587,27 @@ impl Workspace {
                         ),
                         None => self.request("session.set_block_label", json!({"block_id":id,"label":values[0]})),
                     },
-                    Form::AddHost => {
-                        self.settings.hosts.push(Host {
+                    Form::AddHost => self.add_host(
+                        Host {
                             label: values[0].clone(),
                             endpoint: values[1].clone(),
                             collapsed: false,
                             shell: None,
-                        });
-                        self.active = self.settings.hosts.len() - 1;
-                        self.connect_host(self.active, false);
-                        self.update_visibility();
-                        self.save();
+                        },
+                        tx,
+                    ),
+                    Form::AddSsh(index) => {
+                        let socket = values.get(2).map(String::as_str).unwrap_or_default();
+                        let endpoint = self.discovery.candidates[index].machine.ssh_endpoint(&values[1], socket);
+                        self.add_host(
+                            Host {
+                                label: values[0].clone(),
+                                endpoint,
+                                collapsed: false,
+                                shell: None,
+                            },
+                            tx,
+                        );
                     }
                     Form::EditHost(host) => {
                         let shell = values.get(2).filter(|v| !v.is_empty()).cloned();

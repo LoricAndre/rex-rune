@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add host lists the machines on your tailnet (`tailscale status --json`), searchable by name, by Tailscale IP when the tailnet has no MagicDNS. Each online machine is checked for a Rex server at the addresses the official clients try for a bare host (HTTPS 443, HTTPS 7297, HTTP 7297); one that answers is added and connected with one press. Any other machine takes an SSH user name and an optional Rex socket path and connects as `ssh://user@host[/socket]`; the form says whether the check found nothing listening or couldn't tell. A machine already added stays listed, so another login to it can be added. Entering an endpoint by hand remains.
+- `ssh://[user@]host[:port][/socket]` endpoints: the Rex server's Unix socket on that machine is forwarded over `ssh -L`, so a machine with Tailscale SSH, or any SSH login you already have, works with nothing configured on its Rex. Without a `/socket`, the machine is asked where its server listens (`rex server status`, the user's runtime directory, `/run/rex`, `/var/run/rex`). Each instance keeps its forwards in a directory of its own, so two clients or a probe reaching the same machine don't disturb each other. The forward's end is a disconnect like any other, and `ssh`'s reason is shown next to Retry.
+
 ## 0.3.2 — 2026-11-06
 
 - First prebuilt Linux releases for x86-64 and ARM64: user-installable tarballs and Debian/Ubuntu packages, with SHA-256 checksums.

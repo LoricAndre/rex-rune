@@ -2676,3 +2676,460 @@ fn files_dropped_on_a_pane_upload_there_and_focus_it() {
     );
     std::fs::remove_file(&rt.state.settings_path).ok();
 }
+
+/// A tailnet of four machines: a Rex server with built-in Tailscale, a Linux box with
+/// Tailscale SSH, an Android phone, and one that is offline, plus an iPhone that is never
+/// listed.
+fn tailnet() -> Vec<rex_linux::tailnet::Machine> {
+    let machine = |name: &str, os: &str, online: bool, ssh: bool| rex_linux::tailnet::Machine {
+        name: name.into(),
+        address: format!("{name}.tail1234.ts.net"),
+        host_name: None,
+        os: os.into(),
+        online,
+        ssh,
+        this_machine: false,
+    };
+    vec![
+        rex_linux::tailnet::Machine {
+            this_machine: true,
+            ..machine("here", "linux", true, false)
+        },
+        machine("studio-rex", "macOS", true, false),
+        machine("box", "linux", true, true),
+        machine("away", "linux", false, false),
+        machine("phone", "iOS", true, false),
+        machine("pixel", "android", true, true),
+    ]
+}
+
+fn rex_at(address: &str) -> rex_linux::tailnet::Probe {
+    rex_linux::tailnet::Probe::Rex(format!("https://{address}"))
+}
+
+fn open_add_host(rt: &mut Runtime<Workspace>) {
+    let ran = rt.state.discovery.ran;
+    click(rt, "add-host");
+    assert!(
+        rt.state.panel.is_some(),
+        "the sidebar's Add host opens the list"
+    );
+    let generation = rt.state.discovery.generation;
+    assert_eq!(
+        rt.state.discovery.ran,
+        ran + 1,
+        "the list looks at the tailnet once"
+    );
+    // As the scan thread would: through the handle, so the list redraws.
+    rt.update(|s, _| {
+        s.apply_scan(generation, Ok(tailnet()));
+        s.apply_probe(
+            generation,
+            "studio-rex.tail1234.ts.net",
+            rex_at("studio-rex.tail1234.ts.net"),
+        );
+        s.apply_probe(
+            generation,
+            "box.tail1234.ts.net",
+            rex_linux::tailnet::Probe::Nothing,
+        );
+        s.apply_probe(
+            generation,
+            "pixel.tail1234.ts.net",
+            rex_linux::tailnet::Probe::Nothing,
+        );
+    });
+    for _ in 0..4 {
+        rt.frame(1. / 60.);
+    }
+}
+
+#[test]
+fn add_host_lists_the_tailnet_by_kind_and_hides_iphones_and_this_machine() {
+    let mut ws = workspace();
+    ws.sidebar.toggle();
+    // Tall enough for the sidebar's Add host button to be on screen.
+    let mut rt = runtime_at(ws, (1024., 900.));
+    click(&mut rt, "add-host");
+    let panel = rt.state.panel.as_ref().expect("the Add host list");
+    assert!(matches!(panel.kind, PanelKind::Discover));
+    assert!(panel.is_list());
+    assert_eq!(
+        rt.state.discovery_empty_message(),
+        "Looking at your tailnet…"
+    );
+    let generation = rt.state.discovery.generation;
+    rt.state.apply_scan(generation, Ok(tailnet()));
+    let before: Vec<String> = rt
+        .state
+        .entries()
+        .iter()
+        .map(|e| e.detail.clone())
+        .collect();
+    assert!(
+        before.iter().any(|d| d.starts_with("Checking for Rex…")),
+        "online machines are checked: {before:?}"
+    );
+    rt.state.apply_probe(
+        generation,
+        "studio-rex.tail1234.ts.net",
+        rex_at("studio-rex.tail1234.ts.net"),
+    );
+    rt.state.apply_probe(
+        generation,
+        "box.tail1234.ts.net",
+        rex_linux::tailnet::Probe::Nothing,
+    );
+    rt.state.apply_probe(
+        generation,
+        "pixel.tail1234.ts.net",
+        rex_linux::tailnet::Probe::Unknown("https 443: timed out".into()),
+    );
+    rt.state.apply_probe(
+        generation - 1,
+        "away.tail1234.ts.net",
+        rex_at("away.tail1234.ts.net"),
+    );
+    let entries = rt.state.entries();
+    let rows: Vec<(String, String, String)> = entries
+        .iter()
+        .map(|e| (e.group.clone(), e.label.clone(), e.detail.clone()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (
+                "Rex servers".into(),
+                "studio-rex".into(),
+                "Rex over Tailscale · macOS".into()
+            ),
+            (
+                "Tailnet".into(),
+                "box".into(),
+                "Tailscale SSH · Linux".into()
+            ),
+            (
+                "Tailnet".into(),
+                "pixel".into(),
+                "Rex check failed · Tailscale SSH · Android".into()
+            ),
+            ("Offline".into(), "away".into(), "Offline · Linux".into()),
+            ("".into(), "Enter an endpoint…".into(), "".into()),
+        ],
+        "an old scan's probe changes nothing; a failed check is said, not taken as absence"
+    );
+    assert!(matches!(entries[0].action, Intent::AddMachine(1)));
+    assert!(matches!(entries[1].action, Intent::MachineForm(2)));
+    assert!(matches!(entries[2].action, Intent::MachineForm(5)));
+    assert!(matches!(entries[3].action, Intent::MachineForm(3)));
+    assert!(entries[4].footer);
+    assert!(matches!(entries[4].action, Intent::AddHostManually));
+    assert!(
+        rt.state
+            .machine_form_note(5)
+            .contains("https 443: timed out"),
+        "the form says what the check found"
+    );
+    assert!(
+        rt.state
+            .machine_form_note(2)
+            .contains("Nothing answered on ports 443 or 7297"),
+        "{}",
+        rt.state.machine_form_note(2)
+    );
+
+    // A Rex server on port 7297 is one too, and says so.
+    rt.state.apply_probe(
+        generation,
+        "box.tail1234.ts.net",
+        rex_linux::tailnet::Probe::Rex("https://box.tail1234.ts.net:7297".into()),
+    );
+    let entries = rt.state.entries();
+    assert_eq!(entries[1].label, "box");
+    assert_eq!(entries[1].group, "Rex servers");
+    assert!(entries[1].detail.starts_with("Rex on port 7297"));
+    assert!(matches!(entries[1].action, Intent::AddMachine(2)));
+
+    rt.state.panel.as_mut().unwrap().inputs[0] = rune::TextEdit::new("bo");
+    rt.state.query_changed();
+    let names: Vec<String> = rt.state.entries().iter().map(|e| e.label.clone()).collect();
+    assert_eq!(names, ["box", "Enter an endpoint…"]);
+
+    rt.state.panel.as_mut().unwrap().inputs[0] = rune::TextEdit::new("nothing");
+    rt.state.query_changed();
+    assert_eq!(
+        rt.state.discovery_empty_message(),
+        "No machine by that name on your tailnet."
+    );
+    rt.state.apply_scan(
+        generation,
+        Err("Tailscale isn't installed on this machine".into()),
+    );
+    assert_eq!(rt.state.entries().len(), 1, "only the footer remains");
+    assert_eq!(
+        rt.state.discovery_empty_message(),
+        "Tailscale isn't installed on this machine"
+    );
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn a_rex_server_on_the_tailnet_is_added_with_one_press() {
+    let mut ws = workspace();
+    ws.sidebar.toggle();
+    // Tall enough for the sidebar's Add host button to be on screen.
+    let mut rt = runtime_at(ws, (1024., 900.));
+    open_add_host(&mut rt);
+    assert_eq!(rt.state.panel.as_ref().unwrap().selected, 0);
+    press(&mut rt, Key::Enter);
+    assert!(rt.state.panel.is_none(), "added and closed");
+    assert_eq!(rt.state.settings.hosts.len(), 2);
+    let host = &rt.state.settings.hosts[1];
+    assert_eq!(host.label, "studio-rex");
+    assert_eq!(host.endpoint, "https://studio-rex.tail1234.ts.net");
+    assert_eq!(rt.state.active, 1, "the new host is the active one");
+    assert_eq!(rt.state.hosts.len(), 2, "and it is connecting");
+    let saved = Settings::load(&rt.state.settings_path).unwrap();
+    assert_eq!(
+        saved.hosts[1].endpoint,
+        "https://studio-rex.tail1234.ts.net"
+    );
+
+    // Listed again, it is marked as added; pressing it offers another login over SSH
+    // rather than adding the same endpoint twice.
+    open_add_host(&mut rt);
+    let entries = rt.state.entries();
+    assert_eq!(entries[0].label, "studio-rex");
+    assert!(entries[0].current && entries[0].enabled);
+    assert!(
+        entries[0]
+            .detail
+            .starts_with("Added as studio-rex · Rex over Tailscale")
+    );
+    assert!(matches!(entries[0].action, Intent::MachineForm(1)));
+    press(&mut rt, Key::Enter);
+    let panel = rt.state.panel.as_ref().expect("the SSH form");
+    assert!(matches!(panel.kind, PanelKind::Form(Form::AddSsh(1))));
+    assert!(
+        rt.state
+            .machine_form_note(1)
+            .contains("Rex also answers at https://studio-rex.tail1234.ts.net"),
+        "{}",
+        rt.state.machine_form_note(1)
+    );
+    rt.state.panel.as_mut().unwrap().inputs[1] = rune::TextEdit::new("root");
+    click(&mut rt, "save-form");
+    assert_eq!(
+        rt.state.settings.hosts.len(),
+        3,
+        "a second login to the machine"
+    );
+    assert_eq!(
+        rt.state.settings.hosts[2].endpoint,
+        "ssh://root@studio-rex.tail1234.ts.net"
+    );
+    open_add_host(&mut rt);
+    let entries = rt.state.entries();
+    assert!(
+        entries[0]
+            .detail
+            .starts_with("Added as studio-rex, studio-rex · "),
+        "{}",
+        entries[0].detail
+    );
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn another_machine_takes_a_user_and_connects_over_ssh() {
+    let mut ws = workspace();
+    ws.sidebar.toggle();
+    // Tall enough for the sidebar's Add host button to be on screen.
+    let mut rt = runtime_at(ws, (1024., 900.));
+    open_add_host(&mut rt);
+    rt.state.panel.as_mut().unwrap().inputs[0] = rune::TextEdit::new("box");
+    rt.state.query_changed();
+    press(&mut rt, Key::Enter);
+    let panel = rt.state.panel.as_ref().expect("the SSH form");
+    assert!(matches!(panel.kind, PanelKind::Form(Form::AddSsh(2))));
+    assert_eq!(panel.title, "Add box over SSH");
+    assert_eq!(panel.inputs[0].text, "box");
+    assert_eq!(
+        panel.inputs[1].text,
+        super::discover::local_user(),
+        "the local user name is offered"
+    );
+    assert_eq!(
+        panel.inputs[2].text, "",
+        "the socket is looked up unless named"
+    );
+    assert!(
+        rt.state
+            .machine_form_note(2)
+            .contains("Tailscale SSH is on"),
+        "{}",
+        rt.state.machine_form_note(2)
+    );
+    assert!(has(&rt, "save-form"));
+
+    rt.state.panel.as_mut().unwrap().inputs[1] = rune::TextEdit::new("me@box");
+    click(&mut rt, "save-form");
+    let panel = rt.state.panel.as_ref().expect("still the form");
+    assert_eq!(
+        panel.error.as_deref(),
+        Some("Enter one user name, without the host")
+    );
+    rt.state.panel.as_mut().unwrap().inputs[1] = rune::TextEdit::new("");
+    click(&mut rt, "save-form");
+    assert_eq!(
+        rt.state.panel.as_ref().unwrap().error.as_deref(),
+        Some("Enter the user to log in as")
+    );
+
+    rt.state.panel.as_mut().unwrap().inputs[1] = rune::TextEdit::new("admin");
+    rt.state.panel.as_mut().unwrap().inputs[2] = rune::TextEdit::new("run/rex/server.sock");
+    click(&mut rt, "save-form");
+    assert_eq!(
+        rt.state.panel.as_ref().unwrap().error.as_deref(),
+        Some("Enter an absolute socket path, such as /run/rex/server.sock")
+    );
+
+    rt.state.panel.as_mut().unwrap().inputs[2] = rune::TextEdit::new("");
+    click(&mut rt, "save-form");
+    assert!(rt.state.panel.is_none());
+    let host = &rt.state.settings.hosts[1];
+    assert_eq!(host.label, "box");
+    assert_eq!(host.endpoint, "ssh://admin@box.tail1234.ts.net");
+    assert_eq!(rt.state.active, 1);
+
+    // The same machine, as another user at a named socket, is another host.
+    open_add_host(&mut rt);
+    rt.state.panel.as_mut().unwrap().inputs[0] = rune::TextEdit::new("box");
+    rt.state.query_changed();
+    let entries = rt.state.entries();
+    assert!(entries[0].current, "marked as added");
+    assert!(entries[0].detail.starts_with("Added as box · "));
+    press(&mut rt, Key::Enter);
+    rt.state.panel.as_mut().unwrap().inputs[0] = rune::TextEdit::new("box (shared)");
+    rt.state.panel.as_mut().unwrap().inputs[1] = rune::TextEdit::new("ops");
+    rt.state.panel.as_mut().unwrap().inputs[2] = rune::TextEdit::new("/run/rex/server.sock");
+    click(&mut rt, "save-form");
+    assert!(
+        rt.state.panel.is_none(),
+        "{:?}",
+        rt.state.panel.as_ref().unwrap().error
+    );
+    assert_eq!(
+        rt.state.settings.hosts[2].endpoint,
+        "ssh://ops@box.tail1234.ts.net/run/rex/server.sock"
+    );
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn escape_walks_back_from_a_machine_form_to_the_list_and_settings() {
+    let mut ws = workspace();
+    let mut tx = rune::Tx::default();
+    ws.perform(Intent::Settings, &mut tx);
+    ws.perform(Intent::AddHost, &mut tx);
+    let generation = ws.discovery.generation;
+    ws.apply_scan(generation, Ok(tailnet()));
+    ws.apply_probe(
+        generation,
+        "studio-rex.tail1234.ts.net",
+        rex_at("studio-rex.tail1234.ts.net"),
+    );
+    ws.perform(Intent::MachineForm(3), &mut tx);
+    let mut rt = runtime(ws);
+    assert!(matches!(
+        rt.state.panel.as_ref().unwrap().kind,
+        PanelKind::Form(Form::AddSsh(3))
+    ));
+    press(&mut rt, Key::Escape);
+    assert!(
+        matches!(rt.state.panel.as_ref().unwrap().kind, PanelKind::Discover),
+        "Escape on the form returns to the list"
+    );
+    press(&mut rt, Key::Escape);
+    assert!(
+        matches!(rt.state.panel.as_ref().unwrap().kind, PanelKind::Settings),
+        "and from the list to Settings"
+    );
+
+    // Saving from the form returns to Settings through the list.
+    rt.update(|s, tx| {
+        s.perform(Intent::AddHost, tx);
+        let generation = s.discovery.generation;
+        s.apply_scan(generation, Ok(tailnet()));
+        s.perform(Intent::MachineForm(3), tx);
+        s.panel.as_mut().unwrap().inputs[1] = rune::TextEdit::new("me");
+    });
+    for _ in 0..4 {
+        rt.frame(1. / 60.);
+    }
+    click(&mut rt, "save-form");
+    let panel = rt.state.panel.as_ref().expect("back in Settings");
+    assert!(
+        matches!(panel.kind, PanelKind::Settings),
+        "{:?} {:?}",
+        panel.kind,
+        panel.error
+    );
+    assert_eq!(
+        rt.state.settings.hosts[1].endpoint,
+        "ssh://me@away.tail1234.ts.net"
+    );
+
+    // Adding a Rex server from the list goes back to Settings too.
+    rt.update(|s, tx| {
+        s.perform(Intent::AddHost, tx);
+        let generation = s.discovery.generation;
+        s.apply_scan(generation, Ok(tailnet()));
+        s.apply_probe(
+            generation,
+            "studio-rex.tail1234.ts.net",
+            rex_at("studio-rex.tail1234.ts.net"),
+        );
+        s.perform(Intent::AddMachine(1), tx);
+    });
+    assert!(matches!(
+        rt.state.panel.as_ref().unwrap().kind,
+        PanelKind::Settings
+    ));
+    assert_eq!(rt.state.settings.hosts.len(), 3);
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn an_endpoint_by_hand_takes_ssh_and_rejects_duplicates() {
+    let mut ws = workspace();
+    ws.sidebar.toggle();
+    // Tall enough for the sidebar's Add host button to be on screen.
+    let mut rt = runtime_at(ws, (1024., 900.));
+    open_add_host(&mut rt);
+    let footer = rt.state.entries().len() - 1;
+    click(&mut rt, &format!("entry:{footer}"));
+    let panel = rt.state.panel.as_ref().expect("the endpoint form");
+    assert!(matches!(panel.kind, PanelKind::Form(Form::AddHost)));
+    assert!(panel.back.is_some(), "it goes back to the list");
+    rt.state.panel.as_mut().unwrap().inputs[0] = rune::TextEdit::new("lab");
+    rt.state.panel.as_mut().unwrap().inputs[1] = rune::TextEdit::new("ssh://lab/");
+    click(&mut rt, "save-form");
+    assert_eq!(
+        rt.state.panel.as_ref().unwrap().error.as_deref(),
+        Some("Use an absolute socket path after the host, such as /run/rex/server.sock")
+    );
+    rt.state.panel.as_mut().unwrap().inputs[1] =
+        rune::TextEdit::new("unix:///nonexistent/rex-test.sock");
+    click(&mut rt, "save-form");
+    assert_eq!(
+        rt.state.panel.as_ref().unwrap().error.as_deref(),
+        Some("This endpoint is already in the workspace")
+    );
+    rt.state.panel.as_mut().unwrap().inputs[1] = rune::TextEdit::new("ssh://ops@lab:2222");
+    click(&mut rt, "save-form");
+    assert!(rt.state.panel.is_none());
+    assert_eq!(rt.state.settings.hosts[1].endpoint, "ssh://ops@lab:2222");
+    assert_eq!(rt.state.settings.hosts[1].label, "lab");
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
