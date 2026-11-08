@@ -28,7 +28,7 @@ Rex Linux draws calm, dark chrome around terminals that the server owns. Chrome 
 | `ON_ACCENT` | Text on an accent fill (primary buttons) |
 | `TERMINAL_SELECTION` | Local terminal text-selection overlay, unless the declared theme sets `selection-background` |
 
-Progress bars under tab pills and pane names use `ACCENT` (working), `WARNING` (paused) and `DANGER` (failed) over an 8% white track; an unknown percentage is the whole track in the report's colour at 35%. Terminal cursors, underline colours and overlines come from the terminal, never from these tokens.
+Progress bars under tab pills and pane names use `ACCENT` (working), `WARNING` (paused) and `DANGER` (failed) over an 8% white track; an unknown percentage is the whole track in the report's colour at 35%. Terminal search matches are an overlay in `ACCENT` at 25%, the selected match at 55%, drawn like the selection: cell colours are never changed. Terminal cursors, underline colours and overlines come from the terminal, never from these tokens.
 
 | Token | Midnight | Rosé Pine | Rosé Pine Moon | Gruvbox Dark |
 | --- | --- | --- | --- | --- |

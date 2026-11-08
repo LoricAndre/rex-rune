@@ -194,10 +194,17 @@ impl Term {
     }
 
     pub fn refresh(&mut self) {
-        let (frame, generation) = {
-            let model = self.connection.model.lock().expect("terminal model");
-            (model.frame.clone(), model.restore_generation)
+        let (frame, generation, notice) = {
+            let mut model = self.connection.model.lock().expect("terminal model");
+            (
+                model.frame.clone(),
+                model.restore_generation,
+                model.notice.take(),
+            )
         };
+        if notice.is_some() {
+            self.notice = notice;
+        }
         if generation != self.restore_generation {
             self.selection = None;
             self.selection_anchor = None;

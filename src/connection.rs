@@ -111,6 +111,8 @@ pub struct Model {
     pub revision: u64,
     pub restore_generation: u64,
     pub input_events: u64,
+    /// Words for the user from the pane's worker (a failed search), taken once shown.
+    pub notice: Option<String>,
 }
 
 #[derive(Clone)]
@@ -1735,9 +1737,10 @@ async fn run_data(
                         Ok(DataCommand::Visible(value)) => { if value && !visible { dirty = true; } else if !value && let Some(terminal) = &stream.terminal { selection.stop(terminal)?; } visible = value; }
                         Ok(DataCommand::Scroll(delta)) => if let Some(terminal) = &mut stream.terminal { terminal.scroll_viewport(ghostty_vt::terminal::ScrollViewport::Delta(delta)); selection.after_scroll(terminal)?; dirty = true; },
                         Ok(DataCommand::Bottom) => if let Some(terminal) = &mut stream.terminal { terminal.scroll_viewport(ghostty_vt::terminal::ScrollViewport::Bottom); dirty = true; },
-                        Ok(DataCommand::Search(needle)) => { search.set_needle(stream.terminal.as_ref(), needle)?; dirty = true; },
+                        // A search that fails is dropped with a notice; the terminal's stream is not its to end.
+                        Ok(DataCommand::Search(needle)) => { if let Err(error) = search.set_needle(stream.terminal.as_ref(), needle) { search = Default::default(); shared.update(|m| m.notice = Some(format!("Search failed: {error:#}"))); } dirty = true; },
                         // Ghostty scrolls the selected match into view.
-                        Ok(DataCommand::SearchStep(older)) => if let Some(terminal) = &stream.terminal { search.step(terminal, older)?; selection.after_scroll(terminal)?; dirty = true; },
+                        Ok(DataCommand::SearchStep(older)) => if let Some(terminal) = &stream.terminal { if let Err(error) = search.step(terminal, older) { search = Default::default(); shared.update(|m| m.notice = Some(format!("Search failed: {error:#}"))); } selection.after_scroll(terminal)?; dirty = true; },
                         Ok(DataCommand::Reconnect) => { shared.status("Reconnecting terminal…", false); return Ok(false); }
                         Ok(DataCommand::Stop) | Err(_) => return Ok(true),
                     },
@@ -1746,10 +1749,16 @@ async fn run_data(
                         if stream.render_held(Instant::now())? { continue; }
                         if let Some(terminal) = &mut stream.terminal {
                             selection.tick(terminal)?;
-                            let search_pending = search.update(terminal)?;
+                            let search_pending = match search.update(terminal) {
+                                Ok(pending) => pending,
+                                Err(error) => { search = Default::default(); shared.update(|m| m.notice = Some(format!("Search failed: {error:#}"))); false }
+                            };
                             let mut frame = renderer.frame(terminal)?;
                             frame.selection_revision = selection.revision;
-                            frame.search = search.results(terminal)?;
+                            frame.search = match search.results(terminal) {
+                                Ok(results) => results,
+                                Err(error) => { search = Default::default(); shared.update(|m| m.notice = Some(format!("Search failed: {error:#}"))); None }
+                            };
                             let frame = Arc::new(frame);
                             let mut transitioned = false;
                             shared.update(|m| {
