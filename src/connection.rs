@@ -243,10 +243,16 @@ impl HostModel {
                 }
             }
             BlockEvent::Process { name, pids } => {
+                // A progress report belongs to the program in the foreground; one that ends
+                // without clearing its report (a crash, a kill) must not leave it on the tab.
+                let was = self.programs.get(&block).cloned();
                 match name {
                     Some(name) => self.programs.insert(block.clone(), name),
                     None => self.programs.remove(&block),
                 };
+                if self.programs.get(&block) != was.as_ref() {
+                    self.progress.remove(&block);
+                }
                 if pids.is_empty() {
                     self.foreground.remove(&block);
                 } else {

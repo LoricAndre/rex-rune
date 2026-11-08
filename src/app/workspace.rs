@@ -1106,7 +1106,6 @@ impl Workspace {
             host: self.active,
             session: model.selected.clone()?,
             block: block.into(),
-            window: model.window()?.window_id.clone()?,
             label: self.block_label(block),
             name: self.pane_name(block),
             tab: model

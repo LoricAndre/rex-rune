@@ -1,7 +1,7 @@
 //! The 52pt bar on the window ground: sidebar toggle, identity chip, tab track, drag space,
 //! Commands, New tab and Settings, a divider, and Close.
 use super::{
-    activity::{program_icon, tab_activity, tab_name, tab_word},
+    activity::{program_icon, progress_bar, tab_activity, tab_name, tab_progress, tab_word},
     panel::Intent,
     theme::*,
     widgets::{chrome_button, glyph},
@@ -168,6 +168,11 @@ fn tab_track(s: &Workspace) -> El {
                     mark = mark.help(msg);
                 }
                 tab_el = tab_el.child(mark);
+            }
+            if s.settings.notifications.show_in_tabs
+                && let Some(progress) = tab_progress(&activity)
+            {
+                tab_el = tab_el.child(progress_bar(format!("tab-progress:{id}"), progress, 14.));
             }
             names = names.child(tab_el);
         }

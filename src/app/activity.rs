@@ -13,7 +13,7 @@ use rex_linux::connection::{
     },
 };
 use rexrs::api::session;
-use rune::Tx;
+use rune::{El, Tx, el, row};
 use std::{borrow::Cow, collections::HashMap};
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -155,14 +155,15 @@ pub fn program_icon(program: Option<&str>) -> &'static rune::Icon {
 }
 
 /// The word a pill shows after its label, with its colour: trouble always, then a bell that
-/// rang while the tab was out of sight, then a program's own progress report, and Done until
-/// the tab is seen. Idle and Working records show nothing.
+/// rang while the tab was out of sight, then a paused or failed progress report, and Done
+/// until the tab is seen. Idle and Working records show nothing: a program's progress while
+/// it works is a bar ([`tab_progress`]), not a word.
 pub fn tab_word(
     activity: &TabActivity,
     unseen_done: bool,
     unseen_bell: bool,
 ) -> Option<(Cow<'static, str>, u32)> {
-    use TerminalProgress::{Error, Indeterminate, Paused, Set};
+    use TerminalProgress::{Error, Paused};
     match activity.state {
         ProgramState::Blocked => Some((blocked_word(activity.kind).into(), warning())),
         ProgramState::Error => Some(("Error".into(), danger())),
@@ -171,11 +172,45 @@ pub fn tab_word(
             Some(Error(_)) => Some(("Error".into(), danger())),
             Some(Paused(Some(n))) => Some((format!("Paused {n}%").into(), warning())),
             Some(Paused(None)) => Some(("Paused".into(), warning())),
-            Some(Set(Some(n))) => Some((format!("{n}%").into(), accent())),
-            Some(Set(None) | Indeterminate) => Some(("Working".into(), accent())),
-            None if unseen_done => Some(("Done".into(), accent())),
-            None => None,
+            _ if unseen_done => Some(("Done".into(), accent())),
+            _ => None,
         },
+    }
+}
+
+/// The bar a pill draws under its label for a program's progress report: how far along, when
+/// the program said, and its colour (`ACCENT` while it works, `WARNING` paused, `DANGER`
+/// failed). None without a report, or while OSC 7501 trouble has the pill's attention.
+pub fn tab_progress(activity: &TabActivity) -> Option<(Option<u8>, u32)> {
+    use TerminalProgress::{Error, Indeterminate, Paused, Set};
+    match activity.state {
+        ProgramState::Blocked | ProgramState::Error => None,
+        _ => match activity.progress? {
+            Set(n) => Some((n, accent())),
+            Indeterminate => Some((None, accent())),
+            Paused(n) => Some((n, warning())),
+            Error(n) => Some((n, danger())),
+        },
+    }
+}
+
+/// A 2 pt progress bar pinned along the bottom of a pill, inset to its text. A known
+/// percentage fills that much of a faint track; an unknown one is the whole track in the
+/// report's colour, dimmed. It never animates.
+pub fn progress_bar(key: String, (percent, tone): (Option<u8>, u32), inset: f32) -> El {
+    let bar = row()
+        .key(key)
+        .pin(Some(inset), None, Some(inset), Some(3.))
+        .h(2.)
+        .radius(1.);
+    match percent {
+        Some(percent) => {
+            let fraction = (f32::from(percent.min(100)) / 100.).max(0.02);
+            bar.fill(white(0.08))
+                .child(el().grow(fraction).h_full().radius(1.).fill(rgb(tone)))
+                .child(el().grow(1. - fraction))
+        }
+        None => bar.fill(rgb(tone)).opacity(0.35),
     }
 }
 

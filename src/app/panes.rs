@@ -3,7 +3,7 @@
 //! with a single pane draws it edge to edge instead.
 //! Cards spring when the layout changes; the terminal grid inside never animates.
 use super::{
-    activity::{pane_activity, tab_word},
+    activity::{pane_activity, progress_bar, tab_progress, tab_word},
     panel::{Form, Intent, PanelKind},
     term::{self, CursorLook, GridLook, Metrics, MouseGesture, PADDING},
     theme::*,
@@ -120,8 +120,16 @@ fn header(s: &Workspace, block: &str, width: f32, focused: bool, m: &Metrics) ->
         None => h,
     }
     .child(el().grow(1.));
-    match strip(s, block, width, m) {
+    let h = match strip(s, block, width, m) {
         Some(strip) => h.child(strip),
+        None => h,
+    };
+    match tab_progress(&activity).filter(|_| s.settings.notifications.show_in_tabs) {
+        Some(progress) => h.child(progress_bar(
+            format!("pane-progress:{block}"),
+            progress,
+            14.,
+        )),
         None => h,
     }
 }

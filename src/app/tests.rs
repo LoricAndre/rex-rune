@@ -418,7 +418,6 @@ fn tabs_and_splits_start_the_right_hosts_shell() {
         host: 1,
         session: "b".into(),
         block: "block:1".into(),
-        window: "w".into(),
         label: "shell".into(),
         name: "shell".into(),
         tab: "Shell".into(),
@@ -1523,8 +1522,8 @@ fn background_bells_latch_until_their_tab_is_seen() {
 }
 
 #[test]
-fn a_tabs_progress_report_shows_below_trouble_and_above_done() {
-    use super::activity::{tab_activity, tab_word};
+fn a_tabs_progress_report_is_a_bar_while_working_and_a_word_when_paused_or_failed() {
+    use super::activity::{tab_activity, tab_progress, tab_word};
     use rex_linux::connection::activity::{ProgramState::Blocked, TerminalProgress::*};
     let (mut ws, _rx) = tabbed_workspace("single");
     let model = &mut ws.hosts[0].model;
@@ -1532,30 +1531,73 @@ fn a_tabs_progress_report_shows_below_trouble_and_above_done() {
     let word = |model: &rex_linux::connection::HostModel, tab: usize, done: bool| {
         tab_word(&tab_activity(model, &view.windows[tab]), done, false).map(|(w, _)| w.into_owned())
     };
-    for (progress, expected) in [
-        (Set(Some(42)), "42%"),
-        (Set(None), "Working"),
-        (Indeterminate, "Working"),
-        (Paused(Some(7)), "Paused 7%"),
-        (Paused(None), "Paused"),
-        (Error(Some(3)), "Error"),
+    let bar = |model: &rex_linux::connection::HostModel, tab: usize| {
+        tab_progress(&tab_activity(model, &view.windows[tab])).map(|(n, _)| n)
+    };
+    // A working program's report is a bar and no word; Done still shows while it works.
+    for (progress, fraction) in [
+        (Set(Some(42)), Some(42)),
+        (Set(None), None),
+        (Indeterminate, None),
+    ] {
+        model.progress.insert("block:a".into(), progress);
+        assert_eq!(word(model, 0, false), None, "{progress:?}");
+        assert_eq!(word(model, 0, true).as_deref(), Some("Done"));
+        assert_eq!(bar(model, 0), Some(fraction), "{progress:?}");
+    }
+    // Paused and failed reports are trouble, so they carry a word, and keep the bar.
+    for (progress, expected, fraction) in [
+        (Paused(Some(7)), "Paused 7%", Some(7)),
+        (Paused(None), "Paused", None),
+        (Error(Some(3)), "Error", Some(3)),
     ] {
         model.progress.insert("block:a".into(), progress);
         assert_eq!(word(model, 0, true).as_deref(), Some(expected));
+        assert_eq!(bar(model, 0), Some(fraction));
     }
     // Across a split, an error beats a pause beats progress.
     model.progress.insert("block:b".into(), Set(Some(10)));
     model.progress.insert("block:c".into(), Paused(Some(20)));
     assert_eq!(word(model, 1, false).as_deref(), Some("Paused 20%"));
+    assert_eq!(bar(model, 1), Some(Some(20)));
     model.progress.insert("block:b".into(), Error(None));
     assert_eq!(word(model, 1, false).as_deref(), Some("Error"));
-    // OSC 7501 trouble still comes first.
+    // OSC 7501 trouble still comes first, and takes the bar with it.
     model.activity.insert(
         "block:a".into(),
         [("".into(), record(Blocked, true))].into(),
     );
     assert_eq!(word(model, 0, false).as_deref(), Some("Needs input"));
+    assert_eq!(bar(model, 0), None);
     std::fs::remove_file(&ws.settings_path).ok();
+}
+
+#[test]
+fn a_working_progress_report_draws_a_bar_on_its_tab_and_pane() {
+    use rex_linux::connection::activity::TerminalProgress::Set;
+    let (mut ws, _rx) = tabbed_workspace("split");
+    ws.hosts[0]
+        .model
+        .progress
+        .insert("block:c".into(), Set(Some(60)));
+    let mut rt = runtime(ws);
+    assert!(has(&rt, "tab-progress:split"));
+    assert!(has(&rt, "pane-progress:block:c"));
+    assert!(
+        !has(&rt, "pane-progress:block:b"),
+        "only the pane that reported"
+    );
+    assert!(!has(&rt, "tab-word:split"), "working is a bar, not a word");
+    rt.update(|s, _| s.settings.notifications.show_in_tabs = false);
+    for _ in 0..90 {
+        rt.frame(1. / 60.);
+    }
+    assert!(
+        !has(&rt, "tab-progress:split"),
+        "the activity switch hides it"
+    );
+    assert!(!has(&rt, "pane-progress:block:c"));
+    std::fs::remove_file(&rt.state.settings_path).ok();
 }
 
 #[test]
@@ -1577,7 +1619,7 @@ fn a_titled_pane_shows_its_title_but_renames_from_its_label() {
 
 #[test]
 fn each_pane_reports_its_own_activity_and_osc_7501_progress() {
-    use super::activity::{pane_activity, program_icon, tab_activity, tab_word};
+    use super::activity::{pane_activity, program_icon, tab_activity, tab_progress, tab_word};
     use rex_linux::connection::activity::{BlockedKind, ProgramState::*, TerminalProgress::Set};
     let (mut ws, _rx) = tabbed_workspace("split");
     let model = &mut ws.hosts[0].model;
@@ -1593,27 +1635,30 @@ fn each_pane_reports_its_own_activity_and_osc_7501_progress() {
         .activity
         .insert("block:c".into(), [("".into(), working)].into());
     let word = |a| tab_word(&a, false, false).map(|(w, _)| w.into_owned());
+    let bar = |a| tab_progress(&a).map(|(n, _)| n);
     assert_eq!(
         word(pane_activity(model, "block:b")).as_deref(),
         Some("Needs approval")
     );
-    assert_eq!(
-        word(pane_activity(model, "block:c")).as_deref(),
-        Some("40%")
-    );
+    // A working record's percentage is a bar on its pane, not a word.
+    assert_eq!(word(pane_activity(model, "block:c")), None);
+    assert_eq!(bar(pane_activity(model, "block:c")), Some(Some(40)));
     let view = model.view().unwrap().clone();
     assert_eq!(
         word(tab_activity(model, &view.windows[1])).as_deref(),
         Some("Needs approval")
     );
+    assert_eq!(
+        bar(tab_activity(model, &view.windows[1])),
+        None,
+        "trouble has the tab's attention"
+    );
     // An OSC 9;4 report beats the record's own progress.
     model.progress.insert("block:c".into(), Set(Some(10)));
-    assert_eq!(
-        word(pane_activity(model, "block:c")).as_deref(),
-        Some("10%")
-    );
-    // A pane with nothing to report says nothing.
+    assert_eq!(bar(pane_activity(model, "block:c")), Some(Some(10)));
+    // A pane with nothing to report shows nothing.
     assert_eq!(word(pane_activity(model, "block:a")), None);
+    assert_eq!(bar(pane_activity(model, "block:a")), None);
     // Equal Working records: the one with progress decides, whatever its id order.
     model.progress.clear();
     for ids in [("a", "z"), ("z", "a")] {
@@ -1623,10 +1668,7 @@ fn each_pane_reports_its_own_activity_and_osc_7501_progress() {
             "block:c".into(),
             [(ids.0.into(), with), (ids.1.into(), record(Working, true))].into(),
         );
-        assert_eq!(
-            word(pane_activity(model, "block:c")).as_deref(),
-            Some("25%")
-        );
+        assert_eq!(bar(pane_activity(model, "block:c")), Some(Some(25)));
     }
     // Across panes too: block:b Working without progress, block:c Working with 25%.
     model.activity.insert(
@@ -1634,10 +1676,8 @@ fn each_pane_reports_its_own_activity_and_osc_7501_progress() {
         [("".into(), record(Working, true))].into(),
     );
     let view = model.view().unwrap().clone();
-    assert_eq!(
-        word(tab_activity(model, &view.windows[1])).as_deref(),
-        Some("25%")
-    );
+    assert_eq!(bar(tab_activity(model, &view.windows[1])), Some(Some(25)));
+    assert_eq!(word(tab_activity(model, &view.windows[1])), None);
     assert!(std::ptr::eq(
         program_icon(Some("claude-code")),
         &super::theme::CLAUDE

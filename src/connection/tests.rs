@@ -527,6 +527,40 @@ fn progress_reports_set_and_clear_a_blocks_progress() {
     );
     model.forget_block("b");
     assert!(model.progress.is_empty(), "a closed block's progress goes");
+
+    // A report belongs to the program in the foreground: when another takes its place, or
+    // the shell comes back, the report goes with it; the same program keeps it.
+    let process = |name: Option<&str>| activity::BlockEvent::Process {
+        name: name.map(str::to_owned),
+        pids: name.map(|_| vec![7]).unwrap_or_default(),
+    };
+    model.apply_block_event("s", "b".into(), process(Some("cargo")));
+    model.apply_block_event(
+        "s",
+        "b".into(),
+        activity::BlockEvent::Progress(Some(Set(Some(5)))),
+    );
+    model.apply_block_event("s", "b".into(), process(Some("cargo")));
+    assert_eq!(
+        model.progress.get("b").copied(),
+        Some(Set(Some(5))),
+        "same program"
+    );
+    model.apply_block_event("s", "b".into(), process(None));
+    assert!(
+        model.progress.is_empty(),
+        "the program ended without clearing it"
+    );
+    model.apply_block_event(
+        "s",
+        "b".into(),
+        activity::BlockEvent::Progress(Some(Set(Some(5)))),
+    );
+    model.apply_block_event("s", "b".into(), process(Some("vim")));
+    assert!(
+        model.progress.is_empty(),
+        "another program took the foreground"
+    );
 }
 
 #[test]
