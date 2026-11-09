@@ -142,10 +142,11 @@ def run():
             key("Return")
             time.sleep(0.3)
             # A single pane is full-bleed: 52pt bar, grid 12pt in and 8pt down,
-            # 10px cells at the default font. Ghostty includes a dragged-over
-            # cell only past its 60% threshold: x=142 is the LEFT edge of K
-            # (column 13), not past it. End at its right side, before the !
-            # sentinel, so the exact pasted line detects under/over-selection.
+            # 9px cells at the default font. Ghostty includes a dragged-over
+            # cell only past its 60% threshold (5px). The old x=142 is only
+            # 4px into K (column 14), so it correctly excludes K. End at x=150,
+            # 3px into the following ! (column 15), below ITS threshold. The
+            # exact pasted line must include K but not the ! sentinel.
             x("mousemove", "--window", window, "16", "68")
             x("mousedown", "1")
             time.sleep(0.1)
@@ -183,7 +184,7 @@ def run():
             output = api("com.superlogical.terminal.format", session_id=sid,
                          block_id=block, args={"format": "text", "trim": True, "unwrap": True})["content"]
             lines = output.splitlines()
-            assert lines.count("POINTER_COPY_OK!") == 1, "Pointer source missing:\n" + output
+            assert lines.count("POINTER_COPY_OK!") == 1, "Pointer source missing or copied the ! sentinel:\n" + output
             assert lines.count("POINTER_COPY_OK") == 1, "Pointer selection/copy failed:\n" + output
             assert view["label"] == label, "Cancelled rename changed the session"
             # A raw PTY observer enables Kitty event reporting. The terminal key must include
