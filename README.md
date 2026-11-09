@@ -310,7 +310,7 @@ The `scripts/` directory holds integration checks; each script's docstring lists
 
 - `connection-only-smoke.py`: a missing or stale socket must never execute the Rex CLI.
 - `navigation-x11.py`: isolated single-host private-server checks for global tab shortcuts, reverse wrapping and mouse Back/Forward across sessions; also exercises named history Commands. Cross-host navigation and reconnect behavior are covered by headless/protocol tests, not this script.
-- `x11-smoke.py`: real X11 events (forms, clipboard, pointer selection, key isolation).
+- `x11-smoke.py`: real X11 events (forms, clipboard, exact pointer copy and raw Kitty key isolation). Requires `REX_SERVER` explicitly set to a disposable server (no autostart); `REX_BIN` selects a debug or release client.
 - `scroll-selection-x11.py`: private-server Unicode copy checks after scrolling, drag autoscroll, and Shift selection in a fullscreen mouse-tracking TUI without breaking ordinary mouse reports.
 - `kitty-graphics-x11.py`: private-server pixel checks for live RGBA, chunked PNG, image restoration after reattach and deletion.
 - `clipboard-x11.py`: isolated private-server acceptance check for this feature; see its docstring.

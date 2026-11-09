@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Real X11 event/clipboard regression, isolated from the user's desktop.
 
-Requires Xvfb, xdotool, rex and a built native binary. Creates/destroys only its
-own local Rex session. This validates XKB dead-key composition, not Wayland or a
-full input method editor.
+Requires Xvfb, xdotool, rex and a built native binary (REX_BIN selects it).
+REX_SERVER must explicitly name a disposable server; autostart is disabled.
+Creates/destroys only its own Rex session. This validates XKB dead-key
+composition, not Wayland or a full input method editor.
 """
 import json
 import os
@@ -17,9 +18,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def api(method, **payload):
-    server = ["--server", os.environ["REX_SERVER"]] if "REX_SERVER" in os.environ else []
     return json.loads(subprocess.check_output(
-        ["rex", *server, "api", "call", method, json.dumps(payload)], text=True))
+        ["rex", "--autostart=false", "--server", os.environ["REX_SERVER"],
+         "api", "call", method, json.dumps(payload)], text=True, timeout=15))
 
 
 def wait_for(predicate, message, timeout=5):
@@ -32,6 +33,8 @@ def wait_for(predicate, message, timeout=5):
 
 
 def run():
+    if not os.environ.get("REX_SERVER"):
+        raise SystemExit("Set REX_SERVER explicitly to a disposable Rex server")
     label = f"rex-x11-smoke-{os.getpid()}"
     sid = api("session.create", label=label, initial_windows=[{
         "layout": {"block": {"flavor": "com.superlogical.terminal.shell"}}
@@ -68,7 +71,22 @@ def run():
             time.sleep(1)
 
             def key(stroke):
-                x("key", stroke)
+                # Rune samples modifier state at dispatch time. Keep modifiers
+                # down until BOTH the terminal key press and release have been
+                # dispatched, rather than xdotool's near-instant whole chord.
+                *modifiers, leaf = stroke.split("+")
+                held = "+".join(modifiers)
+                if held:
+                    x("keydown", held)
+                    time.sleep(0.1)
+                try:
+                    x("keydown", leaf)
+                    time.sleep(0.1)
+                    x("keyup", leaf)
+                    time.sleep(0.1)
+                finally:
+                    if held:
+                        x("keyup", held)
                 time.sleep(0.15)
 
             def text(value):
@@ -120,13 +138,20 @@ def run():
             command("Close pane")
             key("Return")  # Visible default is Keep running.
             assert api("session.view", session_id=sid)["windows"], "Default confirmation closed the terminal"
-            text("printf '\\033[2J\\033[HPOINTER_COPY_OK\\n'")
+            text("printf '\\033[2J\\033[HPOINTER_COPY_OK!\\n'")
             key("Return")
             time.sleep(0.3)
-            # A single pane is full-bleed: 52pt bar, grid 12pt in and 8pt down, 9px cells.
+            # A single pane is full-bleed: 52pt bar, grid 12pt in and 8pt down,
+            # 9px cells at the default font. Ghostty includes a dragged-over
+            # cell only past its 60% threshold (5px). The old x=142 is only
+            # 4px into K (column 14), so it correctly excludes K. End at x=150,
+            # 3px into the following ! (column 15), below ITS threshold. The
+            # exact pasted line must include K but not the ! sentinel.
             x("mousemove", "--window", window, "16", "68")
             x("mousedown", "1")
-            x("mousemove", "--window", window, "142", "68")
+            time.sleep(0.1)
+            x("mousemove", "--window", window, "150", "68")
+            time.sleep(0.1)
             x("mouseup", "1")
             key("ctrl+shift+c")
             text("echo ")
@@ -159,7 +184,8 @@ def run():
             output = api("com.superlogical.terminal.format", session_id=sid,
                          block_id=block, args={"format": "text", "trim": True, "unwrap": True})["content"]
             lines = output.splitlines()
-            assert lines.count("POINTER_COPY_OK") == 2, "Pointer selection/copy failed:\n" + output
+            assert lines.count("POINTER_COPY_OK!") == 1, "Pointer source missing or copied the ! sentinel:\n" + output
+            assert lines.count("POINTER_COPY_OK") == 1, "Pointer selection/copy failed:\n" + output
             assert view["label"] == label, "Cancelled rename changed the session"
             # A raw PTY observer enables Kitty event reporting. The terminal key must include
             # its release, every key consumed by local UI must stay out of the PTY, and each
@@ -168,7 +194,7 @@ def run():
             result = Path(directory) / "keys.bin"
             ready = Path(directory) / "ready"
             text(f"python3 {shlex.quote(str(observer))} {shlex.quote(str(ready))} "
-                 f"{shlex.quote(str(result))} 12")
+                 f"{shlex.quote(str(result))} 30")
             key("Return")
             wait_for(ready.exists, "Raw key observer did not start")
             key("a")  # terminal press and release
@@ -200,7 +226,7 @@ def run():
                 key(stroke)
             key("ctrl+shift+Return")  # Zoom, a workspace shortcut
             key("shift+Prior")  # local scrollback
-            wait_for(result.exists, "Raw key observer did not finish", timeout=16)
+            wait_for(result.exists, "Raw key observer did not finish", timeout=35)
             keys = result.read_bytes()
             expected = b"a\x1b[97;1:3u" + b"".join(sent for _, sent in modified)
 
