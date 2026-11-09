@@ -70,6 +70,7 @@ pub struct Workspace {
     pub drag: Option<DividerDrag>,
     /// Physical keys whose press went to a terminal; only their releases follow.
     pub forwarded: HashSet<PhysicalKeyCode>,
+    pub navigation: super::navigation::History,
     /// Panes this window has taken size ownership of since it last came forward.
     pub claimed: HashSet<(HostId, String)>,
     pub handle: AppHandle<Workspace>,
@@ -201,6 +202,7 @@ impl Workspace {
             zoom_notice: None,
             drag: None,
             forwarded: HashSet::new(),
+            navigation: Default::default(),
             claimed: HashSet::new(),
             handle,
             window_focused: true,
@@ -432,6 +434,7 @@ impl Workspace {
         {
             tx.copy(copy.text);
         }
+        self.observe_navigation();
         self.ring_bells(index, bells);
         self.track_activity(index);
         self.deliver_program_notices(index, notices);
@@ -849,20 +852,17 @@ impl Workspace {
     }
 
     pub fn select(&mut self, host: usize, id: String, tx: &mut Tx) {
-        self.active = host;
-        self.drag = None;
-        self.update_visibility();
-        self.settings.hosts[host].collapsed = false;
-        self.send(host, HostCommand::Select(id));
-        self.save();
-        self.update_title(tx);
+        self.select_visit(host, id, tx);
     }
 
     pub fn activate_host(&mut self, host: usize, tx: &mut Tx) {
+        self.observe_navigation();
+        self.navigation.cancel();
         self.settings.hosts[host].collapsed = false;
         self.active = host;
         self.drag = None;
         self.update_visibility();
+        self.observe_navigation();
         self.save();
         self.update_title(tx);
     }
@@ -877,22 +877,15 @@ impl Workspace {
     }
 
     pub fn select_window(&mut self, host: usize, session: String, window: String, tx: &mut Tx) {
-        self.active = host;
-        self.drag = None;
-        self.settings.hosts[host].collapsed = false;
-        self.update_visibility();
-        if self.hosts[host].model.selected.as_ref() != Some(&session) {
-            self.send(host, HostCommand::Select(session.clone()));
-        }
-        self.send(
-            host,
-            HostCommand::Request {
-                method: "session.focus_window".into(),
-                payload: json!({"session_id": session, "window_id": window}),
+        self.observe_navigation();
+        self.navigate_to(
+            super::navigation::Visit {
+                host: self.hosts[host].id,
+                session,
+                window: Some(window),
             },
+            tx,
         );
-        self.save();
-        self.update_title(tx);
     }
 
     /// Tabs are listed in the sidebar instead of the toolbar: Sidebar tab position, and
@@ -934,7 +927,12 @@ impl Workspace {
         }
         match action {
             Intent::Select(host, id) => self.select(host, id, tx),
-            Intent::Tab(id) => self.request("session.focus_window", json!({"window_id":id})),
+            Intent::Tab(id) => {
+                if let Some(session) = self.model().selected.clone() {
+                    self.select_window(self.active, session, id, tx);
+                }
+            }
+            Intent::ClientAction(name) => { super::input::run_action(self, name, tx); }
             Intent::Switcher => self.picker(true),
             Intent::NewSession => self.create_session(self.active, None, tx),
             Intent::CreateOn(host, name) => self.create_session(host, name, tx),

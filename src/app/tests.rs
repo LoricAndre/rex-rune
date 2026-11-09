@@ -1,5 +1,7 @@
 //! Headless focus and key-routing checks on Rune's runtime (no server: the one host is a
 //! socket that does not exist).
+#[path = "navigation_tests.rs"]
+mod navigation_tests;
 use super::{
     panel::{Form, Intent, PanelKind, SessionAction},
     placeholder, view,
@@ -629,6 +631,15 @@ fn requests(rx: &flume::Receiver<HostCommand>) -> Vec<(String, String, serde_jso
             HostCommand::Request { method, payload } => {
                 Some((method, payload["session_id"].as_str()?.to_owned(), payload))
             }
+            HostCommand::Navigate {
+                session,
+                window: Some(window),
+                ..
+            } => Some((
+                "session.focus_window".into(),
+                session.clone(),
+                serde_json::json!({"session_id":session,"window_id":window}),
+            )),
             _ => None,
         })
         .collect()
@@ -2727,7 +2738,9 @@ fn a_sidebar_tab_selects_its_session_and_focuses_its_window() {
     let sent = |rx: &flume::Receiver<HostCommand>| -> Vec<String> {
         rx.try_iter()
             .filter_map(|c| match c {
-                HostCommand::Select(id) => Some(format!("select {id}")),
+                HostCommand::Navigate {
+                    session, window, ..
+                } => Some(format!("navigate {session} {}", window.unwrap_or_default())),
                 HostCommand::Request { method, payload } => Some(format!(
                     "{method} {} {}",
                     payload["session_id"].as_str()?,
@@ -2739,12 +2752,9 @@ fn a_sidebar_tab_selects_its_session_and_focuses_its_window() {
     };
     sent(&rx);
     click(&mut rt, "sidebar-tab:0:other:other-second");
-    assert_eq!(
-        sent(&rx),
-        ["select other", "session.focus_window other other-second"]
-    );
+    assert_eq!(sent(&rx), ["navigate other other-second"]);
     click(&mut rt, "sidebar-tab:0:s:split");
-    assert_eq!(sent(&rx), ["session.focus_window s split"]);
+    assert_eq!(sent(&rx), ["navigate s split"]);
     std::fs::remove_file(&rt.state.settings_path).ok();
 }
 
@@ -3641,9 +3651,9 @@ fn ctrl_shift_f_searches_the_focused_terminal_without_typing_into_it() {
 
     // The shortcut runs a named action, which bindings can run by its name.
     assert_eq!(super::input::SEARCH, "client.search");
-    rt.update(|s, _| {
-        assert!(!super::input::run_action(s, "client.nothing"));
-        assert!(super::input::run_action(s, super::input::SEARCH));
+    rt.update(|s, tx| {
+        assert!(!super::input::run_action(s, "client.nothing", tx));
+        assert!(super::input::run_action(s, super::input::SEARCH, tx));
     });
     rt.frame(1. / 60.);
     assert!(

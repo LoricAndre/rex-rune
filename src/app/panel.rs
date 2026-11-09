@@ -12,6 +12,8 @@ use serde_json::Value;
 pub enum Intent {
     Select(usize, String),
     Tab(String),
+    /// A named client action shared with the shortcut dispatcher.
+    ClientAction(&'static str),
     Switcher,
     /// Create a session on a host at once, named when a switcher query gave a name.
     CreateOn(usize, Option<String>),
@@ -520,6 +522,31 @@ impl Workspace {
         if !sessions_only && !pane_only {
             for (label, detail, action) in [
                 ("Switch session…", "Ctrl K", Intent::Switcher),
+                (
+                    "Next tab across hosts",
+                    "Ctrl Tab",
+                    Intent::ClientAction(super::input::NEXT_GLOBAL),
+                ),
+                (
+                    "Previous tab across hosts",
+                    "Ctrl Shift Tab",
+                    Intent::ClientAction(super::input::PREVIOUS_GLOBAL),
+                ),
+                (
+                    "Back in history",
+                    "Mouse Back",
+                    Intent::ClientAction(super::input::HISTORY_BACK),
+                ),
+                (
+                    "Forward in history",
+                    "Mouse Forward",
+                    Intent::ClientAction(super::input::HISTORY_FORWARD),
+                ),
+                (
+                    "Search terminal…",
+                    "Ctrl Shift F",
+                    Intent::ClientAction(super::input::SEARCH),
+                ),
                 ("New session", "Ctrl Shift N", Intent::NewSession),
                 ("New tab", "Ctrl Shift T", Intent::NewWindow),
                 ("Rename session…", "", Intent::RenameSession),

@@ -429,19 +429,10 @@ impl Workspace {
         let Some(index) = self.host_index(target.host) else {
             return;
         };
-        if self.hosts[index].model.selected.as_deref() != Some(&target.session) {
-            self.select(index, target.session.clone(), tx);
-        } else if index != self.active {
-            self.activate_host(index, tx);
-        }
         if let Some(window) = target.window {
-            self.send(
-                index,
-                rex_linux::connection::HostCommand::Request {
-                    method: "session.focus_window".into(),
-                    payload: serde_json::json!({"session_id": target.session, "window_id": window}),
-                },
-            );
+            self.select_window(index, target.session, window, tx);
+        } else {
+            self.select(index, target.session, tx);
         }
     }
 
