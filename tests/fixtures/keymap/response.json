@@ -1,0 +1,155 @@
+{
+  "bindings": [
+    {
+      "action": "client.settings",
+      "keys": [
+        "ctrl+b",
+        "d"
+      ],
+      "source": "settings"
+    },
+    {
+      "action": "client.settings",
+      "keys": [
+        "ctrl+k"
+      ],
+      "source": "settings"
+    },
+    {
+      "action": "client.tab.new",
+      "keys": [
+        "ctrl+k"
+      ],
+      "source": "settings"
+    },
+    {
+      "action": "client.mac.only",
+      "keys": [
+        "ctrl+m"
+      ],
+      "source": "init.lua:7"
+    },
+    {
+      "action": "client.tab.new",
+      "keys": [
+        "ctrl+[KeyT]"
+      ],
+      "source": "init.lua:6"
+    },
+    {
+      "action": "client.key.forward",
+      "keys": [
+        "ctrl+l"
+      ],
+      "source": "init.lua:5"
+    },
+    {
+      "action": "client.key.forward",
+      "keys": [
+        "ctrl+b",
+        "x"
+      ],
+      "source": "init.lua:4"
+    },
+    {
+      "action": "client.tab.new",
+      "keys": [
+        "ctrl+b",
+        "c"
+      ],
+      "source": "init.lua:3"
+    },
+    {
+      "action": "client.settings",
+      "keys": [
+        "ctrl+k"
+      ],
+      "source": "init.lua:2"
+    },
+    {
+      "action": "client.settings",
+      "keys": [
+        "ctrl+j"
+      ],
+      "source": "linux"
+    },
+    {
+      "action": "client.tab.new",
+      "keys": [
+        "ctrl+j"
+      ],
+      "source": "linux"
+    },
+    {
+      "action": "client.settings",
+      "keys": [
+        "ctrl+FutureKey"
+      ],
+      "source": "linux"
+    },
+    {
+      "action": "client.settings",
+      "keys": [
+        "ctrl+pageup"
+      ],
+      "source": "linux"
+    },
+    {
+      "action": "client.settings",
+      "keys": [
+        "ctrl+alt+shift+cmd+k"
+      ],
+      "source": "linux"
+    },
+    {
+      "action": "client.zoom.in",
+      "keys": [
+        "ctrl++"
+      ],
+      "source": "linux"
+    },
+    {
+      "action": "client.palette.toggle",
+      "keys": [
+        "ctrl+b"
+      ],
+      "source": "linux"
+    },
+    {
+      "action": "client.palette.toggle",
+      "keys": [
+        "ctrl+k"
+      ],
+      "source": "linux"
+    }
+  ],
+  "config": {
+    "exists": true,
+    "generation": 1,
+    "hash": "dbda0a2d28a59af8f886a14451b1a8acaaee387a963a8c886b159bbb9074a01d",
+    "instance_id": "b27f1620-63f0-468e-90ca-3a1b282f56d0",
+    "path": "/tmp/rex-keymap-ch7n_o4b/init.lua"
+  },
+  "diagnostics": [
+    {
+      "action": "client.mac.only",
+      "key": "ctrl+m",
+      "message": "unknown action \"client.mac.only\"",
+      "severity": "warning",
+      "source": "init.lua:7"
+    },
+    {
+      "key": "ctrl+q",
+      "message": "nothing is bound to \"ctrl+q\"",
+      "severity": "warning",
+      "source": "settings"
+    },
+    {
+      "action": "client.palette.toggle",
+      "key": "ctrl+b",
+      "message": "\"ctrl+b\" (linux) cannot fire, because key sequence \"ctrl+b d\" is bound above it (settings)",
+      "severity": "warning",
+      "source": "linux"
+    }
+  ]
+}
