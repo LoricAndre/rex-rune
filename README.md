@@ -148,7 +148,7 @@ The SSH user is the login on that machine, which is also the user whose Rex serv
 
 ## Keyboard shortcuts
 
-Global tab navigation uses cached tab order without enabling extra prefetch: a session whose view is not loaded is one stop, and selecting it loads its tabs. Crossing sessions or hosts settles after 150 ms without another cycle, coalescing fast repeats rather than attaching each intermediate session. The first stop can attach before key repeat begins. During settling there is no target preview, and typing still goes to the displayed pane. Back/Forward history is local to this window and survives reconnects; unavailable targets are skipped. Commands also exposes these navigation actions. Ctrl Tab is a removable client default, including in Kitty-aware editors.
+Global tab navigation uses cached tab order without enabling extra prefetch: a session whose view is not loaded is one stop, and selecting it loads its tabs. Crossing sessions or hosts settles after 150 ms without another cycle, coalescing fast repeats rather than attaching each intermediate session. The first stop can attach before key repeat begins. During settling there is no target preview, and typing still goes to the displayed pane. Back/Forward history is local to this window and survives reconnects; unavailable targets are skipped. Commands also exposes these navigation actions. Ctrl Tab is a client default; remove it (see recipes) to pass it to editors such as Neovim.
 
 | Shortcut | Behavior | Action (and args where required) |
 | --- | --- | --- |
