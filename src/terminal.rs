@@ -309,10 +309,21 @@ impl Frame {
         Some((row * cols + start, row * cols + end))
     }
     /// Local viewport cropping must retain the newest rows, or the cursor when
-    /// a TUI has positioned it above them. This never changes the server size.
+    /// a TUI has positioned it above them, or the selected search match while the user steps
+    /// through them. This never changes the server size.
     pub fn display_row_start(&self, visible_rows: usize) -> usize {
-        let bottom = (self.rows as usize).saturating_sub(visible_rows.max(1));
-        self.cursor.map_or(bottom, |(_, y)| bottom.min(y as usize))
+        let visible = visible_rows.max(1);
+        let bottom = (self.rows as usize).saturating_sub(visible);
+        let start = self.cursor.map_or(bottom, |(_, y)| bottom.min(y as usize));
+        let Some(found) = self.search.as_ref().and_then(|s| s.selected) else {
+            return start;
+        };
+        let row = usize::from(found.start.1);
+        if row < start {
+            row
+        } else {
+            start.max((row + 1).saturating_sub(visible)).min(bottom)
+        }
     }
 
     pub fn selected_text(&self, a: usize, b: usize) -> String {

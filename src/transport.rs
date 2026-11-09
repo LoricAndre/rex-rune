@@ -216,3 +216,32 @@ pub async fn control(endpoint: &str, reconnect: Option<&str>) -> Result<Client> 
     );
     Ok(client)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn tcp_connections_are_set_to_notice_a_silent_peer() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let tcp = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        detect_silent_peer(&tcp).unwrap();
+        let socket = socket2::SockRef::from(&tcp);
+        assert!(socket.keepalive().unwrap());
+        assert_eq!(
+            socket.tcp_keepalive_time().unwrap(),
+            Duration::from_secs(15)
+        );
+        assert_eq!(
+            socket.tcp_keepalive_interval().unwrap(),
+            Duration::from_secs(5)
+        );
+        assert_eq!(socket.tcp_keepalive_retries().unwrap(), 3);
+        assert_eq!(
+            socket.tcp_user_timeout().unwrap(),
+            Some(Duration::from_secs(30))
+        );
+    }
+}

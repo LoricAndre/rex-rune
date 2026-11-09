@@ -129,6 +129,17 @@ impl InitialSize {
             .filter(|_| self.live_owner && !self.ready)
             .map(|since| since + INITIAL_SIZE_PATIENCE)
     }
+
+    /// Ends a wait past its bound for good; true when that just happened.
+    fn give_up(&mut self, now: Instant) -> bool {
+        let due = self.deadline().is_some_and(|deadline| now >= deadline);
+        if due {
+            self.expected = None;
+            self.since = None;
+            self.ready = true;
+        }
+        due
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -275,6 +286,12 @@ impl Term {
     /// When this pane stops waiting for a frame at its size and draws anyway, while it waits.
     pub fn draws_anyway_at(&self) -> Option<Instant> {
         self.initial_size.deadline()
+    }
+
+    /// Stops waiting for a frame at this pane's size once the bound has passed; true the one
+    /// time that changes what it draws.
+    pub fn draw_anyway(&mut self, now: Instant) -> bool {
+        self.initial_size.give_up(now)
     }
 
     pub fn status(&self) -> Status {
@@ -842,16 +859,23 @@ fn same_decoration(a: &RunStyle, b: &RunStyle) -> bool {
         == (b.underline, b.underline_color, b.overline, b.fg)
 }
 
+/// A straight line's thickness in points: one point in whole device pixels, as sprites' are.
+fn line_thickness(px: f32) -> f32 {
+    px.round().max(1.) / px
+}
+
+/// The centre of a line that starts on a whole device pixel `top` points down the cell.
+fn line_centre(top: f32, px: f32) -> f32 {
+    (top * px).round() / px + line_thickness(px) / 2.
+}
+
 /// A run's underline (single, double, curly, dotted or dashed) and overline, `width` wide in a
 /// cell `height` tall, drawn at `px` device pixels per point.
 fn decoration_shape(style: &RunStyle, width: f32, height: f32, px: f32) -> Shape {
     let mut shape = Shape::new();
     let color = rgb(style.underline_color.unwrap_or(style.fg));
-    // Straight lines are one point thick in whole device pixels, as sprites' are, and start
-    // on a whole device pixel `top` points down the cell.
-    let light = px.round().max(1.);
-    let thick = light / px;
-    let centre = |top: f32| ((top * px).round() + light / 2.) / px;
+    let thick = line_thickness(px);
+    let centre = |top: f32| line_centre(top, px);
     let y = centre(height - 2.);
     match style.underline {
         Underline::Single => {
@@ -1263,6 +1287,29 @@ mod tests {
     }
 
     #[test]
+    fn a_wait_that_runs_out_ends_once_even_if_the_size_never_comes() {
+        let status = Status {
+            live: true,
+            owner: true,
+            status: String::new(),
+        };
+        let mut size = InitialSize::default();
+        size.transition(&status);
+        size.layout((100, 30), Some((80, 24)));
+        let deadline = size.deadline().expect("a wait is on");
+        assert!(!size.give_up(deadline - Duration::from_millis(1)));
+        assert!(size.give_up(deadline), "the bound passed");
+        assert!(!size.give_up(deadline), "only once");
+        assert_eq!(size.deadline(), None, "nothing left to wake for");
+        assert!(size.renders(&status));
+        size.layout((100, 30), Some((80, 24)));
+        assert!(
+            size.renders(&status),
+            "the same ownership epoch doesn't wait again"
+        );
+    }
+
+    #[test]
     fn typing_styled_terminal_runs_never_creates_a_second_ui_line() {
         let mut terminal = ghostty_vt::Terminal::new(ghostty_vt::TerminalOptions {
             cols: 253,
@@ -1308,6 +1355,101 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A fixed cell, since the measured one follows whichever fonts another test has loaded.
+    fn clipped_metrics() -> Metrics {
+        Metrics {
+            cell: (10., 20.),
+            ..metrics(15.)
+        }
+    }
+
+    struct ClippedState {
+        term: Term,
+    }
+    fn clipped_view(s: &ClippedState, _: &mut Cx<ClippedState>) -> El {
+        let look = GridLook {
+            cursor: None,
+            ime: false,
+            colors: TermColors::default(),
+        };
+        el().w_full()
+            .h_full()
+            .child(grid("g", &s.term, &clipped_metrics(), look))
+    }
+
+    /// The search highlights `term` draws: (first column, row in the pane, selected).
+    fn drawn_matches(term: Term) -> Vec<(u32, u32, bool)> {
+        let (cw, ch) = clipped_metrics().cell;
+        let mut rt = Runtime::new(
+            ClippedState { term },
+            clipped_view,
+            (600., 200.),
+            Env::default(),
+        );
+        rt.frame(1. / 60.);
+        let mut drawn: Vec<_> = rt
+            .instances
+            .iter()
+            .filter(|q| q.params[1] == rune::render::KIND_RECT && q.fill[3] > 0.1)
+            .map(|q| {
+                (
+                    (q.rect[0] / cw).round() as u32,
+                    (q.rect[1] / ch).round() as u32,
+                    q.fill[3] > 0.4,
+                )
+            })
+            .collect();
+        drawn.sort_unstable();
+        drawn
+    }
+
+    #[test]
+    fn search_matches_stay_on_their_rows_when_the_pane_clips_a_taller_terminal() {
+        use rex_linux::{
+            connection::{Connection, TerminalSender},
+            terminal::{Renderer, search::Controller},
+        };
+        // Another client owns five rows; this pane shows two, the newest, so a screen row and
+        // a row in the pane differ by three.
+        let mut terminal = ghostty_vt::Terminal::new(ghostty_vt::TerminalOptions {
+            cols: 20,
+            rows: 5,
+            ..Default::default()
+        })
+        .unwrap();
+        terminal.vt_write(b"    needle\r\n\r\n\r\nneedle\r\n");
+        let mut search = Controller::default();
+        search.set_needle(Some(&terminal), "needle".into()).unwrap();
+        while search.update(&terminal).unwrap() {}
+        let term_at = |search: &Controller| {
+            let mut frame = Renderer::new().unwrap().frame(&terminal).unwrap();
+            frame.search = search.results(&terminal).unwrap();
+            let (sender, _) = flume::unbounded();
+            let mut term = Term::new(Connection {
+                model: Default::default(),
+                commands: TerminalSender::new(sender, "s".into(), "b".into()),
+                wake: flume::unbounded().1,
+            });
+            term.frame = Some(Arc::new(frame));
+            term.rect = [0., 0., 600., 2. * clipped_metrics().cell.1];
+            term
+        };
+
+        let term = term_at(&search);
+        assert_eq!(term.display_row(clipped_metrics().cell), 3);
+        assert_eq!(
+            drawn_matches(term),
+            [(0, 0, true)],
+            "the newest match, screen row 3, is the pane's first; the clipped one draws nothing"
+        );
+
+        // The older match is above what the pane shows, so the pane follows it there.
+        search.step(&terminal, true).unwrap();
+        let term = term_at(&search);
+        assert_eq!(term.display_row(clipped_metrics().cell), 0);
+        assert_eq!(drawn_matches(term), [(4, 0, true)]);
     }
 
     /// A row at 1.5 device pixels per point, placed off the pixel grid.
@@ -1389,6 +1531,22 @@ mod tests {
     }
 
     #[test]
+    fn decoration_lines_land_on_whole_device_pixels() {
+        for px in [1., 1.25, 1.5, 1.75, 2., 2.5, 3.] {
+            let thick = line_thickness(px) * px;
+            assert_eq!(thick, thick.round(), "whole pixels thick at {px}");
+            assert_eq!(thick, f32::max(px, 1.).round(), "one point at {px}");
+            for top in [0.5, 17., 19., 20.5] {
+                let edge = (line_centre(top, px) - line_thickness(px) / 2.) * px;
+                assert!(
+                    (edge - edge.round()).abs() < 1e-3,
+                    "{top} at {px} starts on a pixel: {edge}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn block_elements_fill_whole_pixels_without_seams() {
         let blocks = scaled_rects("████▌▐▀▄");
         assert_eq!(blocks.len(), 8, "one rectangle per block: {blocks:?}");
@@ -1457,7 +1615,7 @@ mod tests {
         frame.search = search.results(&terminal).unwrap();
         assert_eq!(frame.search.as_ref().unwrap().matches.len(), 2);
 
-        let m = metrics(15.);
+        let m = clipped_metrics();
         let mut term = Term::new(Connection {
             model: Default::default(),
             commands: TerminalSender::new(flume::unbounded().0, "s".into(), "b".into()),
@@ -1473,7 +1631,7 @@ mod tests {
                 ime: false,
                 colors: TermColors::default(),
             };
-            grid("g", term, &metrics(15.), look)
+            grid("g", term, &clipped_metrics(), look)
         };
         let mut rt = Runtime::new(term, view, (200., 100.), Env::default());
         rt.frame(0.);
