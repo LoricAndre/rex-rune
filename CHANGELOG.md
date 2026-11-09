@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Ctrl Tab and Ctrl Shift Tab cycle across connected hosts and sessions in sidebar order. Mouse Back/Forward and Commands revisit window-local history, including across reconnects. Global navigation keeps sidebar-only prefetch and briefly settles cross-session cycling before attachment; Ctrl PageUp/PageDown still use the server's current-session navigation. Adapted from [Joe Goldin](https://github.com/joegoldin)'s global-navigation work. (@joegoldin)
+
 Several of these come from [Lily](https://github.com/kitten-lily)'s fork ([kitten-lily/rex-rune](https://github.com/kitten-lily/rex-rune)); thank you.
 
 - Terminal fidelity: the cursor takes the shape programs ask for (DECSCUSR block, bar or underline); curly, dotted, dashed and double underlines in their own colours and overlines (SGR 4:x, 58, 53); box-drawing and block characters are drawn on whole pixels, so borders meet and meters have no seams. (@kitten-lily)

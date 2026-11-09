@@ -148,7 +148,7 @@ The SSH user is the login on that machine, which is also the user whose Rex serv
 
 ## Keyboard shortcuts
 
-Global tab navigation uses cached tab order without enabling extra prefetch: a session whose view is not loaded is one stop, and selecting it loads its tabs. Crossing sessions or hosts settles after 150 ms without another cycle, so holding Ctrl Tab does not attach every session passed. Back/Forward history is local to this window and survives reconnects; unavailable targets are skipped. Commands also exposes these navigation actions. Bindings are not configurable yet; Ctrl Tab is currently reserved by this client, including in Kitty-aware editors.
+Global tab navigation uses cached tab order without enabling extra prefetch: a session whose view is not loaded is one stop, and selecting it loads its tabs. Crossing sessions or hosts settles after 150 ms without another cycle, coalescing fast repeats rather than attaching each intermediate session. The first stop can attach before key repeat begins. During settling there is no target preview, and typing still goes to the displayed pane. Back/Forward history is local to this window and survives reconnects; unavailable targets are skipped. Commands also exposes these navigation actions. Bindings are not configurable yet; Ctrl Tab is currently reserved by this client, including in Kitty-aware editors.
 
 | Shortcut | Action |
 | --- | --- |
@@ -198,7 +198,7 @@ With mise, `mise run test`, `fmt`, `clippy` and `test-rexrs` run the first three
 The `scripts/` directory holds integration checks; each script's docstring lists its requirements (Xvfb, xdotool, a `rex` binary, `wayland-info`, …). Some use the configured Rex server rather than starting their own: point them at a disposable server you control. Wayland checks use the running compositor; X11 checks use an isolated display.
 
 - `connection-only-smoke.py`: a missing or stale socket must never execute the Rex CLI.
-- `navigation-x11.py`: isolated private-server checks for global tab shortcuts, reverse wrapping and mouse Back/Forward across sessions.
+- `navigation-x11.py`: isolated single-host private-server checks for global tab shortcuts, reverse wrapping and mouse Back/Forward across sessions; also exercises named history Commands. Cross-host navigation and reconnect behavior are covered by headless/protocol tests, not this script.
 - `x11-smoke.py`: real X11 events (forms, clipboard, pointer selection, key isolation).
 - `scroll-selection-x11.py`: private-server Unicode copy checks after scrolling, drag autoscroll, and Shift selection in a fullscreen mouse-tracking TUI without breaking ordinary mouse reports.
 - `kitty-graphics-x11.py`: private-server pixel checks for live RGBA, chunked PNG, image restoration after reattach and deletion.
