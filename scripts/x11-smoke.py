@@ -49,6 +49,12 @@ def run():
             assert number, "Xvfb failed to start"
             env = dict(os.environ, DISPLAY=f":{number}")
             env.pop("WAYLAND_DISPLAY", None)
+            # Add host must not list, or check for Rex on, the machines of a real tailnet.
+            stub = Path(directory) / "bin"
+            stub.mkdir()
+            (stub / "tailscale").write_text("#!/bin/sh\nexit 1\n")
+            (stub / "tailscale").chmod(0o755)
+            env["PATH"] = f"{stub}{os.pathsep}{env['PATH']}"
             config = Path(directory) / "workspace.json"
             app = subprocess.Popen([
                 os.environ.get("REX_BIN", str(ROOT / "target/debug/rex-linux")), "--session", sid,
@@ -126,7 +132,10 @@ def run():
             text("echo ")
             key("ctrl+shift+v")
             key("Return")
+            # With no tailnet to list, the only row is the endpoint form.
             command("Add host")
+            time.sleep(0.5)
+            key("Return")
             text("Unavailable test host")
             key("Tab")
             text(f"unix://{directory}/missing.sock")
