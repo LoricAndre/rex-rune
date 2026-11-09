@@ -173,7 +173,7 @@ Global tab navigation uses cached tab order without enabling extra prefetch: a s
 
 These are the client defaults; bound chords do not reach terminal programs, and every other key goes to the focused pane. Interface zoom changes in 10% steps (70–150%), is saved as `ui_scale`, and is independent of the terminal font size. `Ctrl =` and the numpad `+`/`−` also work.
 
-### File-edited shortcuts (Phase 6 draft)
+### Configuring shortcuts
 
 For the default workspace, edit `$XDG_CONFIG_HOME/rex-linux/shortcuts.json` (normally
 `~/.config/rex-linux/shortcuts.json`). With a custom `--config /path/demo.json`,
@@ -194,6 +194,15 @@ uses defaults and appears in Settings → Shortcuts → Problems.
 }
 ```
 
+Layers run lowest to highest: **Linux defaults → each server’s Rex config → client overrides**.
+The app sends its defaults, override layer and action registry to `client.keymap`;
+`rex.bind`, `rex.unbind`, Lua-function sequences and config-file actions participate
+in the same resolution. The active host’s map is used—not a union of hosts.
+When that host is offline, has not answered, or rejects the keymap request, local
+defaults plus overrides work instead. A keymap error never disconnects the host;
+Settings → Shortcuts retains its explanation. Config changes refresh by hash and
+server instance, and every reconnect registers again.
+
 Later entries win; `null` frees those exact keys for the terminal. Hand edits reload
 when the window regains focus or Settings opens, gated by file mtime and length.
 `cmd`/`super` means Super, not Ctrl. Physical keys use W3C names such as
@@ -206,10 +215,49 @@ Server action calls use a dedicated 35-second timeout (Rex allows an action 30 s
 The host's control loop is serial: later input and control commands queue behind a
 running action. Failed or timed-out input is never replayed automatically. Known
 returned client actions are performed once, in order; unknown names are ignored.
-No cross-server `servers` list is advertised.
+No cross-server `servers` list is advertised. A returned action whose original
+host, session, pane or local keymap generation is no longer current is skipped
+with an informational notice rather than applied to a different target.
 
-**Draft limitation:** local and server-layer dispatch are active; effective-keymap
-Settings/Commands display and final live acceptance are still in progress.
+Settings → Shortcuts shows effective keycaps, “then” between sequence steps,
+sources, persistent Problems and both config paths. Commands shows the highest
+binding for each action and argument set, or no shortcut when unbound. Only
+settings-source diagnostic sets toast, once per distinct set per host; file and
+default-layer diagnostics stay in Problems. A pending sequence shows `Ctrl B …`
+in the toolbar. Host/pane/session/focus/map changes and opening a dialog cancel it.
+
+Only popup navigation/editing keys and Escape cancelling a sequence stay reserved;
+zoom is global (including fields), but it is still rebindable. Hold-to-repeat works
+for zoom, pane focus/scroll and global tab cycling. Other completed shortcuts and
+prefix repeats are suppressed, and releases only reach terminals when presses did.
+
+#### More recipes
+
+```json
+{
+  "shortcuts": [
+    {"keys":"ctrl+shift+t", "action":null},
+    {"keys":"ctrl+b>c", "action":"client.tab.new"},
+    {"keys":"ctrl+b>shift+5", "action":"pane.split", "args":{"direction":"right"}},
+    {"keys":"ctrl+b>ctrl+b", "action":"pane.send_key", "args":{"key":"ctrl+b"}},
+    {"keys":"ctrl+1", "action":"client.tab.goto", "args":{"index":1}}
+  ]
+}
+```
+
+`pane.send_key` is the explicit escape hatch through `block.event` (press and
+release); normal keys and forwarded Lua sequences use `client.key`, with the
+server’s original prefix spellings. Action arguments are checked before dispatch.
+Keys accept modifier aliases, named keys, F1–F12, W3C physical codes and `>` sequences.
+Letters follow the keyboard layout, with physical US-position fallbacks on
+non-Latin layouts; Shift stays a modifier instead of being folded into the key.
+Key modes, a recording editor, server actions in Commands, pane-resize bindings
+and `client_perform_requested` handling are not implemented in this phase.
+
+The parser, sequence machine, action-registry structure and repeat suppression
+adapt Andrea Zito ([nivox](https://github.com/nivox))’s `8037d78` work. Importing a
+legacy `keybindings` field drops copied defaults, writes only custom entries once,
+and reports a move only when at least one custom entry remains.
 
 Double-click selects a word (including shell paths), and triple-click selects a line. Selection stays attached to terminal content as history or output scrolls; dragging above or below the grid autoscrolls. Hold Shift to select locally or scroll local history when a fullscreen TUI owns the mouse. Without Shift, ordinary TUI mouse reporting is unchanged.
 
