@@ -113,6 +113,99 @@ impl Spec {
             )
     }
 
+    pub fn title(&self) -> &'static str {
+        match self.handler {
+            Handler::Palette => "Commands",
+            Handler::Settings => "Settings",
+            Handler::Sidebar => "Toggle sidebar",
+            Handler::Close => "Close focused pane or tab",
+            Handler::Search => "Search terminal",
+            Handler::NewTab => "New tab",
+            Handler::NextTab => "Next tab",
+            Handler::PreviousTab => "Previous tab",
+            Handler::NextGlobal => "Next tab across hosts",
+            Handler::PreviousGlobal => "Previous tab across hosts",
+            Handler::Back => "Back in history",
+            Handler::Forward => "Forward in history",
+            Handler::ZoomIn => "Enlarge interface",
+            Handler::ZoomOut => "Shrink interface",
+            Handler::ZoomReset => "Reset interface size",
+            Handler::SwitchSession => "Switch session",
+            Handler::NewSession => "New session",
+            Handler::Split => "Split pane",
+            Handler::ZoomPane => "Zoom pane",
+            Handler::FocusPane => "Focus pane",
+            Handler::PaneActions => "Pane actions",
+            Handler::Copy => "Copy selection",
+            Handler::Paste => "Paste",
+            Handler::Reconnect => "Reconnect terminal",
+            Handler::Scroll => "Scroll terminal",
+            Handler::GotoTab => "Go to tab",
+            Handler::CloseTab => "Close tab",
+            Handler::RenameTab => "Rename tab",
+            Handler::RenameSession => "Rename session",
+            Handler::ClosePane => "Close pane",
+            Handler::SendKey => "Send key",
+        }
+    }
+    pub fn category(&self) -> &'static str {
+        match self.handler {
+            Handler::Palette
+            | Handler::Settings
+            | Handler::Sidebar
+            | Handler::ZoomIn
+            | Handler::ZoomOut
+            | Handler::ZoomReset => "Interface",
+            Handler::NextTab
+            | Handler::PreviousTab
+            | Handler::NextGlobal
+            | Handler::PreviousGlobal
+            | Handler::Back
+            | Handler::Forward
+            | Handler::SwitchSession
+            | Handler::GotoTab => "Navigate",
+            Handler::NewTab
+            | Handler::NewSession
+            | Handler::Close
+            | Handler::CloseTab
+            | Handler::RenameTab
+            | Handler::RenameSession
+            | Handler::ClosePane => "Create and close",
+            Handler::Split
+            | Handler::ZoomPane
+            | Handler::FocusPane
+            | Handler::PaneActions
+            | Handler::Reconnect => "Panes",
+            Handler::Copy
+            | Handler::Paste
+            | Handler::Scroll
+            | Handler::SendKey
+            | Handler::Search => "Text and view",
+        }
+    }
+    fn schema(&self) -> Option<Value> {
+        let (key, schema) = match self.handler {
+            Handler::Split => (
+                "direction",
+                json!({"type":"string","enum":["right","down"]}),
+            ),
+            Handler::FocusPane => (
+                "direction",
+                json!({"type":"string","enum":["left","right","up","down"]}),
+            ),
+            Handler::Scroll => (
+                "lines",
+                json!({"type":"integer","minimum":i32::MIN,"maximum":i32::MAX}),
+            ),
+            Handler::GotoTab => ("index", json!({"type":"integer","minimum":1})),
+            Handler::SendKey => ("key", json!({"type":"string"})),
+            _ => return None,
+        };
+        Some(
+            json!({"type":"object","properties":{key:schema},"required":[key],"additionalProperties":false}),
+        )
+    }
+
     /// Validate before dispatch: invalid arguments must not partially perform an action.
     pub fn accepts(&self, args: &Value) -> bool {
         let Some(object) = args.as_object() else {
@@ -256,17 +349,26 @@ pub fn run(s: &mut Workspace, name: &str, args: &Value, tx: &mut Tx) -> bool {
     true
 }
 
+pub fn declarations() -> Vec<rexrs::api::client::InspectResponseAction> {
+    SPECS
+        .iter()
+        .map(|s| {
+            let mut action = rexrs::api::client::InspectResponseAction::new(s.name)
+                .kind("client")
+                .title(s.title())
+                .category(s.category())
+                .keywords(s.title())
+                .repeats(s.repeats());
+            action.args = s.schema();
+            action
+        })
+        .collect()
+}
+
 /// Resolve once per file generation, including argument diagnostics. Invalid bindings
 /// are skipped at match time, so a lower valid action can still be selected.
 pub fn resolve(overrides: &rex_linux::keymap::Overrides) -> rex_linux::keymap::Resolved {
-    let actions: Vec<_> = SPECS
-        .iter()
-        .map(|s| {
-            rexrs::api::client::InspectResponseAction::new(s.name)
-                .kind("client")
-                .repeats(s.repeats())
-        })
-        .collect();
+    let actions = declarations();
     let mut map = rex_linux::keymap::resolve(&[rex_linux::keymap::defaults()], overrides, &actions);
     for binding in &map.bindings {
         let binding = &binding.binding;

@@ -504,16 +504,23 @@ fn shortcuts(s: &Workspace) -> El {
             );
         }
     }
-    let shortcuts = &s.settings.shortcut_file;
-    if !shortcuts.overrides.diagnostics.is_empty() {
+    let diagnostics = &s.effective_keymap().diagnostics;
+    if !diagnostics.is_empty() || s.model().keymap_error.is_some() {
         body = body.child(group("Problems"));
-        for (index, problem) in shortcuts.overrides.diagnostics.iter().enumerate() {
+        if let Some(error) = &s.model().keymap_error {
+            body = body.child(text(error).font(ui(11.5)).color(rgb(warning())).wrap());
+        }
+        for (index, problem) in diagnostics.iter().enumerate() {
             body = body.child(
-                text(format!("settings: {}", problem.message))
-                    .key(format!("shortcut-problem-{index}"))
-                    .font(ui(11.5))
-                    .color(rgb(warning()))
-                    .wrap(),
+                text(format!(
+                    "{}: {}",
+                    problem.source.as_deref().unwrap_or("keymap"),
+                    problem.message
+                ))
+                .key(format!("shortcut-problem-{index}"))
+                .font(ui(11.5))
+                .color(rgb(warning()))
+                .wrap(),
             );
         }
     }

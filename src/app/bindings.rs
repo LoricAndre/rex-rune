@@ -200,6 +200,8 @@ pub struct Context {
     pub panel: bool,
     pub focus: Option<String>,
     pub generation: u64,
+    pub server_revision: u64,
+    pub connected: bool,
 }
 
 #[derive(Default)]

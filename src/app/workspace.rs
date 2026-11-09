@@ -36,6 +36,8 @@ pub struct HostState {
     pub model: HostModel,
     /// The sessions this host's worker was last told to load views of.
     pub prefetch: HashSet<String>,
+    /// Settings-source diagnostic sets already announced for this host, across reconnects.
+    pub keymap_notices: HashSet<String>,
 }
 
 pub struct DividerDrag {
@@ -291,6 +293,9 @@ impl Workspace {
             index == self.active,
             self.declared_theme(),
         );
+        let _ = connection
+            .commands
+            .send(HostCommand::Keymap(Box::new(self.keymap_declaration())));
         let id = HostId(self.next_host);
         self.next_host += 1;
         let receiver = connection.wake.clone();
@@ -309,6 +314,7 @@ impl Workspace {
             connection,
             model,
             prefetch: HashSet::new(),
+            keymap_notices: HashSet::new(),
         }
     }
 
@@ -443,7 +449,15 @@ impl Workspace {
         if model.theme_declared {
             self.note_theme_declared();
         }
+        if index == self.active
+            && (self.hosts[index].model.keymap_revision != model.keymap_revision
+                || self.hosts[index].model.connected != model.connected
+                || old_session != model.selected)
+        {
+            self.bindings.sequence.clear();
+        }
         self.hosts[index].model = model;
+        self.announce_keymap_problems(index);
         if let Some(copy) = clipboard
             && self.window_focused
             && self.panel.is_none()
@@ -536,13 +550,74 @@ impl Workspace {
         }
     }
 
+    fn keymap_declaration(&self) -> rex_linux::connection::keymap::Declaration {
+        let overrides = self.settings.shortcut_file.overrides.clone();
+        rex_linux::connection::keymap::Declaration {
+            generation: self.keymap_generation,
+            request: rexrs::api::client::Keymap::new()
+                .actions(super::actions::declarations())
+                .server_actions("all")
+                .defaults([rex_linux::keymap::defaults()])
+                .overrides([overrides.layer.clone()]),
+            overrides,
+        }
+    }
+
+    pub fn effective_keymap(&self) -> &rex_linux::keymap::Resolved {
+        self.hosts[self.active]
+            .model
+            .keymap
+            .as_ref()
+            .filter(|k| self.model().connected && k.generation == self.keymap_generation)
+            .map(|k| &k.resolved)
+            .unwrap_or(&self.local_keymap)
+    }
+
+    fn announce_keymap_problems(&mut self, index: usize) {
+        let host = &mut self.hosts[index];
+        let Some(snapshot) = &host.model.keymap else {
+            return;
+        };
+        if !host.model.connected || snapshot.generation != self.keymap_generation {
+            return;
+        }
+        let mut problems: Vec<_> = snapshot
+            .resolved
+            .diagnostics
+            .iter()
+            .filter(|d| d.source.as_deref() == Some("settings"))
+            .map(|d| serde_json::to_string(d).expect("diagnostic"))
+            .collect();
+        problems.sort();
+        problems.dedup();
+        if problems.is_empty() {
+            return;
+        }
+        let count = problems.len();
+        if host.keymap_notices.insert(problems.join("\n")) {
+            self.notify(format!(
+                "{count} shortcut problem(s) on {}; see Settings → Shortcuts.",
+                self.settings.hosts[index].label
+            ));
+        }
+    }
+
     pub fn reload_shortcuts(&mut self) {
+        let previous = self.settings.shortcut_file.overrides.clone();
         if !self.settings.shortcut_file.reload(&self.settings_path) {
+            return;
+        }
+        if previous == self.settings.shortcut_file.overrides {
             return;
         }
         self.local_keymap = super::actions::resolve(&self.settings.shortcut_file.overrides);
         self.keymap_generation += 1;
         self.bindings.sequence.clear();
+        // Disconnected workers retain the declaration for their next successful connect too.
+        let declaration = self.keymap_declaration();
+        for index in 0..self.hosts.len() {
+            self.send(index, HostCommand::Keymap(Box::new(declaration.clone())));
+        }
         if let Some(notice) = self.settings.shortcut_file.notice.take() {
             self.notify(notice);
         }
@@ -900,6 +975,7 @@ impl Workspace {
     }
 
     pub fn activate_host(&mut self, host: usize, tx: &mut Tx) {
+        self.bindings.sequence.clear();
         self.observe_navigation();
         self.navigation.cancel();
         self.settings.hosts[host].collapsed = false;

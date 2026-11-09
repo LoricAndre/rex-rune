@@ -46,12 +46,20 @@ fn dispatch(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx, global_only: bool) ->
         panel: s.panel.is_some(),
         focus: tx.focused().map(str::to_owned),
         generation: s.keymap_generation,
+        server_revision: s.model().keymap_revision,
+        connected: s.model().connected,
     };
     if s.bindings.context.as_ref() != Some(&context) {
         s.bindings.sequence.clear();
         s.bindings.context = Some(context);
     }
-    let map = &s.local_keymap;
+    let model = &s.hosts[s.active].model;
+    let map = model
+        .keymap
+        .as_ref()
+        .filter(|k| model.connected && k.generation == s.keymap_generation)
+        .map(|k| &k.resolved)
+        .unwrap_or(&s.local_keymap);
     let step = s.bindings.sequence.advance(map, input, |i| {
         let binding = &map.bindings[i].binding;
         actions::find(&binding.action).is_some_and(|spec| {

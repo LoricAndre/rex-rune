@@ -33,6 +33,80 @@ fn ctrl(key: Key) -> KeyEvent {
 }
 
 #[test]
+fn effective_map_swaps_by_host_and_generation_and_preserves_problems() {
+    let mut ws = workspace_hosts(2);
+    let overrides = Overrides::parse(&json!([{"keys":"ctrl+b>","action":"client.settings"}]));
+    for (index, action) in [(0, "client.sidebar.toggle"), (1, "client.search")] {
+        let reply = rexrs::api::client::KeymapResponse {
+            bindings: vec![rexrs::api::client::Binding::new(["ctrl+j"], action)],
+            ..Default::default()
+        };
+        ws.hosts[index].model.connected = true;
+        ws.hosts[index].model.keymap = Some(std::sync::Arc::new(
+            rex_linux::connection::keymap::Snapshot {
+                generation: 0,
+                resolved: rex_linux::keymap::Resolved::from_server(&reply, &overrides),
+                reply,
+            },
+        ));
+    }
+    assert_eq!(
+        ws.effective_keymap().bindings[0].binding.action,
+        "client.sidebar.toggle"
+    );
+    assert_eq!(ws.effective_keymap().diagnostics.len(), 1);
+    ws.active = 1;
+    assert_eq!(
+        ws.effective_keymap().bindings[0].binding.action,
+        "client.search"
+    );
+    ws.keymap_generation = 1;
+    assert_eq!(ws.effective_keymap(), &ws.local_keymap);
+    ws.keymap_generation = 0;
+    ws.hosts[1].model.connected = false;
+    assert_eq!(ws.effective_keymap(), &ws.local_keymap);
+}
+
+#[test]
+fn settings_diagnostic_sets_toast_once_per_host_never_file_or_linux() {
+    let mut ws = workspace();
+    capture_host(&mut ws, 0);
+    let problem = |source: &str| rexrs::api::client::Diagnostic {
+        source: Some(source.into()),
+        message: "test diagnostic".into(),
+        severity: "warning".into(),
+        ..Default::default()
+    };
+    for (diagnostics, expected) in [
+        (vec![problem("linux"), problem("init.lua:1")], 0),
+        (vec![problem("settings")], 1),
+        (vec![], 1),
+        (vec![problem("settings")], 1),
+    ] {
+        let reply = rexrs::api::client::KeymapResponse {
+            diagnostics,
+            ..Default::default()
+        };
+        {
+            let mut model = ws.hosts[0].connection.model.lock().unwrap();
+            model.connected = true;
+            model.keymap = Some(std::sync::Arc::new(
+                rex_linux::connection::keymap::Snapshot {
+                    generation: 0,
+                    resolved: rex_linux::keymap::Resolved::from_server(
+                        &reply,
+                        &Overrides::default(),
+                    ),
+                    reply,
+                },
+            ));
+        }
+        ws.sync(0, &mut rune::Tx::default());
+        assert_eq!(ws.notices.len(), expected);
+    }
+}
+
+#[test]
 fn unbound_ctrl_tab_press_and_release_are_forwarded() {
     let (mut ws, _) = tabbed_workspace("single");
     overrides(&mut ws, json!([{"keys":"ctrl+tab","action":null}]));

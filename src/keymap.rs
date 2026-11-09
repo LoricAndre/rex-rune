@@ -541,7 +541,7 @@ pub struct Resolved {
 }
 impl Resolved {
     /// Do not normalize server keys here: prefixes must echo them verbatim.
-    pub fn from_server(reply: &rexrs::api::client::KeymapResponse) -> Self {
+    pub fn from_server(reply: &rexrs::api::client::KeymapResponse, overrides: &Overrides) -> Self {
         Self {
             bindings: reply
                 .bindings
@@ -549,7 +549,12 @@ impl Resolved {
                 .cloned()
                 .map(ResolvedBinding::from)
                 .collect(),
-            diagnostics: reply.diagnostics.clone(),
+            diagnostics: overrides
+                .diagnostics
+                .iter()
+                .chain(&reply.diagnostics)
+                .cloned()
+                .collect(),
         }
     }
 }
@@ -617,6 +622,9 @@ fn resolve_layers(
             if !is_default
                 && !actions.is_empty()
                 && binding.action != "client.key.forward"
+                && ["client.", "session.", "pane."]
+                    .iter()
+                    .any(|prefix| binding.action.starts_with(prefix))
                 && !actions.iter().any(|a| a.name == binding.action)
             {
                 diagnostics.push(problem(
@@ -941,6 +949,23 @@ mod tests {
         assert_eq!(reversed.diagnostics.len(), 1);
         assert_eq!(reversed.diagnostics[0].key.as_deref(), Some("ctrl+b c"));
         assert_eq!(reversed.diagnostics[0].source.as_deref(), Some("settings"));
+    }
+
+    #[test]
+    fn server_reply_preserves_local_parse_problems_and_offline_actions_defer_to_server() {
+        let overrides = Overrides::parse(&json!([
+            {"keys":"ctrl+b>","action":"client.settings"},
+            {"keys":"ctrl+l","action":"clear_screen"},
+            {"keys":"ctrl+j","action":"com.example.clear"}
+        ]));
+        let actions = [InspectResponseAction::new("client.settings")];
+        let local = resolve(&[defaults()], &overrides, &actions);
+        assert_eq!(local.diagnostics, overrides.diagnostics);
+        let reply = rexrs::api::client::KeymapResponse::default();
+        assert_eq!(
+            Resolved::from_server(&reply, &overrides).diagnostics,
+            overrides.diagnostics
+        );
     }
 
     #[test]

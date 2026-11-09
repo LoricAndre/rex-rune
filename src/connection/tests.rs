@@ -1,4 +1,6 @@
 use super::*;
+#[path = "keymap_tests.rs"]
+mod keymap_tests;
 #[path = "navigation_tests.rs"]
 mod navigation_tests;
 use futures_util::{SinkExt, StreamExt};

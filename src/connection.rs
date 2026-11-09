@@ -81,6 +81,8 @@ fn parse_font_size(value: &str) -> std::result::Result<f32, String> {
     Ok(size.clamp(8., 48.))
 }
 
+pub mod keymap;
+
 pub enum Command {
     Selection(crate::terminal::selection::Input),
     Key(Value),
@@ -174,6 +176,9 @@ pub struct HostModel {
     pub status: String,
     pub notice: Option<String>,
     pub client_id: String,
+    pub keymap: Option<Arc<keymap::Snapshot>>,
+    pub keymap_error: Option<String>,
+    pub keymap_revision: u64,
     pub protocol: ProtocolStats,
     pub sessions: Vec<session::Session>,
     pub selected: Option<String>,
@@ -343,6 +348,7 @@ impl HostModel {
 }
 
 pub enum HostCommand {
+    Keymap(Box<keymap::Declaration>),
     Visibility(bool),
     /// Take size ownership of these blocks, as the native Rex clients do when they attach or
     /// come forward. Failures are silent: another client may have closed a block meanwhile.
@@ -562,6 +568,8 @@ impl Shared {
             m.connected = connected;
             if !connected {
                 m.clipboard = None;
+                m.keymap = None;
+                m.keymap_revision += 1;
             }
             for terminal in m.terminals.values() {
                 terminal
@@ -1038,7 +1046,19 @@ async fn handle_event(
     shared: &Shared,
     workers: &mut HashMap<String, PaneWorker>,
     state: &mut ControlState,
+    keymap: Option<&keymap::Declaration>,
 ) -> Result<()> {
+    // Config-wide events have no session sequence. Do not broaden includes().
+    if event.name == "keymap_changed" {
+        let refresh = {
+            let m = shared.model.lock().expect("host model");
+            m.connected && keymap::changed(m.keymap.as_deref(), &event.payload)
+        };
+        if refresh && let Some(declaration) = keymap {
+            keymap::refresh(control, shared, declaration).await;
+        }
+        return Ok(());
+    }
     if !state.includes(&event) {
         return Ok(());
     }
@@ -1183,6 +1203,7 @@ async fn run_host(
     let mut workers = HashMap::<String, PaneWorker>::new();
     let mut retry = 0;
     let mut prefetch = prefetch::Prefetch::default();
+    let mut keymap: Option<Box<keymap::Declaration>> = None;
     // An ssh:// host is reached through a forward of its Rex socket; every attempt opens a
     // fresh one, and its end is a disconnect like any other.
     let ssh = crate::ssh::Target::parse(&configured)?;
@@ -1262,9 +1283,10 @@ async fn run_host(
                 refresh(&mut control, shared, &mut state, id).await?;
             }
             let queued: Vec<_> = control.drain_events().collect();
-            for event in queued { handle_event(event, &mut control, shared, &mut workers, &mut state).await?; }
+            for event in queued { handle_event(event, &mut control, shared, &mut workers, &mut state, keymap.as_deref()).await?; }
             state.prune(&shared.model.lock().expect("host model"));
             shared.status("Connected", true);
+            if let Some(declaration) = &keymap { keymap::refresh(&mut control, shared, declaration).await; }
             reconcile(&endpoint, shared, &sender, &mut workers);
             for (block, worker) in &workers {
                 if let Some((cols, rows, w, h)) = worker.size { resize(&mut control, &worker.session, block, cols, rows, w, h).await?; }
@@ -1298,7 +1320,7 @@ async fn run_host(
                         }
                     }
                     event = control.next_event() => {
-                        handle_event(event?, &mut control, shared, &mut workers, &mut state).await?;
+                        handle_event(event?, &mut control, shared, &mut workers, &mut state, keymap.as_deref()).await?;
                         state.prune(&shared.model.lock().expect("host model"));
                         reconcile(&endpoint, shared, &sender, &mut workers);
                         declare_themes(&mut control, shared, &mut state, &workers, theme.as_ref()).await;
@@ -1309,6 +1331,11 @@ async fn run_host(
                         let Ok(command) = command else { control.close().await?; return Ok(true); };
                         if matches!(command, HostCommand::Shutdown) { control.close().await?; return Ok(true); }
                         if matches!(command, HostCommand::Reconnect) { return Ok(false); }
+                        if let HostCommand::Keymap(new) = command {
+                            keymap::refresh(&mut control, shared, &new).await;
+                            keymap = Some(new);
+                            continue;
+                        }
                         if let HostCommand::PrefetchViews(sessions) = command { prefetch.set_eligible(sessions); continue; }
                         if let HostCommand::Upload { session, block, files } = command {
                             if let Err(error) = upload(&mut control, shared, &endpoint, &session, &block, files).await {
@@ -1369,6 +1396,7 @@ async fn run_host(
                     Ok(HostCommand::Visibility(visible)) => shared.update(|m|m.visible=visible),
                     Ok(HostCommand::PrefetchViews(sessions)) => prefetch.set_eligible(sessions),
                     Ok(HostCommand::Theme(new)) => theme = new,
+                    Ok(HostCommand::Keymap(new)) => keymap = Some(new),
                     Ok(HostCommand::Ticket { reply, .. }) => { let _ = reply.send(Err("Host is reconnecting".into())); }
                     Ok(HostCommand::Claim { .. }) => {}
                     Ok(HostCommand::Terminal { block, command: Command::Selection(input), .. }) => {
@@ -1391,6 +1419,7 @@ async fn run_host(
                 HostCommand::Visibility(visible) => shared.update(|m| m.visible = visible),
                 HostCommand::PrefetchViews(sessions) => prefetch.set_eligible(sessions),
                 HostCommand::Theme(new) => theme = new,
+                HostCommand::Keymap(new) => keymap = Some(new),
                 HostCommand::Ticket { reply, .. } => {
                     let _ = reply.send(Err("Host is reconnecting".into()));
                 }
@@ -1739,6 +1768,7 @@ async fn handle_command(
         HostCommand::Reconnect
         | HostCommand::Shutdown
         | HostCommand::PrefetchViews(_)
+        | HostCommand::Keymap(_)
         | HostCommand::Upload { .. } => {
             unreachable!()
         }
