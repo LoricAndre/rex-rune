@@ -823,7 +823,7 @@ fn row_pass(
         }
         if !cells[start].text.starts_with('\u{10eeee}') {
             let width = (end - start) as f32 * cw;
-            let shape = decoration_shape(&style, width, ch);
+            let shape = decoration_shape(&style, width, ch, m.px);
             if !shape.is_empty() {
                 row = row.child(
                     canvas(shape)
@@ -843,19 +843,25 @@ fn same_decoration(a: &RunStyle, b: &RunStyle) -> bool {
 }
 
 /// A run's underline (single, double, curly, dotted or dashed) and overline, `width` wide in a
-/// cell `height` tall.
-fn decoration_shape(style: &RunStyle, width: f32, height: f32) -> Shape {
+/// cell `height` tall, drawn at `px` device pixels per point.
+fn decoration_shape(style: &RunStyle, width: f32, height: f32, px: f32) -> Shape {
     let mut shape = Shape::new();
     let color = rgb(style.underline_color.unwrap_or(style.fg));
-    let y = height - 2.;
+    // Straight lines are one point thick in whole device pixels, as sprites' are, and start
+    // on a whole device pixel `top` points down the cell.
+    let light = px.round().max(1.);
+    let thick = light / px;
+    let centre = |top: f32| ((top * px).round() + light / 2.) / px;
+    let y = centre(height - 2.);
     match style.underline {
         Underline::Single => {
-            shape = shape.line([0., y], [width, y], 1., LineCap::Butt, color);
+            shape = shape.line([0., y], [width, y], thick, LineCap::Butt, color);
         }
         Underline::Double => {
+            let upper = y - (2. * px).round() / px;
             shape = shape
-                .line([0., y - 2.], [width, y - 2.], 1., LineCap::Butt, color)
-                .line([0., y], [width, y], 1., LineCap::Butt, color);
+                .line([0., upper], [width, upper], thick, LineCap::Butt, color)
+                .line([0., y], [width, y], thick, LineCap::Butt, color);
         }
         Underline::Curly => {
             // Half waves 4 points long, alternately below and above the line.
@@ -867,7 +873,7 @@ fn decoration_shape(style: &RunStyle, width: f32, height: f32) -> Shape {
                 path = path.quad_to([(x + end) / 2., y + bend], [end, y]);
                 (x, below) = (end, !below);
             }
-            shape = shape.stroke_path(&path, 1., LineCap::Round, color);
+            shape = shape.stroke_path(&path, thick, LineCap::Round, color);
         }
         Underline::Dotted => {
             let mut x = 0.;
@@ -879,14 +885,21 @@ fn decoration_shape(style: &RunStyle, width: f32, height: f32) -> Shape {
         Underline::Dashed => {
             let mut x = 0.;
             while x < width {
-                shape = shape.line([x, y], [(x + 4.).min(width), y], 1., LineCap::Butt, color);
+                shape = shape.line(
+                    [x, y],
+                    [(x + 4.).min(width), y],
+                    thick,
+                    LineCap::Butt,
+                    color,
+                );
                 x += 7.;
             }
         }
         _ => {}
     }
     if style.overline {
-        shape = shape.line([0., 1.], [width, 1.], 1., LineCap::Butt, rgb(style.fg));
+        let y = centre(0.5);
+        shape = shape.line([0., y], [width, y], thick, LineCap::Butt, rgb(style.fg));
     }
     shape
 }
@@ -1015,7 +1028,7 @@ pub fn grid(key: &str, term: &Term, m: &Metrics, look: GridLook) -> El {
                 search: frame
                     .search
                     .as_ref()
-                    .map(|search| search.on_row(y - start))
+                    .map(|search| search.on_row(y))
                     .unwrap_or_default(),
             };
             let mut h = DefaultHasher::new();
@@ -1422,6 +1435,64 @@ mod tests {
         rt.frame(0.);
         let help: Vec<String> = rt.elements().into_iter().filter_map(|e| e.help).collect();
         assert_eq!(help, ["Ctrl+click to open https://evil.example/"]);
+    }
+
+    #[test]
+    fn search_highlights_follow_their_rows_when_the_pane_clips_a_taller_terminal() {
+        use rex_linux::connection::{Connection, TerminalSender};
+        let mut terminal = ghostty_vt::Terminal::new(ghostty_vt::TerminalOptions {
+            cols: 12,
+            rows: 5,
+            ..Default::default()
+        })
+        .unwrap();
+        terminal.vt_write(b"needle\r\na\r\nb\r\nc\r\nxx needle");
+        let mut search = rex_linux::terminal::search::Controller::default();
+        search.set_needle(Some(&terminal), "needle".into()).unwrap();
+        while search.update(&terminal).unwrap() {}
+        let mut frame = rex_linux::terminal::Renderer::new()
+            .unwrap()
+            .frame(&terminal)
+            .unwrap();
+        frame.search = search.results(&terminal).unwrap();
+        assert_eq!(frame.search.as_ref().unwrap().matches.len(), 2);
+
+        let m = metrics(15.);
+        let mut term = Term::new(Connection {
+            model: Default::default(),
+            commands: TerminalSender::new(flume::unbounded().0, "s".into(), "b".into()),
+            wake: flume::unbounded().1,
+        });
+        term.frame = Some(Arc::new(frame));
+        term.rect = [0., 0., 200., 2. * m.cell.1];
+        assert_eq!(term.display_row(m.cell), 3, "rows 3 and 4 are on screen");
+        let colors = TermColors::default();
+        let view = |term: &Term, _: &mut Cx<Term>| {
+            let look = GridLook {
+                cursor: None,
+                ime: false,
+                colors: TermColors::default(),
+            };
+            grid("g", term, &metrics(15.), look)
+        };
+        let mut rt = Runtime::new(term, view, (200., 100.), Env::default());
+        rt.frame(0.);
+        let highlight = |alpha| rgb(colors.search_match).alpha(alpha);
+        let marks: Vec<_> = rt
+            .elements()
+            .into_iter()
+            .filter(|e| e.fill == highlight(0.55) || e.fill == highlight(0.25))
+            .map(|e| {
+                let [x, y, w, _] = e.rect;
+                let cells = [x / m.cell.0, y / m.cell.1, w / m.cell.0].map(f32::round);
+                (cells, e.fill == highlight(0.55))
+            })
+            .collect();
+        assert_eq!(
+            marks,
+            [([3., 1., 6.], true)],
+            "only the selected match on row 4, the second row on screen; the one on row 0 is clipped"
+        );
     }
 
     /// A frame of default text, an explicit red background and inverse video, on a server
