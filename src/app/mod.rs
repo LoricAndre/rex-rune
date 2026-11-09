@@ -176,6 +176,8 @@ fn poll(s: &mut Workspace, _: f64, tx: &mut Tx) -> bool {
 }
 
 #[cfg(test)]
+mod physical_input_tests;
+#[cfg(test)]
 mod tests;
 
 pub(crate) fn placeholder() -> Workspace {
