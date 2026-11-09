@@ -3499,6 +3499,75 @@ fn an_endpoint_by_hand_takes_ssh_and_rejects_duplicates() {
 }
 
 #[test]
+fn the_search_field_keeps_clicks_from_a_program_that_tracks_the_mouse() {
+    use rex_linux::connection::{Command, Connection, TerminalSender};
+    let (mut ws, _rx) = tabbed_workspace("single");
+    let (sender, sent) = flume::unbounded();
+    let connection = Connection {
+        model: Default::default(),
+        commands: TerminalSender::new(sender, "s".into(), "block:a".into()),
+        wake: flume::unbounded().1,
+    };
+    let mut terminal = ghostty_vt::Terminal::new(ghostty_vt::TerminalOptions {
+        cols: 80,
+        rows: 24,
+        ..Default::default()
+    })
+    .unwrap();
+    terminal.vt_write(b"\x1b[?1000h\x1b[?1006h");
+    {
+        let mut m = connection.model.lock().unwrap();
+        m.connected = true;
+        m.control_connected = true;
+        m.frame = Some(std::sync::Arc::new(
+            rex_linux::terminal::Renderer::new()
+                .unwrap()
+                .frame(&terminal)
+                .unwrap(),
+        ));
+    }
+    let key = ws.term_key("block:a");
+    let mut term = super::term::Term::new(connection);
+    term.refresh();
+    ws.terminals.insert(key.clone(), term);
+    let mut rt = runtime(ws);
+    rt.frame(1. / 60.);
+    // Presses and releases; a program that asks for every move still hears the pointer pass.
+    let clicks = move || {
+        sent.try_iter()
+            .filter(|c| {
+                matches!(
+                    c,
+                    HostCommand::Terminal {
+                        command: Command::Mouse(m),
+                        ..
+                    } if m["action"] != "motion"
+                )
+            })
+            .count()
+    };
+    ctrl_shift(&mut rt, 'f');
+    assert!(has(&rt, "search:block:a"));
+    click(&mut rt, "search-field:block:a");
+    assert_eq!(clicks(), 0, "a click on the field isn't the program's");
+    assert!(
+        focused(&rt).is_some_and(|path| path.contains("search-field:block:a")),
+        "and the field keeps the keyboard"
+    );
+
+    // A click on the terminal is, and takes the keyboard back there.
+    click(&mut rt, "grid:block:a");
+    assert_eq!(
+        clicks(),
+        2,
+        "a click on the terminal is: press, then release"
+    );
+    assert_eq!(focused(&rt), None, "the terminal has the keyboard");
+    assert!(has(&rt, "search:block:a"), "the search stays open");
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
 fn ctrl_shift_f_searches_the_focused_terminal_without_typing_into_it() {
     use rex_linux::connection::{Command, Connection, TerminalSender};
     let (mut ws, _rx) = tabbed_workspace("single");
