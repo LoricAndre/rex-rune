@@ -588,6 +588,41 @@ fn progress_goes_when_another_process_of_the_same_name_takes_the_foreground() {
 }
 
 #[test]
+fn progress_goes_with_the_process_not_just_its_name() {
+    use activity::{BlockEvent, TerminalProgress::Set};
+    let mut model = HostModel::default();
+    let python = |pids: &[u64]| BlockEvent::Process {
+        name: Some("python".into()),
+        pids: pids.to_vec(),
+    };
+    let report = BlockEvent::Progress(Some(Set(Some(42))));
+    model.apply_block_event("s", "b".into(), python(&[11, 1]));
+    model.apply_block_event("s", "b".into(), report.clone());
+
+    // Rex repeats `process_changed` when the process only moves directory, and to each client
+    // that starts receiving the terminal.
+    model.apply_block_event("s", "b".into(), python(&[11, 1]));
+    assert_eq!(
+        model.progress.get("b"),
+        Some(&Set(Some(42))),
+        "same process"
+    );
+
+    // A child in the foreground leaves the program that reported running beneath it.
+    model.apply_block_event("s", "b".into(), python(&[12, 11, 1]));
+    assert_eq!(model.progress.get("b"), Some(&Set(Some(42))), "same parent");
+
+    // Back to the parent: the foreground process that may have reported is gone.
+    model.apply_block_event("s", "b".into(), python(&[11, 1]));
+    assert!(model.progress.is_empty(), "the child ended");
+
+    // Another run of the same program, seen without the shell between them.
+    model.apply_block_event("s", "b".into(), report);
+    model.apply_block_event("s", "b".into(), python(&[13, 1]));
+    assert!(model.progress.is_empty(), "the job was replaced");
+}
+
+#[test]
 fn program_names_prefer_the_script_and_drop_login_dashes() {
     let name = |v: Value| activity::program_name(&v);
     assert_eq!(
