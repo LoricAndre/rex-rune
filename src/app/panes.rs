@@ -3,15 +3,21 @@
 //! with a single pane draws it edge to edge instead.
 //! Cards spring when the layout changes; the terminal grid inside never animates.
 use super::{
+    activity::{pane_activity, progress_bar, tab_progress, tab_word},
+    input::search_key,
     panel::{Form, Intent, PanelKind},
     term::{self, CursorLook, GridLook, Metrics, MouseGesture, PADDING},
     theme::*,
     widgets::{Pill, pill},
-    workspace::{DividerDrag, Workspace},
+    workspace::{DividerDrag, HostId, Workspace},
 };
 use rex_linux::{connection::Command, layout, terminal::selection::Phase as SelectionPhase};
 use rexrs::api::session::Window;
-use rune::{Cursor, El, Phase, PointerButton, PointerEvent, Tx, WheelEvent, col, el, row, text};
+use rune::{
+    Cursor, El, KeyEvent, Phase, PointerButton, PointerEvent, TextEdit, Tx, WheelEvent, col, el,
+    row, text,
+};
+use rune_kit::TextInput;
 
 /// The area cards are laid out in, in the pane area's own points.
 fn inner(s: &Workspace) -> [f32; 4] {
@@ -69,7 +75,21 @@ pub fn full_bleed(window: &Window) -> bool {
 }
 
 fn header(s: &Workspace, block: &str, width: f32, focused: bool, m: &Metrics) -> El {
-    let label = s.block_label(block);
+    let label = s.pane_name(block);
+    // The tab's words for this pane alone; Done and Bell stay with the tab, which they latch.
+    let activity = pane_activity(s.model(), block);
+    let word = tab_word(&activity, false, false)
+        .filter(|_| s.settings.notifications.show_in_tabs)
+        .map(|(word, colour)| {
+            let w = text(word)
+                .key(format!("pane-word:{block}"))
+                .font(medium(11.))
+                .color(rgb(colour));
+            match activity.msg.clone() {
+                Some(msg) => w.help(msg),
+                None => w,
+            }
+        });
     let id = block.to_owned();
     let menu_id = block.to_owned();
     let h = row()
@@ -98,10 +118,23 @@ fn header(s: &Workspace, block: &str, width: f32, focused: bool, m: &Metrics) ->
                 .truncate()
                 .help_when_truncated(label)
                 .shrink(),
-        )
-        .child(el().grow(1.));
-    match strip(s, block, width, m) {
+        );
+    // The label truncates first; the word always stays whole.
+    let h = match word {
+        Some(word) => h.child(word),
+        None => h,
+    }
+    .child(el().grow(1.));
+    let h = match strip(s, block, width, m) {
         Some(strip) => h.child(strip),
+        None => h,
+    };
+    match tab_progress(&activity).filter(|_| s.settings.notifications.show_in_tabs) {
+        Some(progress) => h.child(progress_bar(
+            format!("pane-progress:{block}"),
+            progress,
+            14.,
+        )),
         None => h,
     }
 }
@@ -229,7 +262,9 @@ fn pane_card(
     }
     let c = match s.terminals.get(&key) {
         Some(t) => {
-            let cursor = if input && s.window_focused {
+            let keyboard =
+                input && s.window_focused && !t.search.as_ref().is_some_and(|edit| edit.focused);
+            let cursor = if keyboard {
                 CursorLook::Block
             } else {
                 CursorLook::Hollow
@@ -237,7 +272,7 @@ fn pane_card(
             let colors = s.term_colors();
             let look = GridLook {
                 cursor: Some(cursor),
-                ime: input && s.window_focused,
+                ime: keyboard,
                 colors,
             };
             let (k1, k2, k3) = (key.clone(), key.clone(), key.clone());
@@ -447,6 +482,10 @@ fn pane_card(
                     true
                 })
                 .child(term::grid(&format!("g{block}"), t, m, look));
+            let grid = match &t.search {
+                Some(edit) => grid.child(search_field(block, &key, edit, t)),
+                None => grid,
+            };
             let top = if bleed { PADDING } else { 0. };
             // The card draws a background of its own colour, edge included; any other sits
             // inside the card's border, never over it.
@@ -495,6 +534,50 @@ fn pane_card(
         Some(strip) => c.child(strip.pin(None, Some(8.), Some(12.), None)),
         None => c,
     }
+}
+
+/// The search field over a terminal's top-right corner, with the selected match's place among
+/// all matches, newest first.
+fn search_field(block: &str, key: &(HostId, String), edit: &TextEdit, t: &term::Term) -> El {
+    let results = t.frame.as_ref().and_then(|f| f.search.as_ref());
+    let status = match results {
+        _ if edit.text.is_empty() => "esc".to_owned(),
+        Some(r) if r.total == 0 => "No matches".to_owned(),
+        Some(r) => format!("{}/{}", r.index.map_or(0, |i| i + 1), r.total),
+        None => String::new(),
+    };
+    let (k1, k2, k3) = (key.clone(), key.clone(), key.clone());
+    row()
+        .key(format!("search:{block}"))
+        .w(280.)
+        .h(34.)
+        .px(2.)
+        .center_y()
+        .radius(8.)
+        .continuous_corners()
+        .fill(rgb(popover()).alpha(0.95))
+        .border(1., white(0.12))
+        .box_shadow(shadow(0., 4., 16., black(0.45)))
+        .pin(None, Some(6.), Some(6.), None)
+        .child(
+            TextInput::new(edit)
+                .placeholder("Search terminal")
+                .leading_icon(&SEARCH)
+                .leading_icon_size(14.)
+                .text_style(ui(13.))
+                .height(32.)
+                .plain()
+                .trailing(text(status).font(medium(10.5)).color(rgb(muted())))
+                .on_edit(move |s: &mut Workspace| s.search_input(&k1))
+                .on_change(move |s: &mut Workspace, _: &mut Tx| s.search_changed(&k2))
+                .on_key(move |s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx| {
+                    search_key(s, &k3, ev, tx)
+                })
+                .width(None)
+                .build(kit())
+                .key(format!("search-field:{block}"))
+                .w_full(),
+        )
 }
 
 fn empty(s: &Workspace) -> El {
@@ -572,8 +655,12 @@ fn target_block(s: &Workspace) -> Option<String> {
     .flatten()
 }
 
-pub fn area(s: &Workspace) -> El {
-    let m = term::metrics(s.settings.font_size);
+/// `px` is device pixels per point, for drawing terminal box drawing on whole pixels.
+pub fn area(s: &Workspace, px: f32) -> El {
+    let m = Metrics {
+        px,
+        ..term::metrics(s.settings.font_size)
+    };
     let mut area = el()
         .key("panes")
         .grow(1.)

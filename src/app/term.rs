@@ -2,23 +2,28 @@
 //! and the cell grid, drawn on a fixed column grid.
 use super::{
     keys,
+    sprites::Sprite,
     theme::{MIDNIGHT, Palette, mix, rgb},
 };
+use ghostty_vt::style::Underline;
 use rex_linux::{
     connection::{Command, Connection},
     links::Link,
     terminal::{
-        Cell, Frame, SelectionUnit,
+        Cell, CursorShape, Frame, SelectionUnit,
         graphics::{Image as TermImage, ImagePixels},
     },
     terminal_theme::{TerminalTheme, is_light},
 };
-use rune::{El, Family, Mods, Span, TextStyle, el, memo, rich, text};
+use rune::{
+    El, Family, LineCap, Mods, Path, Shape, Span, TextEdit, TextStyle, canvas, el, memo, rich, text,
+};
 use serde_json::json;
 use std::{
     collections::HashMap,
     hash::{DefaultHasher, Hash, Hasher},
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 pub const PADDING: f32 = 8.;
@@ -29,6 +34,9 @@ pub struct Term {
     pub last_size: Option<(u16, u16)>,
     /// The grid's rect in window points (inside the padding).
     pub rect: [f32; 4],
+    /// While this client owns a live pane, its frames stay hidden until one arrives at this
+    /// grid's size.
+    initial_size: InitialSize,
     pub selection: Option<(usize, usize)>,
     selection_anchor: Option<(usize, usize)>,
     selection_unit: SelectionUnit,
@@ -49,6 +57,8 @@ pub struct Term {
     pub link: Option<(usize, Link)>,
     /// The link a Ctrl+press went down on; releasing over the same link opens it.
     pub pressed_link: Option<String>,
+    /// The search field over the grid, while this terminal is being searched.
+    pub search: Option<TextEdit>,
 }
 
 #[derive(Clone, Copy)]
@@ -56,10 +66,78 @@ pub struct MouseGesture {
     pub button: &'static str,
 }
 
+/// The first frame of a pane is at whatever size the server last had for it; the resize this
+/// client sends only lands a moment later. During each uninterrupted live ownership epoch, an
+/// owner hides frames until one matches its first grid size. A non-owner never resizes, so its
+/// frames may never match and are drawn as they come.
+/// A frame at the asked size may never come (the server clamps or drops a resize), so the
+/// wait is bounded: after this long the frame is drawn as it is, which is at worst the brief
+/// flash of a stale size the gate exists to avoid.
+const INITIAL_SIZE_PATIENCE: Duration = Duration::from_millis(500);
+
+#[derive(Default)]
+struct InitialSize {
+    expected: Option<(u16, u16)>,
+    ready: bool,
+    live_owner: bool,
+    /// When the wait began, for the bound above.
+    since: Option<Instant>,
+}
+
+impl InitialSize {
+    fn transition(&mut self, status: &Status) {
+        let live_owner = status.live && status.owner;
+        if live_owner != self.live_owner {
+            self.expected = None;
+            self.ready = false;
+            self.since = None;
+            self.live_owner = live_owner;
+        }
+    }
+
+    fn layout(&mut self, size: (u16, u16), frame: Option<(u16, u16)>) {
+        if !self.live_owner || self.ready {
+            return;
+        }
+        self.expected = Some(size);
+        self.since.get_or_insert_with(Instant::now);
+        self.observe(frame);
+    }
+
+    fn observe(&mut self, frame: Option<(u16, u16)>) {
+        if self.expected.is_some() && self.expected == frame {
+            self.expected = None;
+            self.since = None;
+            self.ready = true;
+        }
+    }
+
+    fn renders(&self, status: &Status) -> bool {
+        self.renders_at(status, Instant::now())
+    }
+
+    fn renders_at(&self, status: &Status, now: Instant) -> bool {
+        !status.live
+            || !status.owner
+            || (self.live_owner && self.ready)
+            || self.deadline().is_some_and(|deadline| now >= deadline)
+    }
+
+    /// When the wait gives up, while one is on.
+    fn deadline(&self) -> Option<Instant> {
+        self.since
+            .filter(|_| self.live_owner && !self.ready)
+            .map(|since| since + INITIAL_SIZE_PATIENCE)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub struct Metrics {
     pub cell: (f32, f32),
     pub style: TextStyle,
+    /// Device pixels per point the grid is drawn at, so box drawing lands on whole pixels:
+    /// 1 from `metrics`, the window's own in the pane view.
+    pub px: f32,
 }
 
 const FEATURES: &str = "'liga' 0, 'calt' 0, 'clig' 0, 'kern' 0";
@@ -74,6 +152,7 @@ pub fn metrics(size: f32) -> Metrics {
     Metrics {
         cell: (width, (size * 1.4).ceil()),
         style,
+        px: 1.,
     }
 }
 
@@ -94,6 +173,7 @@ impl Term {
             frame,
             last_size: None,
             rect: [0.; 4],
+            initial_size: InitialSize::default(),
             selection: None,
             selection_anchor: None,
             selection_unit: SelectionUnit::Cell,
@@ -109,14 +189,22 @@ impl Term {
             images: HashMap::new(),
             link: None,
             pressed_link: None,
+            search: None,
         }
     }
 
     pub fn refresh(&mut self) {
-        let (frame, generation) = {
-            let model = self.connection.model.lock().expect("terminal model");
-            (model.frame.clone(), model.restore_generation)
+        let (frame, generation, notice) = {
+            let mut model = self.connection.model.lock().expect("terminal model");
+            (
+                model.frame.clone(),
+                model.restore_generation,
+                model.notice.take(),
+            )
         };
+        if notice.is_some() {
+            self.notice = notice;
+        }
         if generation != self.restore_generation {
             self.selection = None;
             self.selection_anchor = None;
@@ -137,6 +225,8 @@ impl Term {
                 }
             }
         }
+        self.initial_size
+            .observe(frame.as_ref().map(|frame| (frame.cols, frame.rows)));
         self.frame = frame;
         // The same cell may hold a different link, or none, after output.
         if let Some((index, _)) = self.link.take() {
@@ -172,6 +262,19 @@ impl Term {
                 .iter()
                 .any(|image| Arc::as_ptr(&image.pixels) as usize == *key)
         });
+    }
+
+    fn display_frame(&self) -> Option<&Arc<Frame>> {
+        if self.initial_size.renders(&self.status()) {
+            self.frame.as_ref()
+        } else {
+            None
+        }
+    }
+
+    /// When this pane stops waiting for a frame at its size and draws anyway, while it waits.
+    pub fn draws_anyway_at(&self) -> Option<Instant> {
+        self.initial_size.deadline()
     }
 
     pub fn status(&self) -> Status {
@@ -210,13 +313,18 @@ impl Term {
 
     /// A non-owner never resizes; an owner sends its grid size whenever it changes.
     pub fn resize_if_owner(&mut self, font: f32) {
+        let status = self.status();
+        self.initial_size.transition(&status);
         if self.rect[2] <= 0. || self.rect[3] <= 0. {
             return;
         }
         let Metrics { cell, .. } = metrics(font);
-        let status = self.status();
         let cols = (self.rect[2] / cell.0).floor().clamp(1., 65535.) as u16;
         let rows = (self.rect[3] / cell.1).floor().clamp(1., 65535.) as u16;
+        self.initial_size.layout(
+            (cols, rows),
+            self.frame.as_ref().map(|frame| (frame.cols, frame.rows)),
+        );
         if !status.owner || !status.live {
             self.last_size = None;
         } else if self.last_size != Some((cols, rows)) {
@@ -386,7 +494,8 @@ impl Term {
     }
 }
 
-/// How the cursor draws: owning the keyboard (filled), visible but not (hollow), or not at all.
+/// How the cursor draws: owning the keyboard (the shape the program asked for, a filled block
+/// by default), visible but not (hollow), or not at all.
 #[derive(Clone, Copy, Hash, PartialEq)]
 pub enum CursorLook {
     Block,
@@ -395,14 +504,15 @@ pub enum CursorLook {
 
 fn hash_cell(cell: &Cell, h: &mut DefaultHasher) {
     cell.text.hash(h);
-    (cell.fg, cell.bg, cell.spacer_tail).hash(h);
+    (cell.fg, cell.bg, cell.underline_color, cell.spacer_tail).hash(h);
     let s = &cell.style;
     (
         s.bold,
         s.italic,
         s.faint,
         s.strikethrough,
-        s.underline != ghostty_vt::style::Underline::None,
+        s.underline,
+        s.overline,
     )
         .hash(h);
 }
@@ -413,7 +523,10 @@ struct RunStyle {
     bold: bool,
     italic: bool,
     faint: bool,
-    underline: bool,
+    underline: Underline,
+    /// None draws the underline in `fg`.
+    underline_color: Option<u32>,
+    overline: bool,
     strike: bool,
 }
 impl RunStyle {
@@ -432,7 +545,9 @@ impl RunStyle {
             bold: s.bold,
             italic: s.italic,
             faint: s.faint,
-            underline: s.underline != ghostty_vt::style::Underline::None,
+            underline: s.underline,
+            underline_color: cell.underline_color.map(tint),
+            overline: s.overline,
             strike: s.strikethrough,
         }
     }
@@ -442,17 +557,7 @@ fn glyph_run(content: String, style: RunStyle, x: f32, y: f32, m: &Metrics) -> E
     let font = face(m, style.bold, style.italic);
     let color = rgb(style.fg);
     let len = content.len();
-    let mut e = if style.underline {
-        rich(
-            content,
-            vec![Span {
-                underline: Some(color),
-                ..Span::new(0, len)
-            }],
-        )
-    } else {
-        text(content)
-    };
+    let mut e = text(content);
     if style.strike {
         e = e.strike(0, len, Some(color));
     }
@@ -529,9 +634,6 @@ impl Segment {
                     span.weight = Some(700.);
                 }
                 span.italic = style.italic;
-                if style.underline {
-                    span.underline = Some(color);
-                }
                 self.spans.push(span);
                 if style.strike {
                     self.strikes.push((self.start, end, style.fg));
@@ -549,26 +651,19 @@ impl Segment {
     }
     fn finish(mut self, m: &Metrics) -> Option<El> {
         self.close_span();
-        // Trailing undecorated blanks draw nothing.
+        // Trailing blanks need no glyph: underlines and overlines are drawn on their own.
         while self.text.ends_with(' ')
-            && self
-                .spans
-                .last()
-                .is_some_and(|s| s.underline.is_none() && (s.end as usize) == self.text.len())
             && !self.strikes.iter().any(|&(_, e, _)| e == self.text.len())
         {
             self.text.pop();
             if let Some(last) = self.spans.last_mut() {
-                last.end -= 1;
+                last.end = last.end.min(self.text.len() as u32);
                 if last.end <= last.start {
                     self.spans.pop();
                 }
             }
         }
-        if self.text.trim().is_empty()
-            && self.strikes.is_empty()
-            && !self.spans.iter().any(|s| s.underline.is_some())
-        {
+        if self.text.trim().is_empty() && self.strikes.is_empty() {
             return None;
         }
         let mut e = rich(self.text, self.spans)
@@ -590,13 +685,25 @@ enum RowPass {
     Text,
 }
 
+/// What the client marks on a row itself, as inclusive columns: the selection, and search
+/// matches with whether each is the selected match.
+#[derive(Default, Hash)]
+struct Marks<'a> {
+    selection: Option<(usize, usize)>,
+    search: &'a [(usize, usize, bool)],
+}
+
 #[cfg(test)]
 fn row_el(cells: &[Cell], y: f32, frame_bg: u32, sel: Option<(usize, usize)>, m: &Metrics) -> El {
+    let marks = Marks {
+        selection: sel,
+        ..Marks::default()
+    };
     row_pass(
         cells,
         y,
         frame_bg,
-        sel,
+        &marks,
         m,
         RowPass::All,
         &TermColors::default(),
@@ -607,13 +714,14 @@ fn row_pass(
     cells: &[Cell],
     y: f32,
     frame_bg: u32,
-    sel: Option<(usize, usize)>,
+    marks: &Marks<'_>,
     m: &Metrics,
     pass: RowPass,
     colors: &TermColors,
 ) -> El {
     let body = colors.body(frame_bg);
     let (cw, ch) = m.cell;
+    let sel = marks.selection;
     // Memoized rows are flattened on their own, so each says again that it never animates:
     // otherwise a glyph run that leaves a changed row fades out over its replacement.
     let mut row = el().w_full().h(ch).absolute(0., y).instant_changes();
@@ -635,6 +743,14 @@ fn row_pass(
             }
             start = end;
         }
+        for &(a, b, selected) in marks.search {
+            let alpha = if selected { 0.55 } else { 0.25 };
+            row = row.child(
+                el().absolute(a as f32 * cw, 0.)
+                    .size((b + 1 - a) as f32 * cw, ch)
+                    .fill(rgb(colors.search_match).alpha(alpha)),
+            );
+        }
         if let Some((a, b)) = sel {
             row = row.child(
                 el().absolute(a as f32 * cw, 0.)
@@ -646,17 +762,22 @@ fn row_pass(
     if pass == RowPass::Background {
         return row;
     }
-    let mut segment: Option<Segment> = None;
-    for (col, cell) in cells.iter().enumerate() {
-        if cell.spacer_tail || cell.text.starts_with('\u{10eeee}') {
-            continue;
-        }
-        let mut style = RunStyle::of(cell, frame_bg, body);
+    // Selected text takes the theme's selection foreground, decorations included.
+    let style_at = |col: usize| {
+        let mut style = RunStyle::of(&cells[col], frame_bg, body);
         if let (Some(fg), Some((a, b))) = (colors.selection_fg, sel)
             && (a..=b).contains(&col)
         {
             style.fg = fg;
         }
+        style
+    };
+    let mut segment: Option<Segment> = None;
+    for (col, cell) in cells.iter().enumerate() {
+        if cell.spacer_tail || cell.text.starts_with('\u{10eeee}') {
+            continue;
+        }
+        let style = style_at(col);
         let text = if cell.text.is_empty() {
             " "
         } else {
@@ -665,9 +786,17 @@ fn row_pass(
         let mut chars = text.chars();
         let single = chars.next().filter(|_| chars.next().is_none());
         let wide = cells.get(col + 1).is_some_and(|c| c.spacer_tail);
+        if let Some(sprite) = single.and_then(Sprite::of) {
+            if let Some(done) = segment.take().and_then(|s| s.finish(m)) {
+                row = row.child(done);
+            }
+            let width = if wide { 2. * cw } else { cw };
+            row = sprite.draw(row, col as f32 * cw, (width, ch), m.px, rgb(style.fg));
+            continue;
+        }
         let fits = !wide && single.is_some_and(|c| fits_cell(c, style.bold, style.italic, m));
         if fits {
-            if text == " " && segment.is_none() && !style.underline && !style.strike {
+            if text == " " && segment.is_none() && !style.strike {
                 continue;
             }
             segment
@@ -683,7 +812,96 @@ fn row_pass(
     if let Some(done) = segment.and_then(|s| s.finish(m)) {
         row = row.child(done);
     }
+    // Underlines and overlines in the style and colour the program asked for, rather than
+    // the font's single underline, one shape per run of cells that draw them alike.
+    let mut start = 0;
+    while start < cells.len() {
+        let style = style_at(start);
+        let mut end = start + 1;
+        while end < cells.len() && same_decoration(&style_at(end), &style) {
+            end += 1;
+        }
+        if !cells[start].text.starts_with('\u{10eeee}') {
+            let width = (end - start) as f32 * cw;
+            let shape = decoration_shape(&style, width, ch, m.px);
+            if !shape.is_empty() {
+                row = row.child(
+                    canvas(shape)
+                        .absolute(start as f32 * cw, 0.)
+                        .size(width, ch),
+                );
+            }
+        }
+        start = end;
+    }
     row
+}
+
+fn same_decoration(a: &RunStyle, b: &RunStyle) -> bool {
+    (a.underline, a.underline_color, a.overline, a.fg)
+        == (b.underline, b.underline_color, b.overline, b.fg)
+}
+
+/// A run's underline (single, double, curly, dotted or dashed) and overline, `width` wide in a
+/// cell `height` tall, drawn at `px` device pixels per point.
+fn decoration_shape(style: &RunStyle, width: f32, height: f32, px: f32) -> Shape {
+    let mut shape = Shape::new();
+    let color = rgb(style.underline_color.unwrap_or(style.fg));
+    // Straight lines are one point thick in whole device pixels, as sprites' are, and start
+    // on a whole device pixel `top` points down the cell.
+    let light = px.round().max(1.);
+    let thick = light / px;
+    let centre = |top: f32| ((top * px).round() + light / 2.) / px;
+    let y = centre(height - 2.);
+    match style.underline {
+        Underline::Single => {
+            shape = shape.line([0., y], [width, y], thick, LineCap::Butt, color);
+        }
+        Underline::Double => {
+            let upper = y - (2. * px).round() / px;
+            shape = shape
+                .line([0., upper], [width, upper], thick, LineCap::Butt, color)
+                .line([0., y], [width, y], thick, LineCap::Butt, color);
+        }
+        Underline::Curly => {
+            // Half waves 4 points long, alternately below and above the line.
+            let mut path = Path::new().move_to([0., y]);
+            let (mut x, mut below) = (0., true);
+            while x < width {
+                let end = (x + 4.).min(width);
+                let bend = if below { 1.5 } else { -1.5 };
+                path = path.quad_to([(x + end) / 2., y + bend], [end, y]);
+                (x, below) = (end, !below);
+            }
+            shape = shape.stroke_path(&path, thick, LineCap::Round, color);
+        }
+        Underline::Dotted => {
+            let mut x = 0.;
+            while x < width {
+                shape = shape.line([x, y], [x + 0.1, y], 1.5, LineCap::Round, color);
+                x += 3.;
+            }
+        }
+        Underline::Dashed => {
+            let mut x = 0.;
+            while x < width {
+                shape = shape.line(
+                    [x, y],
+                    [(x + 4.).min(width), y],
+                    thick,
+                    LineCap::Butt,
+                    color,
+                );
+                x += 7.;
+            }
+        }
+        _ => {}
+    }
+    if style.overline {
+        let y = centre(0.5);
+        shape = shape.line([0., y], [width, y], thick, LineCap::Butt, rgb(style.fg));
+    }
+    shape
 }
 
 fn image_el(
@@ -727,7 +945,7 @@ pub struct GridLook {
 
 /// The colours the client draws in the terminal area itself. The terminal's own colours reach
 /// the frame through the server; these are the default background's stand-in and the
-/// selection and cursor-text colours, which the protocol has no field for.
+/// selection, cursor-text and search colours, which the protocol has no field for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TermColors {
     /// The declared theme's background, else the card.
@@ -735,6 +953,8 @@ pub struct TermColors {
     pub selection_bg: u32,
     pub selection_fg: Option<u32>,
     pub cursor_text: Option<u32>,
+    /// Search matches' highlight: the chrome's accent.
+    pub search_match: u32,
 }
 impl Default for TermColors {
     fn default() -> Self {
@@ -752,6 +972,7 @@ impl TermColors {
                 .unwrap_or(palette.terminal_selection),
             selection_fg: theme.selection_foreground,
             cursor_text: theme.cursor_text,
+            search_match: palette.accent,
         }
     }
 
@@ -780,7 +1001,7 @@ impl Term {
 
 /// The visible rows of `term`'s frame, each memoized by its content.
 pub fn grid(key: &str, term: &Term, m: &Metrics, look: GridLook) -> El {
-    let Some(frame) = &term.frame else {
+    let Some(frame) = term.display_frame() else {
         return el().w_full().h_full();
     };
     let (cw, ch) = m.cell;
@@ -792,7 +1013,7 @@ pub fn grid(key: &str, term: &Term, m: &Metrics, look: GridLook) -> El {
     let selection = term.selection.map(|(a, b)| (a.min(b), a.max(b)));
     let rows = |mut grid: El, pass: RowPass| {
         for (y, cells) in frame.cells.iter().enumerate().skip(start).take(visible) {
-            let sel = if term.selection.is_some()
+            let selected = if term.selection.is_some()
                 && frame.selection_revision == term.selection_revision
             {
                 frame.selection_rows.get(y).copied().flatten()
@@ -802,15 +1023,24 @@ pub fn grid(key: &str, term: &Term, m: &Metrics, look: GridLook) -> El {
                     (a <= row1 && b >= row0).then(|| (a.max(row0) - row0, b.min(row1) - row0))
                 })
             };
+            let marks = Marks {
+                selection: selected,
+                search: frame
+                    .search
+                    .as_ref()
+                    .map(|search| search.on_row(y))
+                    .unwrap_or_default(),
+            };
             let mut h = DefaultHasher::new();
             for cell in cells {
                 hash_cell(cell, &mut h);
             }
             (
-                sel,
+                &marks,
                 frame.bg,
                 cw.to_bits(),
                 ch.to_bits(),
+                m.px.to_bits(),
                 m.style,
                 pass,
                 colors,
@@ -819,7 +1049,7 @@ pub fn grid(key: &str, term: &Term, m: &Metrics, look: GridLook) -> El {
             let top = (y - start) as f32 * ch;
             let id = format!("{key}/r{}:{pass:?}", y - start);
             grid = grid.child(memo(id, h.finish(), || {
-                row_pass(cells, top, frame.bg, sel, m, pass, colors)
+                row_pass(cells, top, frame.bg, &marks, m, pass, colors)
             }));
         }
         grid
@@ -862,19 +1092,23 @@ pub fn grid(key: &str, term: &Term, m: &Metrics, look: GridLook) -> El {
         let (px, py) = (x as f32 * cw, (y as usize - start) as f32 * ch);
         let cell = frame.cells.get(y as usize).and_then(|r| r.get(x as usize));
         let color = rgb(frame.cursor_color);
-        let mut cursor = el()
-            .key(format!("{key}/cursor"))
-            .absolute(px, py)
-            .size(cw, ch);
-        cursor = match cursor_look {
-            CursorLook::Block => cursor.fill(color),
-            CursorLook::Hollow => cursor.border(1., color),
+        // A pane without the keyboard always shows a hollow block, whatever the program asked.
+        let shape = match cursor_look {
+            CursorLook::Block => frame.cursor_shape,
+            CursorLook::Hollow => CursorShape::Hollow,
+        };
+        let cursor = el().key(format!("{key}/cursor"));
+        let mut cursor = match shape {
+            CursorShape::Block => cursor.absolute(px, py).size(cw, ch).fill(color),
+            CursorShape::Bar => cursor.absolute(px, py).size(2., ch).fill(color),
+            CursorShape::Underline => cursor.absolute(px, py + ch - 2.).size(cw, 2.).fill(color),
+            CursorShape::Hollow => cursor.absolute(px, py).size(cw, ch).border(1., color),
         };
         if look.ime {
             cursor = cursor.ime_cursor();
         }
         grid = grid.child(cursor);
-        if cursor_look == CursorLook::Block
+        if shape == CursorShape::Block
             && let Some(cell) =
                 cell.filter(|c| !c.text.is_empty() && !c.text.starts_with('\u{10eeee}'))
         {
@@ -963,6 +1197,72 @@ mod tests {
     }
 
     #[test]
+    fn an_owner_waits_once_per_live_ownership_epoch_and_a_non_owner_never_waits() {
+        let status = |live, owner| Status {
+            live,
+            owner,
+            status: String::new(),
+        };
+        let mut size = InitialSize::default();
+        size.transition(&status(true, true));
+        assert!(!size.renders(&status(true, true)), "hidden before layout");
+        size.layout((80, 24), Some((160, 50)));
+        assert!(
+            !size.renders(&status(true, true)),
+            "stale size stays hidden"
+        );
+        size.observe(Some((80, 24)));
+        assert!(size.renders(&status(true, true)), "this size shows");
+        size.layout((100, 30), Some((80, 24)));
+        assert!(
+            size.renders(&status(true, true)),
+            "a later resize keeps drawing the previous frame"
+        );
+
+        size.transition(&status(true, false));
+        assert!(
+            size.renders(&status(true, false)),
+            "a non-owner draws the size it gets"
+        );
+        size.transition(&status(true, true));
+        size.layout((100, 30), Some((80, 24)));
+        assert!(
+            !size.renders(&status(true, true)),
+            "taking ownership starts a new wait"
+        );
+        size.transition(&status(false, true));
+        assert!(
+            size.renders(&status(false, true)),
+            "retained output stays visible offline"
+        );
+        size.transition(&status(true, true));
+        size.layout((100, 30), Some((80, 24)));
+        assert!(
+            !size.renders(&status(true, true)),
+            "reconnecting starts a new wait"
+        );
+
+        // A frame at the asked size may never come; the wait is bounded.
+        let deadline = size.deadline().expect("a wait is on");
+        assert!(
+            !size.renders_at(&status(true, true), deadline - Duration::from_millis(1)),
+            "hidden until the bound"
+        );
+        assert!(
+            size.renders_at(&status(true, true), deadline),
+            "drawn as it is once the bound passes"
+        );
+        size.layout((100, 30), Some((80, 24)));
+        assert_eq!(
+            size.deadline(),
+            Some(deadline),
+            "a relayout keeps the first wait's bound"
+        );
+        size.observe(Some((100, 30)));
+        assert_eq!(size.deadline(), None, "no bound once the size arrived");
+    }
+
+    #[test]
     fn typing_styled_terminal_runs_never_creates_a_second_ui_line() {
         let mut terminal = ghostty_vt::Terminal::new(ghostty_vt::TerminalOptions {
             cols: 253,
@@ -1010,6 +1310,97 @@ mod tests {
         }
     }
 
+    /// A row at 1.5 device pixels per point, placed off the pixel grid.
+    fn scaled_view(s: &RowState, _: &mut Cx<RowState>) -> El {
+        let m = Metrics {
+            px: 1.5,
+            ..metrics(15.)
+        };
+        el().absolute(0.37, 0.71)
+            .w_full()
+            .h_full()
+            .child(row_el(&s.cells, 0., 0, None, &m))
+    }
+
+    /// The rectangles drawn for `text` in one row at 1.5 device pixels per point, in device
+    /// pixels, sorted from the left. Every one has whole-pixel edges.
+    fn scaled_rects(text: &str) -> Vec<[f32; 4]> {
+        let mut terminal = ghostty_vt::Terminal::new(ghostty_vt::TerminalOptions {
+            cols: 40,
+            rows: 2,
+            ..Default::default()
+        })
+        .unwrap();
+        terminal.vt_write(text.as_bytes());
+        let frame = rex_linux::terminal::Renderer::new()
+            .unwrap()
+            .frame(&terminal)
+            .unwrap();
+        let fonts = crate::app::fonts::load("JetBrainsMono Nerd Font", &[]);
+        let mut rt = Runtime::with_text(
+            RowState {
+                cells: frame.cells[0].clone(),
+            },
+            scaled_view,
+            (600., 100.),
+            Env::new(true, 1.5),
+            rune::text::TextSystem::new_with_paths(fonts.files, fonts.paths, fonts.families),
+        );
+        rt.frame(1. / 60.);
+        let mut rects: Vec<[f32; 4]> = rt
+            .instances
+            .iter()
+            .filter(|q| q.params[1] == rune::render::KIND_RECT)
+            .map(|q| q.rect)
+            .collect();
+        rects.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        for r in &rects {
+            assert!(
+                r.iter().all(|v| v.fract() == 0.),
+                "{r:?} is off the pixel grid"
+            );
+        }
+        rects
+    }
+
+    /// Each rectangle starts where an earlier one ends, or before.
+    fn assert_unbroken(rects: &[[f32; 4]]) {
+        let mut end = rects[0][0];
+        for r in rects {
+            assert!(r[0] <= end, "a gap before {r:?} in {rects:?}");
+            end = end.max(r[0] + r[2]);
+        }
+    }
+
+    #[test]
+    fn box_lines_land_on_whole_pixels_and_meet_their_neighbours() {
+        // Horizontal strokes: everything no taller than a heavy line.
+        let lines: Vec<_> = scaled_rects("╭─┬──━━")
+            .into_iter()
+            .filter(|r| r[3] <= 4.)
+            .collect();
+        let (light, heavy): (Vec<&[f32; 4]>, Vec<_>) = lines.iter().partition(|r| r[3] == 2.);
+        assert!(
+            light.len() >= 6 && light.iter().all(|r| r[1] == light[0][1]),
+            "light lines are one point, in whole pixels, on one row: {lines:?}"
+        );
+        assert_eq!(heavy.len(), 4, "heavy lines are twice as thick: {lines:?}");
+        assert_unbroken(&lines);
+    }
+
+    #[test]
+    fn block_elements_fill_whole_pixels_without_seams() {
+        let blocks = scaled_rects("████▌▐▀▄");
+        assert_eq!(blocks.len(), 8, "one rectangle per block: {blocks:?}");
+        let full = &blocks[..4];
+        assert!(
+            full.iter()
+                .all(|r| r[1] == full[0][1] && r[3] == full[0][3]),
+            "full blocks share their top and height: {full:?}"
+        );
+        assert_unbroken(full);
+    }
+
     #[test]
     fn a_link_tooltip_names_the_hyperlink_target_not_its_text() {
         let mut terminal = ghostty_vt::Terminal::new(ghostty_vt::TerminalOptions {
@@ -1044,6 +1435,64 @@ mod tests {
         rt.frame(0.);
         let help: Vec<String> = rt.elements().into_iter().filter_map(|e| e.help).collect();
         assert_eq!(help, ["Ctrl+click to open https://evil.example/"]);
+    }
+
+    #[test]
+    fn search_highlights_follow_their_rows_when_the_pane_clips_a_taller_terminal() {
+        use rex_linux::connection::{Connection, TerminalSender};
+        let mut terminal = ghostty_vt::Terminal::new(ghostty_vt::TerminalOptions {
+            cols: 12,
+            rows: 5,
+            ..Default::default()
+        })
+        .unwrap();
+        terminal.vt_write(b"needle\r\na\r\nb\r\nc\r\nxx needle");
+        let mut search = rex_linux::terminal::search::Controller::default();
+        search.set_needle(Some(&terminal), "needle".into()).unwrap();
+        while search.update(&terminal).unwrap() {}
+        let mut frame = rex_linux::terminal::Renderer::new()
+            .unwrap()
+            .frame(&terminal)
+            .unwrap();
+        frame.search = search.results(&terminal).unwrap();
+        assert_eq!(frame.search.as_ref().unwrap().matches.len(), 2);
+
+        let m = metrics(15.);
+        let mut term = Term::new(Connection {
+            model: Default::default(),
+            commands: TerminalSender::new(flume::unbounded().0, "s".into(), "b".into()),
+            wake: flume::unbounded().1,
+        });
+        term.frame = Some(Arc::new(frame));
+        term.rect = [0., 0., 200., 2. * m.cell.1];
+        assert_eq!(term.display_row(m.cell), 3, "rows 3 and 4 are on screen");
+        let colors = TermColors::default();
+        let view = |term: &Term, _: &mut Cx<Term>| {
+            let look = GridLook {
+                cursor: None,
+                ime: false,
+                colors: TermColors::default(),
+            };
+            grid("g", term, &metrics(15.), look)
+        };
+        let mut rt = Runtime::new(term, view, (200., 100.), Env::default());
+        rt.frame(0.);
+        let highlight = |alpha| rgb(colors.search_match).alpha(alpha);
+        let marks: Vec<_> = rt
+            .elements()
+            .into_iter()
+            .filter(|e| e.fill == highlight(0.55) || e.fill == highlight(0.25))
+            .map(|e| {
+                let [x, y, w, _] = e.rect;
+                let cells = [x / m.cell.0, y / m.cell.1, w / m.cell.0].map(f32::round);
+                (cells, e.fill == highlight(0.55))
+            })
+            .collect();
+        assert_eq!(
+            marks,
+            [([3., 1., 6.], true)],
+            "only the selected match on row 4, the second row on screen; the one on row 0 is clipped"
+        );
     }
 
     /// A frame of default text, an explicit red background and inverse video, on a server

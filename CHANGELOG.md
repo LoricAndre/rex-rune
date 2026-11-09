@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+Several of these come from [Lily](https://github.com/kitten-lily)'s fork ([kitten-lily/rex-rune](https://github.com/kitten-lily/rex-rune)); thank you.
+
+- Terminal fidelity: the cursor takes the shape programs ask for (DECSCUSR block, bar or underline); curly, dotted, dashed and double underlines in their own colours and overlines (SGR 4:x, 58, 53); box-drawing and block characters are drawn on whole pixels, so borders meet and meters have no seams. (@kitten-lily)
+- A server that dropped this client while the network was gone (a laptop asleep) is noticed within about 30 seconds through TCP keepalives, and the host and its terminals reconnect. (@kitten-lily)
+- Progress that programs report with OSC 9;4 draws as a thin bar under their tab's label and their pane's name, "Paused" and "Error" as words; the bar goes when the program clears it or leaves the foreground. A terminal bell that rings out of sight marks its tab "Bell" until you see it. In a split, each pane's header carries its own activity word, and an unrenamed pane shows its program's terminal title. (@kitten-lily)
+- Ctrl Shift F searches the focused terminal's screen and scrollback with Ghostty's search: matches are highlighted, Enter and Shift+Enter step through them, Escape gives the keyboard back to the terminal, and nothing typed in the field reaches the program. (@kitten-lily)
+- A pane this client owns waits up to half a second for a frame at its own size before drawing, so the previous client's size no longer flashes on attach. (@kitten-lily)
+- Add host lists the machines on your tailnet (`tailscale status --json`), searchable by name, by Tailscale IP when the tailnet has no MagicDNS. Each online machine is checked for a Rex server at the addresses the official clients try for a bare host (HTTPS 443, HTTPS 7297, HTTP 7297); one that answers is added and connected with one press. Any other machine takes an SSH user name and an optional Rex socket path and connects as `ssh://user@host[/socket]`; the form says whether the check found nothing listening or couldn't tell. A machine already added stays listed, so another login to it can be added. Entering an endpoint by hand remains.
+- `ssh://[user@]host[:port][/socket]` endpoints: the Rex server's Unix socket on that machine is forwarded over `ssh -L`, so a machine with Tailscale SSH, or any SSH login you already have, works with nothing configured on its Rex. Without a `/socket`, the machine is asked where its server listens (`rex server status`, the user's runtime directory, `/run/rex`, `/var/run/rex`). Each instance keeps its forwards in a directory of its own, so two clients or a probe reaching the same machine don't disturb each other. The forward's end is a disconnect like any other, and `ssh`'s reason is shown next to Retry.
+- Settings > Terminal now says when a saved font family waits for the client to be reopened, and when the saved family isn't installed. Saving a font change shows a notice to reopen the client. Applying fonts without a restart is tracked in [#6](https://github.com/kitten-lily/rex-rune/issues/6).
+- Shift+Space, Shift+Tab and Shift+Enter now reach terminal programs that use the Kitty keyboard protocol, such as Claude Code, as distinct keys instead of plain Space, Tab and Enter. Shift is reported unless the keyboard layout used it to type the character. ([#4](https://github.com/kitten-lily/rex-rune/issues/4))
+
 ## 0.3.2 — 2026-11-06
 
 - First prebuilt Linux releases for x86-64 and ARM64: user-installable tarballs and Debian/Ubuntu packages, with SHA-256 checksums.

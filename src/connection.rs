@@ -4,7 +4,7 @@ use crate::{
     transport::{self, Client},
     wire,
 };
-use activity::{BlockEvent, DesktopNotice, StatusRecord};
+use activity::{BlockEvent, DesktopNotice, StatusRecord, TerminalProgress};
 use anyhow::{Context, Result};
 use rexrs::api::{BlockMethod, session, terminal::SetTheme};
 use serde_json::{Value, json};
@@ -91,6 +91,10 @@ pub enum Command {
     Wheel(Value),
     Resize(u16, u16, u16, u16),
     Scroll(isize),
+    /// Search the terminal's screen and scrollback for this text; empty stops searching.
+    Search(String),
+    /// Select the next older search match (`true`) or the next newer one.
+    SearchStep(bool),
     TakeControl,
     Reconnect,
 }
@@ -107,6 +111,8 @@ pub struct Model {
     pub revision: u64,
     pub restore_generation: u64,
     pub input_events: u64,
+    /// Words for the user from the pane's worker (a failed search), taken once shown.
+    pub notice: Option<String>,
 }
 
 #[derive(Clone)]
@@ -179,8 +185,12 @@ pub struct HostModel {
     pub foreground: HashMap<String, Vec<u64>>,
     /// Each terminal block's title, as a program last set it, and the pid that set it.
     pub titles: HashMap<String, (String, Option<u64>)>,
+    /// Each terminal block's OSC 9;4 progress, until its program removes it.
+    pub progress: HashMap<String, TerminalProgress>,
     /// Program notifications not yet taken by the UI.
     pub notices: Vec<DesktopNotice>,
+    /// Bells not yet taken by the UI, as (session, block).
+    pub bells: Vec<(String, String)>,
     /// Latest terminal-initiated copy, consumed once by the foreground UI.
     pub clipboard: Option<clipboard::ClipboardCopy>,
     /// Bumped whenever `activity` is dropped wholesale (on reconnect), so the UI starts its
@@ -239,10 +249,18 @@ impl HostModel {
                 }
             }
             BlockEvent::Process { name, pids } => {
+                // A progress report belongs to the program in the foreground; one that ends
+                // without clearing its report (a crash, a kill) must not leave it on the tab,
+                // even when the next program has the same name.
+                let was = self.programs.get(&block).cloned();
+                let was_pid = self.foreground.get(&block).and_then(|p| p.first().copied());
                 match name {
                     Some(name) => self.programs.insert(block.clone(), name),
                     None => self.programs.remove(&block),
                 };
+                if self.programs.get(&block) != was.as_ref() || pids.first().copied() != was_pid {
+                    self.progress.remove(&block);
+                }
                 if pids.is_empty() {
                     self.foreground.remove(&block);
                 } else {
@@ -267,6 +285,18 @@ impl HostModel {
                     });
                 }
             }
+            BlockEvent::Progress(Some(progress)) => {
+                self.progress.insert(block, progress);
+            }
+            BlockEvent::Progress(None) => {
+                self.progress.remove(&block);
+            }
+            BlockEvent::Bell => {
+                // A program ringing in a loop can't grow this without bound.
+                if self.bells.len() < 32 {
+                    self.bells.push((session.into(), block));
+                }
+            }
         }
     }
     fn forget_block(&mut self, block: &str) {
@@ -274,6 +304,7 @@ impl HostModel {
         self.programs.remove(block);
         self.foreground.remove(block);
         self.titles.remove(block);
+        self.progress.remove(block);
     }
 
     /// The block's terminal title while it's current. Shells rarely clear a title when the
@@ -551,6 +582,8 @@ enum DataCommand {
     Selection(crate::terminal::selection::Input),
     Visible(bool),
     Scroll(isize),
+    Search(String),
+    SearchStep(bool),
     Bottom,
     Reconnect,
     Stop,
@@ -1117,7 +1150,7 @@ struct Startup {
 }
 
 async fn run_host(
-    endpoint: String,
+    configured: String,
     startup: Startup,
     commands: flume::Receiver<HostCommand>,
     sender: flume::Sender<HostCommand>,
@@ -1133,8 +1166,22 @@ async fn run_host(
     let mut workers = HashMap::<String, PaneWorker>::new();
     let mut retry = 0;
     let mut prefetch = prefetch::Prefetch::default();
+    // An ssh:// host is reached through a forward of its Rex socket; every attempt opens a
+    // fresh one, and its end is a disconnect like any other.
+    let ssh = crate::ssh::Target::parse(&configured)?;
+    let mut tunnel: Option<crate::ssh::Tunnel> = None;
     loop {
         let result: Result<bool> = async {
+            let endpoint = match &ssh {
+                Some(target) => {
+                    shared.status("Connecting over SSH…", false);
+                    let opened = crate::ssh::Tunnel::open(target).await?;
+                    let local = opened.endpoint().to_owned();
+                    tunnel = Some(opened);
+                    local
+                }
+                None => configured.clone(),
+            };
             let mut control = transport::control(&endpoint, token.as_deref()).await?;
             let identity = control.welcome().client.as_ref().context("Rex client identity")?;
             token = Some(identity.reconnect_token.clone());
@@ -1148,6 +1195,7 @@ async fn run_host(
                 m.programs.clear();
                 m.foreground.clear();
                 m.titles.clear();
+                m.progress.clear();
                 m.activity_epoch += 1;
             });
             let mut state = ControlState::default();
@@ -1239,6 +1287,7 @@ async fn run_host(
                         declare_themes(&mut control, shared, &mut state, &workers, theme.as_ref()).await;
                         query_activity(&mut control, shared, &mut state, &workers).await;
                     }
+                    error = crate::ssh::closed(&mut tunnel) => return Err(error),
                     command = commands.recv_async() => {
                         let Ok(command) = command else { control.close().await?; return Ok(true); };
                         if matches!(command, HostCommand::Shutdown) { control.close().await?; return Ok(true); }
@@ -1265,6 +1314,7 @@ async fn run_host(
                 }
             }
         }.await;
+        tunnel = None;
         if matches!(result, Ok(true)) {
             return Ok(());
         }
@@ -1506,6 +1556,12 @@ async fn handle_command(
                 Command::Scroll(delta) => {
                     let _ = worker.commands.send(DataCommand::Scroll(delta));
                 }
+                Command::Search(needle) => {
+                    let _ = worker.commands.send(DataCommand::Search(needle));
+                }
+                Command::SearchStep(older) => {
+                    let _ = worker.commands.send(DataCommand::SearchStep(older));
+                }
                 Command::Reconnect => {
                     let _ = worker.commands.send(DataCommand::Reconnect);
                 }
@@ -1637,6 +1693,7 @@ async fn run_data(
     let mut welcome: Option<wire::Welcome> = None;
     let mut stream: Option<TerminalStream> = None;
     let mut selection = None;
+    let mut search = crate::terminal::search::Controller::default();
     let mut visible = true;
     let mut renderer = match Renderer::new() {
         Ok(r) => r,
@@ -1659,6 +1716,7 @@ async fn run_data(
             if socket.is_none() {
                 let (next, fresh) = open_data(&endpoint, &session, &block, &host).await?;
                 selection = Some(crate::terminal::selection::Controller::new()?);
+                search.forget_terminal();
                 stream = Some(TerminalStream::new(fresh.nonce)); welcome = Some(fresh);
                 shared.update(|m|m.restore_generation+=1);
                 renderer = Renderer::new()?; socket = Some(next);
@@ -1681,16 +1739,28 @@ async fn run_data(
                         Ok(DataCommand::Visible(value)) => { if value && !visible { dirty = true; } else if !value && let Some(terminal) = &stream.terminal { selection.stop(terminal)?; } visible = value; }
                         Ok(DataCommand::Scroll(delta)) => if let Some(terminal) = &mut stream.terminal { terminal.scroll_viewport(ghostty_vt::terminal::ScrollViewport::Delta(delta)); selection.after_scroll(terminal)?; dirty = true; },
                         Ok(DataCommand::Bottom) => if let Some(terminal) = &mut stream.terminal { terminal.scroll_viewport(ghostty_vt::terminal::ScrollViewport::Bottom); dirty = true; },
+                        // A search that fails is dropped with a notice; the terminal's stream is not its to end.
+                        Ok(DataCommand::Search(needle)) => { if let Err(error) = search.set_needle(stream.terminal.as_ref(), needle) { search = Default::default(); shared.update(|m| m.notice = Some(format!("Search failed: {error:#}"))); } dirty = true; },
+                        // Ghostty scrolls the selected match into view.
+                        Ok(DataCommand::SearchStep(older)) => if let Some(terminal) = &stream.terminal { if let Err(error) = search.step(terminal, older) { search = Default::default(); shared.update(|m| m.notice = Some(format!("Search failed: {error:#}"))); } selection.after_scroll(terminal)?; dirty = true; },
                         Ok(DataCommand::Reconnect) => { shared.status("Reconnecting terminal…", false); return Ok(false); }
                         Ok(DataCommand::Stop) | Err(_) => return Ok(true),
                     },
-                    _ = tick.tick(), if visible && (dirty || stream.terminal.as_ref().is_some_and(|t| selection.autoscrolling(t))) => {
+                    _ = tick.tick(), if visible && commands.is_empty() && (dirty || stream.terminal.as_ref().is_some_and(|t| selection.autoscrolling(t))) => {
                         // Mid synchronized update: keep showing the last frame, check again next tick.
                         if stream.render_held(Instant::now())? { continue; }
                         if let Some(terminal) = &mut stream.terminal {
                             selection.tick(terminal)?;
+                            let search_pending = match search.update(terminal) {
+                                Ok(pending) => pending,
+                                Err(error) => { search = Default::default(); shared.update(|m| m.notice = Some(format!("Search failed: {error:#}"))); false }
+                            };
                             let mut frame = renderer.frame(terminal)?;
                             frame.selection_revision = selection.revision;
+                            frame.search = match search.results(terminal) {
+                                Ok(results) => results,
+                                Err(error) => { search = Default::default(); shared.update(|m| m.notice = Some(format!("Search failed: {error:#}"))); None }
+                            };
                             let frame = Arc::new(frame);
                             let mut transitioned = false;
                             shared.update(|m| {
@@ -1699,8 +1769,10 @@ async fn run_data(
                                 if let Some(code) = stream.exit_code { m.status = format!("Process exited · {code}"); }
                             });
                             if transitioned { let _ = shared.host_wake.try_send(()); }
+                            dirty = search_pending;
+                        } else {
+                            dirty = false;
                         }
-                        dirty = false;
                     }
                 }
             }

@@ -2,8 +2,8 @@ use crate::wire::SnapshotBuffer;
 use anyhow::{Result, ensure};
 use ghostty_vt::{
     RenderState, Terminal,
-    render::{CellIterator, RowIterator},
-    style::RgbColor,
+    render::{CellIterator, CursorVisualStyle, RowIterator},
+    style::{RgbColor, StyleColor},
     terminal::{Mode, Point, PointCoordinate},
 };
 use serde_json::Value;
@@ -13,6 +13,7 @@ use std::{
 };
 
 pub mod graphics;
+pub mod search;
 pub mod selection;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -210,12 +211,23 @@ pub fn rgb(color: RgbColor) -> u32 {
     (color.r as u32) << 16 | (color.g as u32) << 8 | color.b as u32
 }
 
+/// The cursor shape a program asked for with DECSCUSR (or Ghostty's hollow block).
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum CursorShape {
+    Block,
+    Bar,
+    Underline,
+    Hollow,
+}
+
 #[derive(Clone, Debug)]
 pub struct Cell {
     pub text: String,
     pub spacer_tail: bool,
     pub fg: u32,
     pub bg: u32,
+    /// The SGR 58 underline colour; none draws underlines in the text colour.
+    pub underline_color: Option<u32>,
     pub style: ghostty_vt::style::Style,
     /// The cell's OSC 8 hyperlink target.
     pub link: Option<Arc<str>>,
@@ -229,6 +241,7 @@ pub struct Frame {
     pub bg: u32,
     pub cursor: Option<(u16, u16)>,
     pub cursor_color: u32,
+    pub cursor_shape: CursorShape,
     /// The program asked for mouse reports (DEC 9, 1000, 1002 or 1003).
     pub mouse_tracking: bool,
     pub images: Vec<graphics::Image>,
@@ -239,6 +252,8 @@ pub struct Frame {
     pub selection_revision: u64,
     /// Per row: the row soft-wraps into the next one.
     pub wrapped: Vec<bool>,
+    /// The user's search of this terminal, while there is one.
+    pub search: Option<search::Results>,
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -371,6 +386,13 @@ impl Renderer {
                 None
             },
             cursor_color: snapshot.cursor_color()?.map(rgb).unwrap_or(fg),
+            // Blinking is ignored: terminal content never animates.
+            cursor_shape: match snapshot.cursor_visual_style()? {
+                CursorVisualStyle::Bar => CursorShape::Bar,
+                CursorVisualStyle::Underline => CursorShape::Underline,
+                CursorVisualStyle::BlockHollow => CursorShape::Hollow,
+                _ => CursorShape::Block,
+            },
             mouse_tracking: terminal.is_mouse_tracking()?,
             images: self.images.frame(terminal, &snapshot)?,
             cell_pixels: [
@@ -378,6 +400,7 @@ impl Renderer {
                 terminal.height_px()? / u32::from(snapshot.rows()?).max(1),
             ],
             wrapped: Vec::new(),
+            search: None,
         };
         let mut uri = Vec::new();
         let mut rows = self.rows.update(&snapshot)?;
@@ -417,11 +440,17 @@ impl Renderer {
                 } else {
                     None
                 };
+                let underline_color = match style.underline_color {
+                    StyleColor::None => None,
+                    StyleColor::Palette(index) => Some(rgb(colors.palette[index.0 as usize])),
+                    StyleColor::Rgb(color) => Some(rgb(color)),
+                };
                 line.push(Cell {
                     text,
                     spacer_tail: raw.wide()? == ghostty_vt::screen::CellWide::SpacerTail,
                     fg,
                     bg,
+                    underline_color,
                     style,
                     link,
                 });
@@ -507,6 +536,31 @@ mod tests {
         assert!(hidden_cursor.cursor.is_none());
         assert_eq!(hidden_cursor.display_row_start(3), 2);
     }
+
+    #[test]
+    fn programs_choose_the_cursor_shape() {
+        let mut terminal = Terminal::new(ghostty_vt::TerminalOptions {
+            cols: 12,
+            rows: 2,
+            ..Default::default()
+        })
+        .unwrap();
+        let mut renderer = Renderer::new().unwrap();
+        assert_eq!(
+            renderer.frame(&terminal).unwrap().cursor_shape,
+            CursorShape::Block
+        );
+        for (sequence, shape) in [
+            (&b"\x1b[5 q"[..], CursorShape::Bar),
+            (b"\x1b[6 q", CursorShape::Bar),
+            (b"\x1b[3 q", CursorShape::Underline),
+            (b"\x1b[4 q", CursorShape::Underline),
+            (b"\x1b[2 q", CursorShape::Block),
+        ] {
+            terminal.vt_write(sequence);
+            assert_eq!(renderer.frame(&terminal).unwrap().cursor_shape, shape);
+        }
+    }
     #[test]
     fn copy_preserves_graphemes_without_wide_cell_padding() {
         let mut terminal = Terminal::new(ghostty_vt::TerminalOptions {
@@ -519,6 +573,50 @@ mod tests {
         let frame = Renderer::new().unwrap().frame(&terminal).unwrap();
         assert_eq!(frame.selected_text(0, 25), "界 e\u{301}\nsecond");
         assert_eq!(frame.selected_text(25, 0), "界 e\u{301}\nsecond");
+    }
+
+    #[test]
+    fn underline_styles_colours_and_overlines_reach_the_frame() {
+        use ghostty_vt::style::Underline;
+        let mut terminal = Terminal::new(ghostty_vt::TerminalOptions {
+            cols: 12,
+            rows: 2,
+            ..Default::default()
+        })
+        .unwrap();
+        terminal.vt_write(b"\x1b[4:3;58:2::1:2:3mA\x1b[0;4:2;58:5:1mB\x1b[0;4:4mC\x1b[0;53mD");
+        let frame = Renderer::new().unwrap().frame(&terminal).unwrap();
+        let cell = |text: &str| frame.cells[0].iter().find(|c| c.text == text).unwrap();
+        assert_eq!(cell("A").style.underline, Underline::Curly);
+        assert_eq!(cell("A").underline_color, Some(0x010203));
+        assert_eq!(cell("B").style.underline, Underline::Double);
+        assert!(cell("B").underline_color.is_some());
+        assert_eq!(cell("C").style.underline, Underline::Dotted);
+        assert_eq!(cell("C").underline_color, None);
+        assert!(cell("D").style.overline);
+        assert_eq!(cell("D").style.underline, Underline::None);
+    }
+
+    #[test]
+    fn snapshot_with_kitty_image_in_history_installs_a_terminal() {
+        // A Kitty image payload record follows READY in the snapshot; decoding every record
+        // kind (not only page progress) is what makes such a snapshot usable.
+        let mut terminal = Terminal::new(ghostty_vt::TerminalOptions {
+            cols: 10,
+            rows: 3,
+            max_scrollback: 1 << 20,
+        })
+        .unwrap();
+        terminal.set_kitty_image_storage_limit(1 << 20).unwrap();
+        terminal.vt_write(b"\x1b_Ga=T,f=24,s=1,v=1;CQkJ\x1b\\\r\n");
+        for line in 0..2000 {
+            terminal.vt_write(format!("line {line}\r\n").as_bytes());
+        }
+        let snapshot = ghostty_vt::snapshot::encode(&terminal).unwrap();
+        let mut stream = TerminalStream::new(42);
+        stream.feed(&snapshot).unwrap();
+        assert!(stream.terminal.is_some());
+        assert!(stream.text().unwrap().contains("line 0\n"));
     }
 
     #[test]

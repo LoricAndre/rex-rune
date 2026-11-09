@@ -460,7 +460,10 @@ fn unknown_states_kinds_and_events_stay_quiet() {
     assert_eq!(record.app.as_deref(), Some("x"));
     let event = |creator: &str, name: &str| json!({"block_id":"b","creator_name":creator,"name":name,"payload":{}});
     assert!(activity::parse_block_event(&event("other.creator", "process_changed")).is_none());
-    assert!(activity::parse_block_event(&event(activity::TERMINAL, "bell")).is_none());
+    assert_eq!(
+        activity::parse_block_event(&event(activity::TERMINAL, "bell")),
+        Some(("b".into(), BlockEvent::Bell))
+    );
     assert_eq!(
         activity::parse_block_event(&event(activity::TERMINAL, "process_changed")),
         Some((
@@ -475,6 +478,113 @@ fn unknown_states_kinds_and_events_stay_quiet() {
     assert!(ProgramState::Error > ProgramState::Working);
     assert!(ProgramState::Working > ProgramState::Done);
     assert!(ProgramState::Done > ProgramState::Idle);
+}
+
+#[test]
+fn status_records_keep_their_progress() {
+    use activity::StatusRecord;
+    let parse = |v: Value| StatusRecord::parse(&v).progress;
+    assert_eq!(parse(json!({"state":"working","progress":42})), Some(42));
+    assert_eq!(parse(json!({"state":"working","progress":100})), Some(100));
+    assert_eq!(parse(json!({"state":"working","progress":101})), None);
+    assert_eq!(parse(json!({"state":"working","progress":null})), None);
+    assert_eq!(parse(json!({"state":"working"})), None);
+    // The live event path carries it too.
+    let (_, event) = activity::parse_block_event(&json!({"block_id":"b",
+        "creator_name":activity::TERMINAL,"name":"program_status_changed",
+        "payload":{"id":"","record":{"state":"working","progress":7}}}))
+    .unwrap();
+    assert!(
+        matches!(event, activity::BlockEvent::StatusChanged { record, .. } if record.progress == Some(7))
+    );
+}
+
+#[test]
+fn progress_reports_set_and_clear_a_blocks_progress() {
+    use activity::TerminalProgress::*;
+    let report = |payload: Value| {
+        activity::parse_block_event(&json!({"block_id":"b","creator_name":activity::TERMINAL,
+            "name":"progress_report","payload":payload}))
+    };
+    let mut model = HostModel::default();
+    for (payload, progress) in [
+        (json!({"state":"set","progress":42}), Some(Set(Some(42)))),
+        (json!({"state":"set"}), Some(Set(None))),
+        (json!({"state":"indeterminate"}), Some(Indeterminate)),
+        (json!({"state":"pause","progress":7}), Some(Paused(Some(7)))),
+        (json!({"state":"error","progress":101}), Some(Error(None))),
+        (json!({"state":"remove"}), None),
+    ] {
+        let (block, event) = report(payload).expect("a progress report");
+        model.apply_block_event("s", block, event);
+        assert_eq!(model.progress.get("b").copied(), progress);
+    }
+    assert!(report(json!({"state":"sparkle"})).is_none());
+    model.apply_block_event(
+        "s",
+        "b".into(),
+        activity::BlockEvent::Progress(Some(Set(None))),
+    );
+    model.forget_block("b");
+    assert!(model.progress.is_empty(), "a closed block's progress goes");
+
+    // A report belongs to the program in the foreground: when another takes its place, or
+    // the shell comes back, the report goes with it; the same program keeps it.
+    let process = |name: Option<&str>| activity::BlockEvent::Process {
+        name: name.map(str::to_owned),
+        pids: name.map(|_| vec![7]).unwrap_or_default(),
+    };
+    model.apply_block_event("s", "b".into(), process(Some("cargo")));
+    model.apply_block_event(
+        "s",
+        "b".into(),
+        activity::BlockEvent::Progress(Some(Set(Some(5)))),
+    );
+    model.apply_block_event("s", "b".into(), process(Some("cargo")));
+    assert_eq!(
+        model.progress.get("b").copied(),
+        Some(Set(Some(5))),
+        "same program"
+    );
+    model.apply_block_event("s", "b".into(), process(None));
+    assert!(
+        model.progress.is_empty(),
+        "the program ended without clearing it"
+    );
+    model.apply_block_event(
+        "s",
+        "b".into(),
+        activity::BlockEvent::Progress(Some(Set(Some(5)))),
+    );
+    model.apply_block_event("s", "b".into(), process(Some("vim")));
+    assert!(
+        model.progress.is_empty(),
+        "another program took the foreground"
+    );
+}
+
+#[test]
+fn progress_goes_when_another_process_of_the_same_name_takes_the_foreground() {
+    use activity::TerminalProgress::Set;
+    let mut model = HostModel::default();
+    let python = |pids: Vec<u64>| activity::BlockEvent::Process {
+        name: Some("python".into()),
+        pids,
+    };
+    let progress = activity::BlockEvent::Progress(Some(Set(Some(42))));
+    model.apply_block_event("s", "b".into(), python(vec![11, 1]));
+    model.apply_block_event("s", "b".into(), progress);
+    model.apply_block_event("s", "b".into(), python(vec![11, 1]));
+    assert_eq!(
+        model.progress.get("b").copied(),
+        Some(Set(Some(42))),
+        "the same process keeps its report"
+    );
+    model.apply_block_event("s", "b".into(), python(vec![12, 1]));
+    assert!(
+        model.progress.is_empty(),
+        "a new python must not inherit the last one's report"
+    );
 }
 
 #[test]

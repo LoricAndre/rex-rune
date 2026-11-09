@@ -50,6 +50,7 @@ const SHORTCUTS: &[(&str, &[Shortcut])] = &[
         &[
             (&["Ctrl", "Shift", "C"], "Copy"),
             (&["Ctrl", "Shift", "V"], "Paste"),
+            (&["Ctrl", "Shift", "F"], "Search terminal"),
             (&["Shift", "PageUp"], "Scroll history up"),
             (&["Shift", "PageDown"], "Scroll history down"),
             (&["Ctrl", "+"], "Enlarge interface"),
@@ -300,12 +301,23 @@ fn notifications(s: &Workspace) -> El {
 }
 
 fn terminal(s: &Workspace) -> El {
-    let font = s.terminal_family.unwrap_or("IBM Plex Mono (bundled)");
+    let saved = &s.settings.font_family;
+    let active = s.terminal_family.unwrap_or("IBM Plex Mono (bundled)");
+    let font = if *saved != s.launch_saved_font {
+        format!("{saved} is saved and applies when you reopen the client. Active: {active}.")
+    } else if s.terminal_family.is_none() {
+        format!(
+            "{} isn't installed, so terminals use {active}.",
+            s.launch_font
+        )
+    } else {
+        format!("Active: {active}. Changes apply when you reopen the client.")
+    };
     let mut body = col()
         .gap(4.)
         .child(setting(
             "Font family",
-            &format!("Saved: {}. Active: {font}.", s.settings.font_family),
+            &font,
             pill("font-change", "Change…", Pill::Neutral, 26., |s, tx| s.perform(Intent::Fonts, tx)),
         ))
         .child(divider())
@@ -322,7 +334,7 @@ fn terminal(s: &Workspace) -> El {
         .child(divider())
         .child(setting(
             "Fallback fonts",
-            "Used for missing glyphs, followed by installed system fallbacks. Changes apply next launch.",
+            "Used for missing glyphs, followed by installed system fallbacks. Changes apply when you reopen the client.",
             text(if s.settings.font_fallbacks.is_empty() { "Automatic".into() } else { s.settings.font_fallbacks.join(", ") })
                 .font(medium(13.)).color(rgb(ink())).wrap().max_w(220.),
         ))

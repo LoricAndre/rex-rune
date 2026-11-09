@@ -1,7 +1,7 @@
 //! The optional host → session sidebar. It slides in and out; rows activate on click only
 //! (keyboard session navigation is the Ctrl K switcher, so arrows never switch sessions).
 use super::{
-    activity::{program_icon, tab_activity, tab_name, tab_word},
+    activity::{program_icon, progress_bar, tab_activity, tab_name, tab_progress, tab_word},
     panel::Intent,
     panes::divider_handle,
     theme::*,
@@ -272,9 +272,15 @@ fn window_row(s: &Workspace, index: usize, session: &str, tab: &rexrs::api::sess
         row = row.hover(white(0.05));
     }
     if s.settings.notifications.show_in_tabs
-        && let Some((word, tone)) = tab_word(&activity, s.unseen_on(index, id))
+        && let Some((word, tone)) =
+            tab_word(&activity, s.unseen_on(index, id), s.bell_on(index, id))
     {
         row = row.child(text(word).font(medium(10.5)).color(rgb(tone)));
+    }
+    if s.settings.notifications.show_in_tabs
+        && let Some(progress) = tab_progress(&activity)
+    {
+        row = row.child(progress_bar(format!("tab-progress:{id}"), progress, 10.));
     }
     row
 }

@@ -8,11 +8,13 @@ use super::{
 };
 use rex_linux::connection::{
     DEFAULT_TAB_LABEL, HostModel,
-    activity::{BlockedKind, ProgramState},
+    activity::{
+        BlockedKind, ProgramState, StatusRecord, TERMINAL as TERMINAL_CREATOR, TerminalProgress,
+    },
 };
 use rexrs::api::session;
-use rune::Tx;
-use std::collections::HashMap;
+use rune::{El, Tx, el, row};
+use std::{borrow::Cow, collections::HashMap};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TabActivity {
@@ -26,9 +28,11 @@ pub struct TabActivity {
     pub source: Option<String>,
     /// The focused block's program: the one reporting, else the foreground process.
     pub program: Option<String>,
+    /// The tab's OSC 9;4 progress: an error, else a pause, else progress, across its panes.
+    pub progress: Option<TerminalProgress>,
 }
 
-fn blocks(window: &session::Window) -> impl Iterator<Item = &str> {
+fn blocks(window: &session::Window) -> impl Iterator<Item = &str> + Clone {
     window
         .layers
         .iter()
@@ -65,20 +69,64 @@ pub fn tab_name(model: &HostModel, window: &session::Window) -> String {
     title.or(label).unwrap_or("Terminal").to_owned()
 }
 
+/// What a pane is called: its server label, or while that is still the default its terminal
+/// gets (its flavor's last word, such as `shell`), its program's terminal title. Display only:
+/// the server label is never changed.
+pub fn pane_name(model: &HostModel, block: &session::LayerBlock) -> String {
+    let label = block.label.as_deref().filter(|l| !l.is_empty());
+    let default = block.creator_name.as_deref() == Some(TERMINAL_CREATOR)
+        && label
+            .is_none_or(|l| block.flavor.as_deref().and_then(|f| f.rsplit('.').next()) == Some(l));
+    let title = default
+        .then(|| block.block_id.as_deref().and_then(|b| model.title(b)))
+        .flatten();
+    title.or(label).unwrap_or("Terminal").to_owned()
+}
+
 /// Fold a tab's records with Blocked > Error > Working > Done > Idle.
 pub fn tab_activity(model: &HostModel, window: &session::Window) -> TabActivity {
-    let top = blocks(window)
-        .filter_map(|b| model.activity.get(b))
-        .flat_map(|records| records.values())
-        .max_by_key(|r| r.state);
-    let program = focused_block(window).and_then(|b| {
+    fold_activity(model, blocks(window), focused_block(window))
+}
+
+/// One pane's activity: the same fold as its tab's, over its own records.
+pub fn pane_activity(model: &HostModel, block: &str) -> TabActivity {
+    fold_activity(model, std::iter::once(block), Some(block))
+}
+
+/// The record that speaks for a set: the highest state, and among equals one that reports
+/// progress, so a percentage doesn't depend on record or pane order.
+fn deciding<'a>(records: impl Iterator<Item = &'a StatusRecord>) -> Option<&'a StatusRecord> {
+    records.max_by_key(|r| (r.state, r.progress.is_some()))
+}
+
+fn fold_activity<'a>(
+    model: &'a HostModel,
+    blocks: impl Iterator<Item = &'a str> + Clone,
+    focused: Option<&str>,
+) -> TabActivity {
+    let top = deciding(
+        blocks
+            .clone()
+            .filter_map(|b| model.activity.get(b))
+            .flat_map(|records| records.values()),
+    );
+    let program = focused.and_then(|b| {
         model
             .activity
             .get(b)
-            .and_then(|records| records.values().max_by_key(|r| r.state))
+            .and_then(|records| deciding(records.values()))
             .and_then(|r| r.app.clone())
             .or_else(|| model.programs.get(b).cloned())
     });
+    // A program's own OSC 9;4 report wins over the percentage in its status record.
+    let progress = blocks
+        .filter_map(|b| model.progress.get(b).copied())
+        .max_by_key(|p| p.rank())
+        .or_else(|| {
+            top.filter(|r| r.state == ProgramState::Working)
+                .and_then(|r| r.progress)
+                .map(|n| TerminalProgress::Set(Some(n)))
+        });
     TabActivity {
         state: top.map(|r| r.state).unwrap_or_default(),
         kind: top.and_then(|r| r.kind),
@@ -86,16 +134,18 @@ pub fn tab_activity(model: &HostModel, window: &session::Window) -> TabActivity 
         live: top.is_some_and(|r| r.live),
         source: top.and_then(|r| r.app.clone()),
         program,
+        progress,
     }
 }
 
 /// The icon for a program; shells and anything unknown keep the terminal glyph.
 pub fn program_icon(program: Option<&str>) -> &'static rune::Icon {
     match program.map(str::to_ascii_lowercase).as_deref() {
-        Some("claude") => &CLAUDE,
+        Some("claude" | "claude-code") => &CLAUDE,
         Some("codex") => &CODEX,
         Some("opencode") => &OPENCODE,
-        Some("pi") => &PI,
+        // OMP is built on Pi and shares its skill.
+        Some("pi" | "omp") => &PI,
         Some("nvim" | "vim" | "vi") => &VIM,
         Some("git" | "lazygit" | "tig") => &GIT,
         Some("cargo" | "rustc" | "rustup") => &CRATE,
@@ -104,14 +154,63 @@ pub fn program_icon(program: Option<&str>) -> &'static rune::Icon {
     }
 }
 
-/// The word a pill shows after its label, with its colour: trouble always, and Done until
-/// the tab is seen. Idle and Working show nothing.
-pub fn tab_word(activity: &TabActivity, unseen_done: bool) -> Option<(&'static str, u32)> {
+/// The word a pill shows after its label, with its colour: trouble always, then a bell that
+/// rang while the tab was out of sight, then a paused or failed progress report, and Done
+/// until the tab is seen. Idle and Working records show nothing: a program's progress while
+/// it works is a bar ([`tab_progress`]), not a word.
+pub fn tab_word(
+    activity: &TabActivity,
+    unseen_done: bool,
+    unseen_bell: bool,
+) -> Option<(Cow<'static, str>, u32)> {
+    use TerminalProgress::{Error, Paused};
     match activity.state {
-        ProgramState::Blocked => Some((blocked_word(activity.kind), warning())),
-        ProgramState::Error => Some(("Error", danger())),
-        _ if unseen_done => Some(("Done", accent())),
-        _ => None,
+        ProgramState::Blocked => Some((blocked_word(activity.kind).into(), warning())),
+        ProgramState::Error => Some(("Error".into(), danger())),
+        _ if unseen_bell => Some(("Bell".into(), warning())),
+        _ => match activity.progress {
+            Some(Error(_)) => Some(("Error".into(), danger())),
+            Some(Paused(Some(n))) => Some((format!("Paused {n}%").into(), warning())),
+            Some(Paused(None)) => Some(("Paused".into(), warning())),
+            _ if unseen_done => Some(("Done".into(), accent())),
+            _ => None,
+        },
+    }
+}
+
+/// The bar a pill draws under its label for a program's progress report: how far along, when
+/// the program said, and its colour (`ACCENT` while it works, `WARNING` paused, `DANGER`
+/// failed). None without a report, or while OSC 7501 trouble has the pill's attention.
+pub fn tab_progress(activity: &TabActivity) -> Option<(Option<u8>, u32)> {
+    use TerminalProgress::{Error, Indeterminate, Paused, Set};
+    match activity.state {
+        ProgramState::Blocked | ProgramState::Error => None,
+        _ => match activity.progress? {
+            Set(n) => Some((n, accent())),
+            Indeterminate => Some((None, accent())),
+            Paused(n) => Some((n, warning())),
+            Error(n) => Some((n, danger())),
+        },
+    }
+}
+
+/// A 2 pt progress bar pinned along the bottom of a pill, inset to its text. A known
+/// percentage fills that much of a faint track; an unknown one is the whole track in the
+/// report's colour, dimmed. It never animates.
+pub fn progress_bar(key: String, (percent, tone): (Option<u8>, u32), inset: f32) -> El {
+    let bar = row()
+        .key(key)
+        .pin(Some(inset), None, Some(inset), Some(3.))
+        .h(2.)
+        .radius(1.);
+    match percent {
+        Some(percent) => {
+            let fraction = (f32::from(percent.min(100)) / 100.).max(0.02);
+            bar.fill(white(0.08))
+                .child(el().grow(fraction).h_full().radius(1.).fill(rgb(tone)))
+                .child(el().grow(1. - fraction))
+        }
+        None => bar.fill(rgb(tone)).opacity(0.35),
     }
 }
 
@@ -185,6 +284,9 @@ impl Workspace {
         }
         self.unseen_done
             .retain(|key| key.0 != id || now.contains_key(key));
+        // A bell shows until its tab is in front, and goes with its tab.
+        self.unseen_bells
+            .retain(|key| key.0 != id || now.get(key).is_some_and(|(_, seen, _)| !seen));
         self.tab_states.retain(|(host, _), _| *host != id);
         self.tab_states
             .extend(now.into_iter().map(|(k, (state, ..))| (k, state)));
@@ -343,6 +445,24 @@ impl Workspace {
         }
     }
 
+    /// Latch the bells programs rang, as (session, block), on tabs the user can't see.
+    pub fn ring_bells(&mut self, index: usize, bells: Vec<(String, String)>) {
+        let id = self.hosts[index].id;
+        for (session, block) in bells {
+            let window = self.hosts[index]
+                .model
+                .views
+                .get(&session)
+                .and_then(|v| v.windows.iter().find(|w| blocks(w).any(|b| b == block)))
+                .and_then(|w| w.window_id.clone());
+            if let Some(window) = window
+                && !self.tab_seen(index, &session, &window)
+            {
+                self.unseen_bells.insert((id, window));
+            }
+        }
+    }
+
     /// Whether `window` on the active host shows "Done" until seen.
     pub fn unseen(&self, window: &str) -> bool {
         self.unseen_on(self.active, window)
@@ -350,6 +470,12 @@ impl Workspace {
 
     pub fn unseen_on(&self, host: usize, window: &str) -> bool {
         self.unseen_done
+            .contains(&(self.hosts[host].id, window.to_owned()))
+    }
+
+    /// Whether `window` on host `host` rang its bell while out of sight.
+    pub fn bell_on(&self, host: usize, window: &str) -> bool {
+        self.unseen_bells
             .contains(&(self.hosts[host].id, window.to_owned()))
     }
 }
@@ -426,6 +552,56 @@ mod tests {
             .insert("block".into(), ("stale".into(), Some(42)));
         model.foreground.insert("block".into(), vec![99]);
         assert_eq!(tab_name(&model, &window), "Window 9dcd0a4c");
+    }
+
+    fn pane(label: Option<&str>) -> (HostModel, session::LayerBlock) {
+        let mut model = HostModel::default();
+        model
+            .titles
+            .insert("block".into(), ("Claude Code".into(), Some(7)));
+        model.foreground.insert("block".into(), vec![7, 1]);
+        let block = session::LayerBlock {
+            block_id: Some("block".into()),
+            label: label.map(str::to_owned),
+            creator_name: Some("com.superlogical.terminal".into()),
+            flavor: Some("com.superlogical.terminal.shell".into()),
+            ..Default::default()
+        };
+        (model, block)
+    }
+
+    #[test]
+    fn default_pane_labels_show_the_current_terminal_title() {
+        for label in [Some("shell"), None, Some("")] {
+            let (model, block) = pane(label);
+            assert_eq!(pane_name(&model, &block), "Claude Code");
+        }
+    }
+
+    #[test]
+    fn renamed_panes_keep_their_labels() {
+        for label in ["build", "Shell", "server", "Claude"] {
+            let (model, block) = pane(Some(label));
+            assert_eq!(pane_name(&model, &block), label);
+        }
+    }
+
+    #[test]
+    fn pane_titles_go_stale_with_their_program() {
+        let (mut model, block) = pane(Some("shell"));
+        model.foreground.insert("block".into(), vec![1]);
+        assert_eq!(pane_name(&model, &block), "shell");
+        model.titles.clear();
+        let (_, mut bare) = pane(None);
+        bare.flavor = None;
+        assert_eq!(pane_name(&model, &bare), "Terminal");
+    }
+
+    #[test]
+    fn only_terminal_blocks_take_titles() {
+        let (model, mut block) = pane(Some("shell"));
+        block.creator_name = Some("com.example.other".into());
+        assert_eq!(pane_name(&model, &block), "shell");
     }
 
     #[test]

@@ -153,30 +153,13 @@ def run():
             assert lines.count("POINTER_COPY_OK") == 2, "Pointer selection/copy failed:\n" + output
             assert view["label"] == label, "Cancelled rename changed the session"
             # A raw PTY observer enables Kitty event reporting. The terminal key must include
-            # its release, while every key consumed by local UI must stay out of the PTY.
-            observer = Path(directory) / "observe.py"
+            # its release, every key consumed by local UI must stay out of the PTY, and each
+            # modified key must arrive distinct from its unmodified form.
+            observer = ROOT / "tools/kitty-keys.py"
             result = Path(directory) / "keys.bin"
             ready = Path(directory) / "ready"
-            observer.write_text("""import os, select, sys, termios, time, tty
-from pathlib import Path
-old = termios.tcgetattr(0)
-data = bytearray()
-try:
-    tty.setraw(0)
-    time.sleep(.25)
-    termios.tcflush(0, termios.TCIFLUSH)
-    os.write(1, b'\\x1b[>3u')
-    Path(sys.argv[1]).touch()
-    deadline = time.monotonic() + 4
-    while time.monotonic() < deadline:
-        if select.select([0], [], [], .05)[0]:
-            data.extend(os.read(0, 4096))
-finally:
-    os.write(1, b'\\x1b[<u')
-    termios.tcsetattr(0, termios.TCSADRAIN, old)
-    Path(sys.argv[2]).write_bytes(data)
-""")
-            text(f"python3 {shlex.quote(str(observer))} {shlex.quote(str(ready))} {shlex.quote(str(result))}")
+            text(f"python3 {shlex.quote(str(observer))} {shlex.quote(str(ready))} "
+                 f"{shlex.quote(str(result))} 12")
             key("Return")
             wait_for(ready.exists, "Raw key observer did not start")
             key("a")  # terminal press and release
@@ -184,12 +167,42 @@ finally:
             key("Escape")
             key("ctrl+shift+space")
             key("Escape")
-            wait_for(result.exists, "Raw key observer did not finish", timeout=6)
+            # Tab, Enter and Backspace report no release in this mode; bare modifiers send nothing.
+            modified = [
+                ("Tab", b"\t"),
+                ("shift+Tab", b"\x1b[9;2u"),
+                ("Return", b"\r"),
+                ("shift+Return", b"\x1b[13;2u"),
+                ("ctrl+Return", b"\x1b[13;5u"),
+                ("alt+Return", b"\x1b[13;3u"),
+                ("space", b" \x1b[32;1:3u"),
+                ("shift+space", b"\x1b[32;2u\x1b[32;2:3u"),
+                ("shift+Up", b"\x1b[1;2:1A\x1b[1;2:3A"),
+                ("ctrl+Left", b"\x1b[1;5:1D\x1b[1;5:3D"),
+                ("alt+Right", b"\x1b[1;3:1C\x1b[1;3:3C"),
+                ("shift+Home", b"\x1b[1;2:1H\x1b[1;2:3H"),
+                ("ctrl+End", b"\x1b[1;5:1F\x1b[1;5:3F"),
+                ("shift+BackSpace", b"\x1b[127;2u"),
+                ("ctrl+Delete", b"\x1b[3;5~\x1b[3;5:3~"),
+                ("alt+Prior", b"\x1b[5;3~\x1b[5;3:3~"),
+                ("shift+a", b"A\x1b[97;2:3u"),
+            ]
+            for stroke, _ in modified:
+                key(stroke)
+            key("ctrl+shift+Return")  # Zoom, a workspace shortcut
+            key("shift+Prior")  # local scrollback
+            wait_for(result.exists, "Raw key observer did not finish", timeout=16)
             keys = result.read_bytes()
-            expected = b"a\x1b[97;1:3u"
-            assert keys == expected, f"Raw Kitty key stream: expected {expected!r}, got {keys!r}"
+            expected = b"a\x1b[97;1:3u" + b"".join(sent for _, sent in modified)
+
+            def events(stream):
+                return [b"\x1b" + part if i else part
+                        for i, part in enumerate(stream.split(b"\x1b"))]
+            assert keys == expected, ("Raw Kitty key stream differs:\n  expected "
+                                      f"{events(expected)}\n  got      {events(keys)}")
             print("PASS X11 native Enter/Tab, terminal input, clipboard copy/paste, pointer selection/copy, dialog keyboard/default action, host disclosure, add-host form and session switcher")
             print("PASS terminal key releases arrive and local UI keys stay out of the raw Kitty-reporting PTY")
+            print("PASS modified terminal keys stay distinct in the raw Kitty-reporting PTY")
     finally:
         for process in (app, server):
             if process:

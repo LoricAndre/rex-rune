@@ -1,7 +1,7 @@
-//! What programs in a terminal report about themselves: OSC 7501 status records, the
-//! foreground process, the terminal title, and OSC 9 / OSC 777 desktop notifications. All of
-//! it arrives as the terminal creator's `block_event`s, or from its `program_status`,
-//! `process` and `title` methods.
+//! What programs in a terminal report about themselves: OSC 7501 status records, OSC 9;4
+//! progress, the bell, the foreground process, the terminal title, and OSC 9 / OSC 777 desktop
+//! notifications. All of it arrives as the terminal creator's `block_event`s, or from its
+//! `program_status`, `process` and `title` methods.
 use serde_json::Value;
 
 pub const TERMINAL: &str = "com.superlogical.terminal";
@@ -38,6 +38,27 @@ pub enum BlockedKind {
     Auth,
 }
 
+/// A terminal's OSC 9;4 progress report, with its percentage when the program gave one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalProgress {
+    Set(Option<u8>),
+    Indeterminate,
+    Paused(Option<u8>),
+    Error(Option<u8>),
+}
+
+impl TerminalProgress {
+    /// Which report a tab shows when several of its terminals report: errors, then pauses,
+    /// then progress.
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::Error(_) => 2,
+            Self::Paused(_) => 1,
+            Self::Set(_) | Self::Indeterminate => 0,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StatusRecord {
     pub state: ProgramState,
@@ -47,6 +68,8 @@ pub struct StatusRecord {
     /// The program's own words; shown only as plain text.
     pub title: Option<String>,
     pub msg: Option<String>,
+    /// How far along the program says it is, 0–100; only working and blocked records have one.
+    pub progress: Option<u8>,
     /// Reported while this client was listening, not read back by a query: only live
     /// changes are news worth a notification.
     pub live: bool,
@@ -71,6 +94,10 @@ impl StatusRecord {
             app: text("effective_app").or_else(|| text("app")),
             title: text("title"),
             msg: text("msg"),
+            progress: value["progress"]
+                .as_u64()
+                .filter(|p| *p <= 100)
+                .map(|p| p as u8),
             live: false,
         }
     }
@@ -112,6 +139,10 @@ pub enum BlockEvent {
         title: String,
         body: String,
     },
+    /// An OSC 9;4 report; none when the program removed its progress.
+    Progress(Option<TerminalProgress>),
+    /// The program rang the terminal's bell (BEL).
+    Bell,
 }
 
 /// A terminal `block_event`'s block and meaning; none for other creators and other events.
@@ -142,6 +173,21 @@ pub fn parse_block_event(payload: &Value) -> Option<(String, BlockEvent)> {
             title: body["title"].as_str().unwrap_or_default().to_owned(),
             body: body["body"].as_str().unwrap_or_default().to_owned(),
         },
+        "bell" => BlockEvent::Bell,
+        "progress_report" => BlockEvent::Progress({
+            let percent = body["progress"]
+                .as_u64()
+                .filter(|p| *p <= 100)
+                .map(|p| p as u8);
+            match body["state"].as_str()? {
+                "remove" => None,
+                "set" => Some(TerminalProgress::Set(percent)),
+                "indeterminate" => Some(TerminalProgress::Indeterminate),
+                "pause" => Some(TerminalProgress::Paused(percent)),
+                "error" => Some(TerminalProgress::Error(percent)),
+                _ => return None,
+            }
+        }),
         _ => return None,
     };
     Some((block, event))

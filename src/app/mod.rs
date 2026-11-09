@@ -1,6 +1,7 @@
 //! The Rune front end.
 mod activity;
 mod dialogs;
+mod discover;
 mod fonts;
 mod input;
 mod integrations;
@@ -11,6 +12,7 @@ mod panes;
 mod popups;
 mod settings_view;
 mod sidebar;
+mod sprites;
 mod stats;
 mod term;
 mod theme;
@@ -56,7 +58,8 @@ pub(crate) fn view(s: &Workspace, cx: &mut Cx<Workspace>) -> El {
             .child(sidebar::sidebar(s, cx))
             .child(sidebar::sidebar_edge(s));
     }
-    body = body.child(panes::area(s));
+    // Device pixels per point, so terminal box drawing lands on whole pixels.
+    body = body.child(panes::area(s, cx.env().scale * scale));
     let mut root = el()
         .key("root")
         .absolute(0., 0.)
@@ -145,6 +148,15 @@ fn poll(s: &mut Workspace, _: f64, tx: &mut Tx) -> bool {
     }
     if s.notices.iter().any(|n| !n.sticky) {
         tx.wake_after(Duration::from_secs(1));
+    }
+    // A pane waiting for a frame at its size draws anyway at its deadline; be awake for it.
+    let now = std::time::Instant::now();
+    for deadline in s.terminals.values().filter_map(|t| t.draws_anyway_at()) {
+        if deadline <= now {
+            changed = true;
+        } else {
+            tx.wake_after(deadline - now);
+        }
     }
     changed
 }

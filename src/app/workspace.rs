@@ -80,7 +80,13 @@ pub struct Workspace {
     pub area: [f32; 4],
     pub viewport: [f32; 2],
     pub sidebar: rune_kit::PaneState,
+    /// The resolved terminal family, or None when the requested one isn't installed.
     pub terminal_family: Option<&'static str>,
+    /// The family this launch asked for, after `--font`.
+    pub launch_font: String,
+    /// The saved family when the client started, to tell a pending font change from the
+    /// active one.
+    pub launch_saved_font: String,
     pub title: String,
     /// (active tab, pane width, sidebar open) when the active tab was last revealed.
     pub last_tab: (Option<String>, i32, bool),
@@ -98,11 +104,15 @@ pub struct Workspace {
     pub tab_states: TabStates,
     /// Tabs whose programs finished while the user wasn't looking; they show "Done".
     pub unseen_done: HashSet<(HostId, String)>,
+    /// Tabs whose programs rang the bell while the user wasn't looking; they show "Bell".
+    pub unseen_bells: HashSet<(HostId, String)>,
     pub activity_epochs: HashMap<HostId, u64>,
     pub notifier: Option<Notifier>,
     /// Notifications headless tests would have sent.
     pub outbox: Vec<Note>,
     pub integrations: super::integrations::Integrations,
+    /// The tailnet's machines, for Add host.
+    pub discovery: super::discover::Discovery,
     /// The terminal theme this client declares, from Settings; none is Follow server.
     pub term_theme: Option<TerminalTheme>,
     /// Where Ghostty themes are read from.
@@ -130,6 +140,8 @@ impl Workspace {
         handle: AppHandle<Workspace>,
         terminal_family: Option<&'static str>,
     ) -> Self {
+        let launch_font = options.fonts(&settings).0.to_owned();
+        let launch_saved_font = settings.font_family.clone();
         let explicit = options.session.is_some()
             || options.new.is_some()
             || options.endpoint != rex_linux::transport::local_endpoint();
@@ -139,7 +151,7 @@ impl Workspace {
             .any(|h| h.endpoint == options.endpoint)
         {
             settings.hosts.push(Host {
-                label: options.endpoint.trim_start_matches("https://").into(),
+                label: rex_linux::settings::endpoint_label(&options.endpoint),
                 endpoint: options.endpoint.clone(),
                 collapsed: false,
                 shell: None,
@@ -197,6 +209,8 @@ impl Workspace {
             viewport: [1440., 900.],
             sidebar,
             terminal_family,
+            launch_font,
+            launch_saved_font,
             title: "Rex".into(),
             last_tab: (None, 0, false),
             reveal_tab_again: false,
@@ -211,10 +225,12 @@ impl Workspace {
             settings_section: SettingsSection::default(),
             tab_states: HashMap::new(),
             unseen_done: HashSet::new(),
+            unseen_bells: HashSet::new(),
             activity_epochs: HashMap::new(),
             notifier: None,
             outbox: Vec::new(),
             integrations: Default::default(),
+            discovery: Default::default(),
             term_theme,
             theme_dirs,
             themes: Vec::new(),
@@ -228,7 +244,7 @@ impl Workspace {
         this
     }
 
-    fn connect_host(&mut self, index: usize, explicit: bool) {
+    pub(super) fn connect_host(&mut self, index: usize, explicit: bool) {
         let state = self.spawn_host(index, explicit);
         self.hosts.push(state);
     }
@@ -280,6 +296,7 @@ impl Workspace {
         self.claimed.retain(|(host, _)| *host != id);
         self.tab_states.retain(|(host, _), _| *host != id);
         self.unseen_done.retain(|(host, _)| *host != id);
+        self.unseen_bells.retain(|(host, _)| *host != id);
         self.activity_epochs.remove(&id);
     }
 
@@ -355,7 +372,7 @@ impl Workspace {
     pub fn sync(&mut self, index: usize, tx: &mut Tx) {
         let id = self.hosts[index].id;
         let old_session = self.hosts[index].model.selected.clone();
-        let (model, notices, clipboard) = {
+        let (model, notices, clipboard, bells) = {
             let mut shared = self.hosts[index]
                 .connection
                 .model
@@ -363,7 +380,8 @@ impl Workspace {
                 .expect("host model");
             let notices = std::mem::take(&mut shared.notices);
             let clipboard = shared.clipboard.take();
-            (shared.clone(), notices, clipboard)
+            let bells = std::mem::take(&mut shared.bells);
+            (shared.clone(), notices, clipboard, bells)
         };
         for (block, connection) in &model.terminals {
             let key = (id, block.clone());
@@ -414,6 +432,7 @@ impl Workspace {
         {
             tx.copy(copy.text);
         }
+        self.ring_bells(index, bells);
         self.track_activity(index);
         self.deliver_program_notices(index, notices);
         if self
@@ -664,6 +683,41 @@ impl Workspace {
     pub fn active_terminal_mut(&mut self) -> Option<&mut Term> {
         let key = self.term_key(&self.focused_block()?);
         self.terminals.get_mut(&key)
+    }
+
+    /// Opens the focused terminal's search field, or gives it back the keyboard.
+    pub fn open_search(&mut self) {
+        if let Some(term) = self.active_terminal_mut() {
+            term.search.get_or_insert_with(|| TextEdit::new("")).focused = true;
+        }
+    }
+
+    /// A terminal's search field. Rune may write back to a field its own key just closed
+    /// (Escape), so a closed field's writes land in a scratch edit.
+    pub fn search_input(&mut self, key: &(HostId, String)) -> &mut TextEdit {
+        match self.terminals.get_mut(key).and_then(|t| t.search.as_mut()) {
+            Some(edit) => edit,
+            None => &mut self.scratch,
+        }
+    }
+
+    pub fn search_changed(&mut self, key: &(HostId, String)) {
+        if let Some(term) = self.terminals.get_mut(key)
+            && let Some(needle) = term.search.as_ref().map(|edit| edit.text.clone())
+        {
+            term.send(Command::Search(needle));
+        }
+    }
+
+    /// Closes a terminal's search field and its highlights; the keyboard goes back to the
+    /// focused terminal.
+    pub fn close_search(&mut self, key: &(HostId, String), tx: &mut Tx) {
+        if let Some(term) = self.terminals.get_mut(key)
+            && term.search.take().is_some()
+        {
+            term.send(Command::Search(String::new()));
+        }
+        tx.blur();
     }
 
     pub fn send(&mut self, index: usize, command: HostCommand) {
@@ -945,10 +999,13 @@ impl Workspace {
             }
             Intent::Pane(target, action) => self.pane_action(target, action, tx),
             Intent::Session(target, action) => self.session_action(target, action, tx),
-            Intent::AddHost => self.open_panel(
+            Intent::AddHost => self.open_add_host(),
+            Intent::AddMachine(index) => self.add_machine(index, tx),
+            Intent::MachineForm(index) => self.machine_form(index),
+            Intent::AddHostManually => self.open_panel(
                 PanelKind::Form(Form::AddHost),
-                "Add host",
-                &[("Host name", "my-host", ""), ("Endpoint", "https://host.example.ts.net or unix:///path", "")],
+                "Add host by endpoint",
+                &[("Host name", "my-host", ""), ("Endpoint", "https://host.example.ts.net, ssh://user@host[/socket] or unix:///path", "")],
             ),
             Intent::NewWindow => {
                 let layout = self.new_terminal(self.active);
@@ -997,7 +1054,7 @@ impl Workspace {
                     &format!("Edit {}", h.label),
                     &[
                         ("Host name", "my-host", &h.label),
-                        ("Endpoint", "https://host.example.ts.net or unix:///path", &h.endpoint),
+                        ("Endpoint", "https://host.example.ts.net, ssh://user@host or unix:///path", &h.endpoint),
                         ("Default shell", "Server default — e.g. zsh or /bin/zsh", h.shell.as_deref().unwrap_or("")),
                     ],
                 );
@@ -1085,6 +1142,7 @@ impl Workspace {
             session: model.selected.clone()?,
             block: block.into(),
             label: self.block_label(block),
+            name: self.pane_name(block),
             tab: model
                 .window()?
                 .label
@@ -1112,7 +1170,7 @@ impl Workspace {
         let Some(target) = self.target(&block) else {
             return;
         };
-        let title = format!("{} · {}", target.tab, target.label);
+        let title = format!("{} · {}", target.tab, target.name);
         self.open_panel(PanelKind::Pane, &title, &[]);
         let panel = self.panel.as_mut().unwrap();
         panel.target = Some(target);
@@ -1263,7 +1321,7 @@ impl Workspace {
                 self.panel.as_mut().unwrap().target = Some(target);
             }
             PaneAction::Close => {
-                let title = format!("Close {} in {}?", target.label, target.tab);
+                let title = format!("Close {} in {}?", target.name, target.tab);
                 let description = format!(
                     "Ends the program in this pane on {}. Closing the app itself keeps programs running.",
                     self.settings.hosts[target.host].label
@@ -1292,6 +1350,21 @@ impl Workspace {
             .find(|b| b.block_id.as_deref() == Some(id))
             .and_then(|b| b.label.clone())
             .unwrap_or_else(|| "Terminal".into())
+    }
+
+    /// What pane `id` of the active tab is called on screen (`activity::pane_name`).
+    pub fn pane_name(&self, id: &str) -> String {
+        let model = self.model();
+        model
+            .window()
+            .into_iter()
+            .flat_map(|w| &w.layers)
+            .flat_map(|l| &l.blocks)
+            .find(|b| b.block_id.as_deref() == Some(id))
+            .map_or_else(
+                || "Terminal".into(),
+                |b| super::activity::pane_name(model, b),
+            )
     }
 
     fn confirm(&mut self, title: &str, method: &str, payload: Value, description: &str) {
@@ -1350,7 +1423,8 @@ impl Workspace {
         }
         let previous = self.panel.take();
         let target = previous.as_ref().and_then(|p| p.target.clone());
-        // Forms and confirmations opened from Settings go back to it.
+        // Forms and confirmations opened from Settings go back to it; the Add host list
+        // does too, and its own forms go back to the list.
         let keep_back = matches!(kind, PanelKind::Hosts(_))
             || (matches!(
                 kind,
@@ -1359,9 +1433,14 @@ impl Workspace {
                     | PanelKind::AgentChange { .. }
                     | PanelKind::Themes
                     | PanelKind::Chromes
+                    | PanelKind::Discover
             ) && previous
                 .as_ref()
-                .is_some_and(|p| matches!(p.kind, PanelKind::Settings)));
+                .is_some_and(|p| matches!(p.kind, PanelKind::Settings)))
+            || (matches!(kind, PanelKind::Form(Form::AddSsh(_) | Form::AddHost))
+                && previous
+                    .as_ref()
+                    .is_some_and(|p| matches!(p.kind, PanelKind::Discover)));
         let mut panel = Panel::new(kind, title, fields);
         panel.target = target;
         panel.back = if keep_back {
@@ -1375,13 +1454,17 @@ impl Workspace {
         }
     }
 
-    /// The Settings panel a form or confirmation was opened from, to return to after it.
-    fn settings_back(&mut self) -> Option<Panel> {
-        self.panel
-            .as_mut()
-            .and_then(|p| p.back.take())
-            .filter(|b| matches!(b.kind, PanelKind::Settings))
-            .map(|b| *b)
+    /// The Settings panel a form or confirmation was opened from, to return to after it,
+    /// also through the Add host list.
+    pub(super) fn settings_back(&mut self) -> Option<Panel> {
+        let mut back = self.panel.as_mut().and_then(|p| p.back.take());
+        while let Some(panel) = back {
+            if matches!(panel.kind, PanelKind::Settings) {
+                return Some(*panel);
+            }
+            back = panel.back;
+        }
+        None
     }
 
     /// Show a Settings section; Integrations reads the agents' state when first shown.
@@ -1502,6 +1585,8 @@ impl Workspace {
                         .then(|| "Enter one shell name or path, without arguments.".to_owned())
                 } else if values.first().is_none_or(|s| s.is_empty()) {
                     Some("Enter a name".to_owned())
+                } else if let Form::AddSsh(index) = form {
+                    self.machine_form_error(index, &values)
                 } else if let Form::AddHost | Form::EditHost(_) = form {
                     let editing = match form {
                         Form::EditHost(i) => Some(i),
@@ -1543,9 +1628,14 @@ impl Workspace {
                         let (family, fallbacks) = font_preferences
                             .expect("font form")
                             .expect("validated above");
+                        let changed = family != self.settings.font_family
+                            || fallbacks != self.settings.font_fallbacks;
                         self.settings.font_family = family;
                         self.settings.font_fallbacks = fallbacks;
                         self.save();
+                        if changed {
+                            self.inform("Fonts saved. Reopen the client to use them.");
+                        }
                     }
                     Form::HostShell(host) => {
                         self.settings.hosts[host].shell =
@@ -1569,17 +1659,27 @@ impl Workspace {
                         ),
                         None => self.request("session.set_block_label", json!({"block_id":id,"label":values[0]})),
                     },
-                    Form::AddHost => {
-                        self.settings.hosts.push(Host {
+                    Form::AddHost => self.add_host(
+                        Host {
                             label: values[0].clone(),
                             endpoint: values[1].clone(),
                             collapsed: false,
                             shell: None,
-                        });
-                        self.active = self.settings.hosts.len() - 1;
-                        self.connect_host(self.active, false);
-                        self.update_visibility();
-                        self.save();
+                        },
+                        tx,
+                    ),
+                    Form::AddSsh(index) => {
+                        let socket = values.get(2).map(String::as_str).unwrap_or_default();
+                        let endpoint = self.discovery.candidates[index].machine.ssh_endpoint(&values[1], socket);
+                        self.add_host(
+                            Host {
+                                label: values[0].clone(),
+                                endpoint,
+                                collapsed: false,
+                                shell: None,
+                            },
+                            tx,
+                        );
                     }
                     Form::EditHost(host) => {
                         let shell = values.get(2).filter(|v| !v.is_empty()).cloned();

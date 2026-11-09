@@ -266,15 +266,30 @@ pub fn validate_host(label: &str, endpoint: &str) -> Result<()> {
     ensure!(!label.trim().is_empty(), "Enter a host name");
     if let Some(path) = endpoint.strip_prefix("unix://") {
         ensure!(path.starts_with('/'), "Unix socket paths must be absolute");
-    } else {
+    } else if crate::ssh::Target::parse(endpoint)?.is_none() {
         let url =
-            url::Url::parse(endpoint).context("Use an https://, http:// or unix:// endpoint")?;
+            url::Url::parse(endpoint).context("Use an https://, ssh:// or unix:// endpoint")?;
         ensure!(
             matches!(url.scheme(), "https" | "http" | "ws" | "wss") && url.host_str().is_some(),
-            "Use an https://, http:// or unix:// endpoint"
+            "Use an https://, ssh:// or unix:// endpoint"
         );
     }
     Ok(())
+}
+
+/// A name for a host from its endpoint alone: the machine for a URL or SSH target, the socket
+/// path otherwise.
+pub fn endpoint_label(endpoint: &str) -> String {
+    if let Ok(Some(target)) = crate::ssh::Target::parse(endpoint) {
+        return target.host;
+    }
+    if !endpoint.starts_with("unix://")
+        && let Ok(url) = url::Url::parse(endpoint)
+        && let Some(host) = url.host_str()
+    {
+        return host.to_owned();
+    }
+    endpoint.to_owned()
 }
 
 #[cfg(test)]
@@ -405,5 +420,43 @@ mod tests {
             serde_json::from_value(serde_json::json!({ "chrome_theme": "solarized_light" }))
                 .unwrap();
         assert_eq!(s.chrome_theme, ChromeTheme::Midnight);
+    }
+
+    #[test]
+    fn hosts_take_https_ssh_and_unix_endpoints() {
+        for ok in [
+            "https://box.tail1234.ts.net",
+            "http://box:8080",
+            "ssh://me@box.tail1234.ts.net",
+            "ssh://box:2222",
+            "ssh://ops@box/run/rex/server.sock",
+            "unix:///run/user/1000/rex/server.sock",
+        ] {
+            validate_host("box", ok).unwrap_or_else(|e| panic!("{ok}: {e}"));
+        }
+        for (bad, words) in [
+            ("ftp://box", "https://, ssh:// or unix://"),
+            ("box", "https://, ssh:// or unix://"),
+            ("ssh://", "ssh://user@host"),
+            ("ssh://box/", "absolute socket path"),
+            ("ssh://box/a b.sock", "ssh://user@host"),
+            ("unix://relative.sock", "absolute"),
+        ] {
+            let error = validate_host("box", bad).unwrap_err().to_string();
+            assert!(error.contains(words), "{bad}: {error}");
+        }
+        assert!(validate_host("  ", "https://box").is_err());
+        assert_eq!(
+            endpoint_label("ssh://me@box.tail1234.ts.net"),
+            "box.tail1234.ts.net"
+        );
+        assert_eq!(
+            endpoint_label("https://box.tail1234.ts.net:8443"),
+            "box.tail1234.ts.net"
+        );
+        assert_eq!(
+            endpoint_label("unix:///tmp/rex.sock"),
+            "unix:///tmp/rex.sock"
+        );
     }
 }
