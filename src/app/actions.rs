@@ -349,6 +349,41 @@ pub fn run(s: &mut Workspace, name: &str, args: &Value, tx: &mut Tx) -> bool {
     true
 }
 
+#[derive(Clone, Copy)]
+pub enum Kind {
+    Local(&'static Spec),
+    Forward,
+    Server { repeats: bool },
+    Skip,
+}
+pub fn classify(
+    binding: &rexrs::api::client::Binding,
+    server_actions: &[rexrs::api::client::InspectResponseAction],
+) -> Kind {
+    if binding.mode.is_some() {
+        return Kind::Skip;
+    }
+    if binding.action == "client.key.forward" {
+        return Kind::Forward;
+    }
+    if let Some(spec) = find(&binding.action) {
+        return if spec.accepts(binding.args.as_ref().unwrap_or(&Value::Null)) {
+            Kind::Local(spec)
+        } else {
+            Kind::Skip
+        };
+    }
+    match server_actions
+        .iter()
+        .find(|a| a.name == binding.action && matches!(a.kind.as_deref(), Some("lua" | "block")))
+    {
+        Some(action) => Kind::Server {
+            repeats: action.repeats.unwrap_or(false),
+        },
+        None => Kind::Skip,
+    }
+}
+
 pub fn declarations() -> Vec<rexrs::api::client::InspectResponseAction> {
     SPECS
         .iter()

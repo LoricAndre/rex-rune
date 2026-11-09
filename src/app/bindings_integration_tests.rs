@@ -32,6 +32,147 @@ fn ctrl(key: Key) -> KeyEvent {
     }
 }
 
+fn server_map(
+    ws: &mut Workspace,
+    bindings: Vec<rexrs::api::client::Binding>,
+    actions: Vec<rexrs::api::client::InspectResponseAction>,
+) {
+    let reply = rexrs::api::client::KeymapResponse {
+        bindings,
+        actions,
+        ..Default::default()
+    };
+    ws.hosts[0].model.connected = true;
+    ws.hosts[0].model.keymap = Some(std::sync::Arc::new(
+        rex_linux::connection::keymap::Snapshot {
+            generation: ws.keymap_generation,
+            resolved: rex_linux::keymap::Resolved::from_server(
+                &reply,
+                &ws.settings.shortcut_file.overrides,
+            ),
+            reply,
+        },
+    ));
+    ws.hosts[0].model.keymap_revision += 1;
+}
+
+#[test]
+fn forward_wins_over_local_and_sequence_echoes_original_prefix_with_release() {
+    use rexrs::api::client::Binding;
+    let (mut ws, rx) = tabbed_workspace("single");
+    server_map(
+        &mut ws,
+        vec![
+            Binding::new(["ctrl+shift+t"], "client.key.forward"),
+            Binding::new(["ctrl+shift+t"], "client.tab.new"),
+            Binding::new(["Control+X", "ctrl+s"], "client.key.forward"),
+        ],
+        vec![],
+    );
+    let (sender, sent) = flume::unbounded();
+    live_terminal(&mut ws, "block:a", &sender);
+    let mut rt = runtime(ws);
+    let ev = KeyEvent {
+        key: Key::Command('t'),
+        mods: Mods {
+            ctrl: true,
+            shift: true,
+            ..Mods::default()
+        },
+    };
+    key(&mut rt, Code::KeyT, ev.clone(), true, false);
+    key(&mut rt, Code::KeyT, ev, false, false);
+    assert_eq!(sent_keys(&sent).len(), 2);
+    assert!(requests(&rx).is_empty());
+    key(&mut rt, Code::KeyX, ctrl(Key::Command('x')), true, false);
+    key(&mut rt, Code::KeyX, ctrl(Key::Command('x')), false, false);
+    key(&mut rt, Code::KeyS, ctrl(Key::Command('s')), true, false);
+    key(&mut rt, Code::KeyS, ctrl(Key::Command('s')), true, true);
+    let calls: Vec<_> = sent.try_iter().collect();
+    assert_eq!(calls.len(), 1);
+    assert!(
+        matches!(&calls[0],HostCommand::Terminal{command:Command::KeyWithPrefix{prefix,key},..} if prefix==&["Control+X"] && key["action"]=="press")
+    );
+    key(&mut rt, Code::KeyS, ctrl(Key::Command('s')), false, false);
+    assert_eq!(sent_keys(&sent)[0]["action"], "release");
+}
+
+#[test]
+fn result_actions_are_classified_and_absent_args_are_omitted() {
+    use rexrs::api::client::{Binding, InspectResponseAction};
+    let (mut ws, rx) = tabbed_workspace("single");
+    server_map(
+        &mut ws,
+        vec![
+            Binding::new(["ctrl+j"], "client.mac.only"),
+            Binding::new(["ctrl+j"], "clear_screen"),
+        ],
+        vec![InspectResponseAction::new("clear_screen").kind("lua")],
+    );
+    let mut rt = runtime(ws);
+    key(&mut rt, Code::KeyJ, ctrl(Key::Command('j')), true, false);
+    let request = rx
+        .try_iter()
+        .find_map(|c| match c {
+            HostCommand::Action { request, .. } => Some(request),
+            _ => None,
+        })
+        .unwrap();
+    let value = serde_json::to_value(request).unwrap();
+    assert_eq!(value["action"], "clear_screen");
+    assert_eq!(value["origin"], "key");
+    assert_eq!(value["session_id"], "s");
+    assert_eq!(value["block_id"], "block:a");
+    assert!(
+        value.get("args").is_none()
+            && value.get("servers").is_none()
+            && value.get("server").is_none()
+    );
+}
+
+#[test]
+fn returned_client_actions_are_taken_once_in_order_unknown_names_ignored() {
+    let mut ws = workspace();
+    capture_host(&mut ws, 0);
+    {
+        let mut model = ws.hosts[0].connection.model.lock().unwrap();
+        for action in [
+            "client.zoom.in",
+            "client.zoom.reset",
+            "client.not_known",
+            "client.sidebar.toggle",
+        ] {
+            model
+                .client_actions
+                .push(rex_linux::connection::actions::Queued {
+                    generation: 0,
+                    session: None,
+                    block: None,
+                    action: rexrs::api::client::ClientAction {
+                        action: action.into(),
+                        args: None,
+                    },
+                });
+        }
+    }
+    let before = ws.sidebar.is_open();
+    ws.sync(0, &mut rune::Tx::default());
+    assert_eq!(ws.settings.ui_scale, 1.);
+    assert_ne!(ws.sidebar.is_open(), before);
+    assert!(
+        ws.hosts[0]
+            .connection
+            .model
+            .lock()
+            .unwrap()
+            .client_actions
+            .is_empty()
+    );
+    assert!(ws.hosts[0].model.client_actions.is_empty());
+    ws.sync(0, &mut rune::Tx::default());
+    assert_ne!(ws.sidebar.is_open(), before);
+}
+
 #[test]
 fn effective_map_swaps_by_host_and_generation_and_preserves_problems() {
     let mut ws = workspace_hosts(2);

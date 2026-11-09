@@ -54,6 +54,11 @@ fn dispatch(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx, global_only: bool) ->
         s.bindings.context = Some(context);
     }
     let model = &s.hosts[s.active].model;
+    let snapshot = model
+        .keymap
+        .as_ref()
+        .filter(|k| model.connected && k.generation == s.keymap_generation);
+    let server_actions = snapshot.map(|k| k.reply.actions.as_slice()).unwrap_or(&[]);
     let map = model
         .keymap
         .as_ref()
@@ -62,10 +67,13 @@ fn dispatch(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx, global_only: bool) ->
         .unwrap_or(&s.local_keymap);
     let step = s.bindings.sequence.advance(map, input, |i| {
         let binding = &map.bindings[i].binding;
-        actions::find(&binding.action).is_some_and(|spec| {
-            (!global_only || spec.global())
-                && spec.accepts(binding.args.as_ref().unwrap_or(&serde_json::Value::Null))
-        })
+        match actions::classify(binding, server_actions) {
+            actions::Kind::Local(spec) => !global_only || spec.global(),
+            actions::Kind::Forward | actions::Kind::Server { .. } => {
+                !global_only && model.connected
+            }
+            actions::Kind::Skip => false,
+        }
     });
     match step {
         Step::None => false,
@@ -75,16 +83,44 @@ fn dispatch(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx, global_only: bool) ->
         }
         Step::Run { index, sequence } => {
             let binding = map.bindings[index].binding.clone();
-            let spec = actions::find(&binding.action).unwrap();
-            s.bindings
-                .consumed
-                .insert(identity, sequence || !spec.repeats());
-            actions::run(
-                s,
-                &binding.action,
-                binding.args.as_ref().unwrap_or(&serde_json::Value::Null),
-                tx,
-            )
+            match actions::classify(&binding, server_actions) {
+                actions::Kind::Local(spec) => {
+                    s.bindings
+                        .consumed
+                        .insert(identity, sequence || !spec.repeats());
+                    actions::run(
+                        s,
+                        &binding.action,
+                        binding.args.as_ref().unwrap_or(&serde_json::Value::Null),
+                        tx,
+                    )
+                }
+                actions::Kind::Forward => {
+                    if sequence {
+                        s.bindings.consumed.insert(identity, true);
+                    }
+                    let prefix = binding.keys[..binding.keys.len() - 1].to_vec();
+                    forward(s, ev, tx, prefix)
+                }
+                actions::Kind::Server { repeats } => {
+                    s.bindings.consumed.insert(identity, sequence || !repeats);
+                    let mut request = rexrs::api::client::Action::new(binding.action).origin("key");
+                    request.args = binding.args;
+                    request.session_id = s.model().selected.clone();
+                    if request.session_id.is_some() {
+                        request.block_id = s.focused_block();
+                    }
+                    s.send(
+                        s.active,
+                        rex_linux::connection::HostCommand::Action {
+                            generation: s.keymap_generation,
+                            request: Box::new(request),
+                        },
+                    );
+                    true
+                }
+                actions::Kind::Skip => false,
+            }
         }
     }
 }
@@ -161,7 +197,6 @@ pub fn rename_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
 }
 
 pub fn on_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
-    let code = tx.physical_key();
     if let Some(panel) = &s.panel {
         if panel.is_list() && tx.focused().is_none() {
             return list_key(s, ev, tx);
@@ -182,6 +217,11 @@ pub fn on_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
         // A control the pointer focused (rare: controls blur after their press) keeps its key.
         tx.blur();
     }
+    forward(s, ev, tx, Vec::new())
+}
+
+fn forward(s: &mut Workspace, ev: &KeyEvent, tx: &Tx, prefix: Vec<String>) -> bool {
+    let code = tx.physical_key();
     let action = if tx.key_repeat() {
         Action::Repeat
     } else {
@@ -196,7 +236,14 @@ pub fn on_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
     term.clear_selection();
     if let Some(payload) = keys::payload(ev, code, base, action) {
-        term.send(Command::Key(payload));
+        term.send(if prefix.is_empty() {
+            Command::Key(payload)
+        } else {
+            Command::KeyWithPrefix {
+                key: payload,
+                prefix,
+            }
+        });
         s.forwarded.insert(
             Input {
                 event: ev,
@@ -222,11 +269,9 @@ pub fn on_key_up(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
         repeat: false,
     }
     .identity();
-    if s.bindings.consumed.remove(&identity).is_some() {
-        return true;
-    }
+    let consumed = s.bindings.consumed.remove(&identity).is_some();
     if !s.forwarded.remove(&identity) {
-        return s.panel.is_none();
+        return consumed || s.panel.is_none();
     }
     if let Some(term) = s.active_terminal_mut()
         && term.status().live

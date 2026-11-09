@@ -82,6 +82,79 @@ async fn keymap_after_connected_error_does_not_disconnect_then_event_refreshes()
 }
 
 #[tokio::test]
+async fn action_has_35_second_budget_and_queues_client_actions_without_servers() {
+    assert_eq!(actions::TIMEOUT, Duration::from_secs(35));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let mut ws = accept(&listener, "rex.control.v1").await;
+        welcome(&mut ws, 11).await;
+        let request = recv(&mut ws).await;
+        send(
+            &mut ws,
+            json!({"type":"response","id":request["id"],"seq":10,"payload":boot()}),
+        )
+        .await;
+        let request = recv(&mut ws).await;
+        assert_eq!(request["method"], "client.action");
+        assert!(request["payload"].get("args").is_none());
+        assert!(request["payload"].get("servers").is_none());
+        // A normal 8-second timeout would fail this. Later control work stays queued.
+        assert!(
+            tokio::time::timeout(Duration::from_secs(9), ws.next())
+                .await
+                .is_err()
+        );
+        send(
+            &mut ws,
+            json!({"type":"response","id":request["id"],"payload":{"client_actions":[
+                {"action":"client.sidebar.toggle"},{"action":"client.unknown"}
+            ]}}),
+        )
+        .await;
+        let queued = recv(&mut ws).await;
+        assert_eq!(queued["method"], "server.status");
+        send(
+            &mut ws,
+            json!({"type":"response","id":queued["id"],"payload":{}}),
+        )
+        .await;
+        assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
+    });
+    let host = HostConnection::spawn(endpoint, None, None, None, false, None);
+    connected(&host).await;
+    host.commands
+        .send(HostCommand::Action {
+            generation: 7,
+            request: Box::new(rexrs::api::client::Action::new("clear_screen").origin("key")),
+        })
+        .unwrap();
+    host.commands
+        .send(HostCommand::Request {
+            method: "server.status".into(),
+            payload: json!({}),
+        })
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(12), async {
+        while host.model.lock().unwrap().client_actions.is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    {
+        let m = host.model.lock().unwrap();
+        assert!(m.connected);
+        assert_eq!(m.client_actions.len(), 2);
+        assert_eq!(m.client_actions[0].generation, 7);
+        assert_eq!(m.client_actions[0].action.action, "client.sidebar.toggle");
+        assert_eq!(m.client_actions[1].action.action, "client.unknown");
+    }
+    drop(host);
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn keymap_timeout_is_nonfatal() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());

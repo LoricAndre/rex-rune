@@ -202,8 +202,14 @@ terminal without retrying it as a new shortcut. Non-ASCII bindings such as
 `ctrl+é` work in the client but are not readable by the server's parser, like the
 client-only `ctrl++` extension. Ordinary terminal keys still use `client.key`.
 
-**Draft limitation:** local defaults and overrides are active; server-layer keymap
-integration and effective-keymap Settings/Commands display are still in progress.
+Server action calls use a dedicated 35-second timeout (Rex allows an action 30 seconds).
+The host's control loop is serial: later input and control commands queue behind a
+running action. Failed or timed-out input is never replayed automatically. Known
+returned client actions are performed once, in order; unknown names are ignored.
+No cross-server `servers` list is advertised.
+
+**Draft limitation:** local and server-layer dispatch are active; effective-keymap
+Settings/Commands display and final live acceptance are still in progress.
 
 Double-click selects a word (including shell paths), and triple-click selects a line. Selection stays attached to terminal content as history or output scrolls; dragging above or below the grid autoscrolls. Hold Shift to select locally or scroll local history when a fullscreen TUI owns the mouse. Without Shift, ordinary TUI mouse reporting is unchanged.
 

@@ -81,11 +81,16 @@ fn parse_font_size(value: &str) -> std::result::Result<f32, String> {
     Ok(size.clamp(8., 48.))
 }
 
+pub mod actions;
 pub mod keymap;
 
 pub enum Command {
     Selection(crate::terminal::selection::Input),
     Key(Value),
+    KeyWithPrefix {
+        key: Value,
+        prefix: Vec<String>,
+    },
     /// Explicit pane.send_key only; normal keys always use client.key.
     SendKey(Value),
     Paste(String),
@@ -179,6 +184,8 @@ pub struct HostModel {
     pub keymap: Option<Arc<keymap::Snapshot>>,
     pub keymap_error: Option<String>,
     pub keymap_revision: u64,
+    /// Taken once before cloning the worker model into the UI.
+    pub client_actions: Vec<actions::Queued>,
     pub protocol: ProtocolStats,
     pub sessions: Vec<session::Session>,
     pub selected: Option<String>,
@@ -349,6 +356,10 @@ impl HostModel {
 
 pub enum HostCommand {
     Keymap(Box<keymap::Declaration>),
+    Action {
+        generation: u64,
+        request: Box<rexrs::api::client::Action>,
+    },
     Visibility(bool),
     /// Take size ownership of these blocks, as the native Rex clients do when they attach or
     /// come forward. Failures are silent: another client may have closed a block meanwhile.
@@ -1531,6 +1542,10 @@ async fn handle_command(
     theme: &mut Option<SetTheme>,
 ) -> Result<()> {
     match command {
+        HostCommand::Action {
+            generation,
+            request,
+        } => actions::run(control, shared, generation, *request).await?,
         HostCommand::Visibility(visible) => shared.update(|m| m.visible = visible),
         // Declared to every block it is due for right after this command.
         HostCommand::Theme(new) => *theme = new,
@@ -1688,7 +1703,9 @@ async fn handle_command(
                     }
                     // Releases, pointer motion and wheel turns never claim the block; presses do.
                     let passive = match &input {
-                        Command::Key(key) | Command::SendKey(key) => key["action"] == "release",
+                        Command::Key(key)
+                        | Command::KeyWithPrefix { key, .. }
+                        | Command::SendKey(key) => key["action"] == "release",
                         Command::Mouse(mouse) => mouse["action"] != "press",
                         Command::Wheel(_) => true,
                         _ => false,
@@ -1724,7 +1741,10 @@ async fn handle_command(
                     }
                     if matches!(
                         input,
-                        Command::Key(_) | Command::SendKey(_) | Command::Paste(_)
+                        Command::Key(_)
+                            | Command::KeyWithPrefix { .. }
+                            | Command::SendKey(_)
+                            | Command::Paste(_)
                     ) && let Some(connection) = shared
                         .model
                         .lock()
@@ -1746,6 +1766,9 @@ async fn handle_command(
                                 json!({"session_id":session,"block_id":block,"key":key}),
                             )
                             .await?;
+                        }
+                        Command::KeyWithPrefix { key, prefix } => {
+                            request(control, "client.key", json!({"session_id":session,"block_id":block,"key":key,"prefix":prefix})).await?;
                         }
                         Command::SendKey(key) => {
                             request(control, "block.event", json!({"session_id":session,"block_id":block,"event":{"type":"key","payload":key}})).await?;

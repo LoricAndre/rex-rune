@@ -402,7 +402,7 @@ impl Workspace {
     pub fn sync(&mut self, index: usize, tx: &mut Tx) {
         let id = self.hosts[index].id;
         let old_session = self.hosts[index].model.selected.clone();
-        let (model, notices, clipboard, bells) = {
+        let (model, notices, clipboard, bells, client_actions) = {
             let mut shared = self.hosts[index]
                 .connection
                 .model
@@ -411,7 +411,8 @@ impl Workspace {
             let notices = std::mem::take(&mut shared.notices);
             let clipboard = shared.clipboard.take();
             let bells = std::mem::take(&mut shared.bells);
-            (shared.clone(), notices, clipboard, bells)
+            let client_actions = std::mem::take(&mut shared.client_actions);
+            (shared.clone(), notices, clipboard, bells, client_actions)
         };
         for (block, connection) in &model.terminals {
             let key = (id, block.clone());
@@ -458,6 +459,37 @@ impl Workspace {
         }
         self.hosts[index].model = model;
         self.announce_keymap_problems(index);
+        let action_context = (
+            self.active,
+            self.model().selected.clone(),
+            self.focused_block(),
+            self.keymap_generation,
+        );
+        for queued in client_actions {
+            // A slow response must not act on a different host/pane after navigation.
+            if index != action_context.0
+                || queued.generation != action_context.3
+                || queued
+                    .session
+                    .as_ref()
+                    .is_some_and(|id| action_context.1.as_ref() != Some(id))
+                || queued
+                    .block
+                    .as_ref()
+                    .is_some_and(|id| action_context.2.as_ref() != Some(id))
+            {
+                self.inform(
+                    "Returned client action skipped because its workspace context changed.",
+                );
+                continue;
+            }
+            super::actions::run(
+                self,
+                &queued.action.action,
+                queued.action.args.as_ref().unwrap_or(&Value::Null),
+                tx,
+            );
+        }
         if let Some(copy) = clipboard
             && self.window_focused
             && self.panel.is_none()
