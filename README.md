@@ -281,6 +281,12 @@ cargo run --locked --no-default-features --bin rex-workspace-probe
 
 With mise, `mise run test`, `fmt`, `clippy` and `test-rexrs` run the first three commands and the vendored SDK tests; `mise run check` runs them all.
 
+`python3 scripts/keymap-acceptance.py` checks layered bindings, native sequences,
+Lua forwarding, queued client actions, file/server reload, removals and the
+send-key escape hatch on its own disposable Rex server and Xvfb display. It uses
+`target/release/rex-linux` unless `REX_BIN` selects another build, and preserves
+logs/captures in the printed temporary directory.
+
 The `scripts/` directory holds integration checks; each script's docstring lists its requirements (Xvfb, xdotool, a `rex` binary, `wayland-info`, …). Some use the configured Rex server rather than starting their own: point them at a disposable server you control. Wayland checks use the running compositor; X11 checks use an isolated display.
 
 - `connection-only-smoke.py`: a missing or stale socket must never execute the Rex CLI.
