@@ -256,8 +256,20 @@ impl Workspace {
             .take()
             .filter(|&n| n > 0)
         {
+            let from = this
+                .settings_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy();
+            let to = this
+                .settings
+                .shortcut_file
+                .path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy();
             this.inform(format!(
-                "Moved {count} custom shortcut(s) from workspace.json to shortcuts.json."
+                "Moved {count} custom shortcut(s) from {from} to {to}."
             ));
         }
         if let Some(problem) = this.settings.shortcut_file.notice.take() {

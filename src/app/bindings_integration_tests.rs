@@ -338,6 +338,28 @@ fn server_config_path_marks_only_missing_files() {
 }
 
 #[test]
+fn shortcut_import_notice_uses_custom_config_filenames() {
+    let ws = workspace();
+    std::fs::write(
+        &ws.settings_path,
+        r#"{"keybindings":[{"key":"ctrl+j","action":"client.tab.new"}]}"#,
+    )
+    .unwrap();
+    let loaded = relaunch(&ws);
+    let from = ws.settings_path.file_name().unwrap().to_string_lossy();
+    let path = &loaded.settings.shortcut_file.path;
+    let to = path.file_name().unwrap().to_string_lossy();
+    assert!(
+        loaded
+            .notices
+            .iter()
+            .any(|n| n.text == format!("Moved 1 custom shortcut(s) from {from} to {to}."))
+    );
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_file(&ws.settings_path).unwrap();
+}
+
+#[test]
 fn a_bad_shortcut_entry_notifies_once_across_two_connected_hosts() {
     let mut ws = workspace_hosts(2);
     let path = rex_linux::settings::shortcuts::Shortcuts::path(&ws.settings_path);
