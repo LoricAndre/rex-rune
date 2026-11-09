@@ -107,6 +107,8 @@ impl Spec {
             || matches!(
                 self.handler,
                 Handler::FocusPane
+                    | Handler::NextTab
+                    | Handler::PreviousTab
                     | Handler::Scroll
                     | Handler::NextGlobal
                     | Handler::PreviousGlobal

@@ -228,7 +228,8 @@ in the toolbar. Host/pane/session/focus/map changes and opening a dialog cancel 
 
 Only popup navigation/editing keys and Escape cancelling a sequence stay reserved;
 zoom is global (including fields), but it is still rebindable. Hold-to-repeat works
-for zoom, pane focus/scroll and global tab cycling. Other completed shortcuts and
+for zoom, pane focus/scroll, within-session tab navigation (Ctrl PageUp/PageDown)
+and global tab cycling. Other completed shortcuts and
 prefix repeats are suppressed, and releases only reach terminals when presses did.
 
 #### More recipes

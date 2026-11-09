@@ -505,6 +505,31 @@ fn release_inside_settings_does_not_swallow_the_next_comma_hold() {
 }
 
 #[test]
+fn holding_session_tab_navigation_sends_three_focus_requests() {
+    for (code, key_event, method) in [
+        (
+            Code::PageUp,
+            ctrl(Key::PageUp),
+            "session.focus_previous_window",
+        ),
+        (
+            Code::PageDown,
+            ctrl(Key::PageDown),
+            "session.focus_next_window",
+        ),
+    ] {
+        let (ws, rx) = tabbed_workspace("single");
+        let mut rt = runtime(ws);
+        for repeat in [false, true, true] {
+            key(&mut rt, code, key_event.clone(), true, repeat);
+        }
+        let sent = requests(&rx);
+        assert_eq!(sent.len(), 3, "{sent:?}");
+        assert!(sent.iter().all(|r| r.0 == method), "{sent:?}");
+    }
+}
+
+#[test]
 fn repeating_pane_focus_and_context_changes() {
     let (mut ws, rx) = tabbed_workspace("single");
     overrides(
