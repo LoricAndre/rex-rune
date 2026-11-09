@@ -420,7 +420,11 @@ pub fn binding_title(binding: &rexrs::api::client::Binding) -> String {
     };
     let detail = match binding.action.as_str() {
         "pane.split" | "pane.focus" => args["direction"].as_str().unwrap_or_default().to_owned(),
-        "pane.scroll" => format!("{} lines", args["lines"]),
+        "pane.scroll" => {
+            let lines = args["lines"].as_i64().unwrap_or_default();
+            let direction = if lines < 0 { "up" } else { "down" };
+            return format!("Scroll {direction} · {} lines", lines.unsigned_abs());
+        }
         "client.tab.goto" => format!("tab {}", args["index"]),
         "pane.send_key" => args["key"].as_str().unwrap_or_default().to_owned(),
         _ => return title.into(),
