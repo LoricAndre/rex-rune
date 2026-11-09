@@ -488,7 +488,7 @@ fn hosts(s: &Workspace) -> El {
     )
 }
 
-fn shortcuts() -> El {
+fn shortcuts(s: &Workspace) -> El {
     let k = kit();
     let mut body = col().gap(4.);
     for (name, list) in SHORTCUTS {
@@ -504,6 +504,32 @@ fn shortcuts() -> El {
             );
         }
     }
+    let shortcuts = &s.settings.shortcut_file;
+    if !shortcuts.overrides.diagnostics.is_empty() {
+        body = body.child(group("Problems"));
+        for (index, problem) in shortcuts.overrides.diagnostics.iter().enumerate() {
+            body = body.child(
+                text(format!("settings: {}", problem.message))
+                    .key(format!("shortcut-problem-{index}"))
+                    .font(ui(11.5))
+                    .color(rgb(warning()))
+                    .wrap(),
+            );
+        }
+    }
+    body = body.child(
+        text(
+            rex_linux::settings::shortcuts::Shortcuts::path(&s.settings_path)
+                .display()
+                .to_string(),
+        )
+        .key("shortcuts-path")
+        .font(ui(11.5))
+        .color(rgb(muted()))
+        .selectable(true)
+        .wrap()
+        .mt(12.),
+    );
     body.child(
         text("These are reserved by Rex; every other key goes to the focused terminal.")
             .font(ui(11.5))
@@ -572,7 +598,7 @@ pub fn settings(s: &Workspace, viewport: [f32; 2]) -> El {
         SettingsSection::Notifications => notifications(s),
         SettingsSection::Integrations => super::integrations::section(s),
         SettingsSection::Hosts => hosts(s),
-        SettingsSection::Shortcuts => shortcuts(),
+        SettingsSection::Shortcuts => shortcuts(s),
     };
     let content = col()
         .grow(1.)

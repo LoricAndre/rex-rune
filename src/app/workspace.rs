@@ -240,6 +240,14 @@ impl Workspace {
         if let Some(error) = theme_error {
             this.notify(format!("{error:#}; following the server's colours"));
         }
+        if let Some(count) = this.settings.shortcut_file.imported.take() {
+            this.inform(format!(
+                "Imported {count} shortcuts from nivox's keybindings."
+            ));
+        }
+        if let Some(problem) = this.settings.shortcut_file.notice.take() {
+            this.notify(problem);
+        }
         for index in 0..this.settings.hosts.len() {
             this.connect_host(index, explicit);
         }

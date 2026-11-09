@@ -1142,6 +1142,45 @@ fn forms_focus_their_first_field_and_settings_start_on_its_section_list() {
 }
 
 #[test]
+fn invalid_shortcuts_start_with_one_notice_and_a_persistent_settings_problem() {
+    let mut ws = workspace();
+    let directory = ws.settings_path.with_extension("shortcuts-test");
+    std::fs::create_dir_all(&directory).unwrap();
+    ws.settings_path = directory.join("workspace.json");
+    ws.settings.save(&ws.settings_path).unwrap();
+    let shortcuts = directory.join("shortcuts.json");
+    std::fs::write(&shortcuts, "[broken").unwrap();
+    let mut ws = relaunch(&ws);
+    assert_eq!(
+        ws.notices
+            .iter()
+            .filter(|n| n.text.contains("using default shortcuts"))
+            .count(),
+        1
+    );
+    assert!(ws.settings.shortcut_file.notice.is_none());
+    ws.notices.clear();
+    ws.perform(Intent::Settings, &mut rune::Tx::default());
+    let mut rt = runtime(ws);
+    click(&mut rt, "settings-section:shortcuts");
+    assert!(has(&rt, "shortcut-problem-0"));
+    let elements = rt.elements();
+    let problem = elements
+        .iter()
+        .find(|e| e.key.as_deref() == Some("shortcut-problem-0"))
+        .unwrap();
+    assert!(problem.text.as_deref().unwrap().contains("Invalid JSON"));
+    let path = elements
+        .iter()
+        .find(|e| e.key.as_deref() == Some("shortcuts-path"))
+        .unwrap();
+    assert_eq!(path.text.as_deref(), Some(shortcuts.to_str().unwrap()));
+    rt.state.settings.save(&rt.state.settings_path).unwrap();
+    assert_eq!(std::fs::read_to_string(shortcuts).unwrap(), "[broken");
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn settings_sections_and_their_forms_return_to_settings() {
     let mut ws = workspace_hosts(2);
     let mut tx = rune::Tx::default();

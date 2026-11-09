@@ -1,3 +1,5 @@
+pub mod shortcuts;
+
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -149,6 +151,9 @@ pub struct Settings {
     /// client's last declaration per block across launches, so Follow server then resets
     /// eligible blocks to Rex's colours. Never cleared automatically.
     pub terminal_theme_declared: bool,
+    /// Read-only sibling file, never serialized into workspace.json.
+    #[serde(skip)]
+    pub shortcut_file: shortcuts::Shortcuts,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -178,6 +183,7 @@ impl Default for Settings {
             terminal_theme: TerminalThemeChoice::default(),
             terminal_theme_chosen: false,
             terminal_theme_declared: false,
+            shortcut_file: shortcuts::Shortcuts::default(),
         }
     }
 }
@@ -199,9 +205,14 @@ impl Settings {
     }
     pub fn load(path: &Path) -> Result<Self> {
         if !path.exists() {
-            return Ok(Self::default());
+            return Ok(Self {
+                shortcut_file: shortcuts::Shortcuts::load(path),
+                ..Self::default()
+            });
         }
-        let mut settings: Self = serde_json::from_slice(&std::fs::read(path)?)
+        let value: serde_json::Value = serde_json::from_slice(&std::fs::read(path)?)
+            .with_context(|| format!("Unable to read {}", path.display()))?;
+        let mut settings: Self = serde_json::from_value(value.clone())
             .with_context(|| format!("Unable to read {}", path.display()))?;
         for host in &settings.hosts {
             validate_host(&host.label, &host.endpoint)?;
@@ -215,6 +226,15 @@ impl Settings {
         settings.font_size = settings.font_size.clamp(8., 48.);
         settings.sidebar_width = settings.sidebar_width.clamp(200., 360.);
         settings.ui_scale = normalize_ui_scale(settings.ui_scale);
+        // Import before the first save loses nivox's unknown keybindings field.
+        let imported = shortcuts::import_nivox(&value, &shortcuts::Shortcuts::path(path));
+        settings.shortcut_file = shortcuts::Shortcuts::load(path);
+        match imported {
+            Ok(count) => settings.shortcut_file.imported = count,
+            Err(error) => settings
+                .shortcut_file
+                .problem(format!("Unable to import nivox shortcuts: {error}")),
+        }
         Ok(settings)
     }
     pub fn save(&self, path: &Path) -> Result<()> {
