@@ -54,12 +54,39 @@ pub enum Intent {
     Chrome(ChromeTheme),
 }
 impl Intent {
+    fn shortcut(&self) -> Option<(&'static str, Value)> {
+        use serde_json::json;
+        Some(match self {
+            Self::ClientAction(name, args) => (*name, args.clone()),
+            Self::Switcher => ("session.switch", Value::Null),
+            Self::NewSession => ("session.new", Value::Null),
+            Self::NewWindow => ("client.tab.new", Value::Null),
+            Self::RenameSession => ("session.rename", Value::Null),
+            Self::RenameWindow(_) => ("client.tab.rename", Value::Null),
+            Self::CloseWindow(_) => ("client.tab.close", Value::Null),
+            Self::Sidebar => ("client.sidebar.toggle", Value::Null),
+            Self::Settings => ("client.settings", Value::Null),
+            Self::Pane(_, pane) => match pane {
+                PaneAction::Split(direction) => (
+                    "pane.split",
+                    json!({"direction":if *direction=="horizontal" {"right"} else {"down"}}),
+                ),
+                PaneAction::Zoom => ("pane.zoom", Value::Null),
+                PaneAction::Reconnect => ("pane.reconnect", Value::Null),
+                PaneAction::Close => ("pane.close", Value::Null),
+                _ => return None,
+            },
+            _ => return None,
+        })
+    }
+
     /// Actions that open another panel instead of closing the current one, or close it
     /// themselves.
     pub fn opens_followup(&self) -> bool {
         matches!(
             self,
             Intent::Switcher
+                | Intent::ClientAction("client.settings" | "session.switch", _)
                 | Intent::ChooseHost(_)
                 | Intent::HostShell(_)
                 | Intent::RenameSession
@@ -504,11 +531,12 @@ impl Workspace {
             let mut entries = vec![
                 Entry::new("Rename tab…", "", "", Intent::RenameWindow(id.clone())),
                 Entry::new("Close tab…", "", "", Intent::CloseWindow(id.clone())),
-                Entry::new("New tab", "Ctrl Shift T", "", Intent::NewWindow),
+                Entry::new("New tab", "", "", Intent::NewWindow),
             ];
             for e in &mut entries {
                 e.enabled = connected;
             }
+            self.shortcut_details(&mut entries);
             return entries;
         }
         let sessions_only = matches!(panel.kind, PanelKind::Picker(true));
@@ -521,15 +549,15 @@ impl Workspace {
         let host_name = &self.settings.hosts[self.active].label;
         if !sessions_only && !pane_only {
             for (label, detail, action) in [
-                ("Switch session…", "Ctrl K", Intent::Switcher),
+                ("Switch session…", "", Intent::Switcher),
                 (
                     "Next tab across hosts",
-                    "Ctrl Tab",
+                    "",
                     Intent::ClientAction(super::actions::NEXT_GLOBAL, Value::Null),
                 ),
                 (
                     "Previous tab across hosts",
-                    "Ctrl Shift Tab",
+                    "",
                     Intent::ClientAction(super::actions::PREVIOUS_GLOBAL, Value::Null),
                 ),
                 (
@@ -544,11 +572,11 @@ impl Workspace {
                 ),
                 (
                     "Search terminal…",
-                    "Ctrl Shift F",
+                    "",
                     Intent::ClientAction(super::actions::SEARCH, Value::Null),
                 ),
-                ("New session", "Ctrl Shift N", Intent::NewSession),
-                ("New tab", "Ctrl Shift T", Intent::NewWindow),
+                ("New session", "", Intent::NewSession),
+                ("New tab", "", Intent::NewWindow),
                 ("Rename session…", "", Intent::RenameSession),
                 (
                     if self.sidebar.is_open() {
@@ -556,11 +584,11 @@ impl Workspace {
                     } else {
                         "Show sidebar"
                     },
-                    "Ctrl Shift B",
+                    "",
                     Intent::Sidebar,
                 ),
                 ("Default shell…", "", Intent::HostShell(self.active)),
-                ("Settings…", "Ctrl ,", Intent::Settings),
+                ("Settings…", "", Intent::Settings),
                 ("Add host…", "", Intent::AddHost),
                 ("Edit host…", "", Intent::EditHost(self.active)),
                 ("Reconnect host", "", Intent::Retry),
@@ -579,6 +607,17 @@ impl Workspace {
                 }
                 if matches!(entry.action, Intent::NewWindow | Intent::RenameSession) {
                     entry.enabled = model.connected && model.view().is_some();
+                }
+                if matches!(
+                    entry.action,
+                    Intent::Switcher
+                        | Intent::NewSession
+                        | Intent::NewWindow
+                        | Intent::Sidebar
+                        | Intent::Settings
+                ) && let Some((name, args)) = entry.action.shortcut()
+                {
+                    entry.action = Intent::ClientAction(name, args);
                 }
                 entries.push(entry);
             }
@@ -612,19 +651,15 @@ impl Workspace {
                 .window()
                 .is_some_and(|w| w.zoomed_block_id.as_ref() == Some(&target.block));
             for (label, key, action) in [
-                (
-                    "Split right",
-                    "Ctrl Shift D",
-                    PaneAction::Split("horizontal"),
-                ),
-                ("Split down", "Ctrl Alt D", PaneAction::Split("vertical")),
+                ("Split right", "", PaneAction::Split("horizontal")),
+                ("Split down", "", PaneAction::Split("vertical")),
                 (
                     if zoomed { "Restore pane" } else { "Zoom pane" },
-                    "Ctrl Shift Enter",
+                    "",
                     PaneAction::Zoom,
                 ),
                 ("Rename pane…", "", PaneAction::Rename),
-                ("Reconnect terminal", "Ctrl Shift R", PaneAction::Reconnect),
+                ("Reconnect terminal", "", PaneAction::Reconnect),
                 ("Close pane…", "", PaneAction::Close),
             ] {
                 entries.push(Entry::new(
@@ -722,6 +757,7 @@ impl Workspace {
                 }
             }
         }
+        self.shortcut_details(&mut entries);
         if !sessions_only {
             entries.retain(|e| {
                 format!("{} {} {}", e.label, e.detail, e.group)
@@ -739,7 +775,7 @@ impl Workspace {
                 None => (
                     format!("New session on {host_name}"),
                     "Create on another host…".into(),
-                    "Ctrl Shift N",
+                    "",
                 ),
             };
             for (label, key, action) in [
@@ -755,6 +791,21 @@ impl Workspace {
                 entries.push(e);
             }
         }
+        self.shortcut_details(&mut entries);
         entries
+    }
+
+    fn shortcut_details(&self, entries: &mut [Entry]) {
+        for entry in entries {
+            if entry.detail.starts_with("Mouse ") {
+                continue;
+            }
+            if matches!(&entry.action, Intent::CreateOn(host,None) if *host==self.active) {
+                entry.detail = self.shortcut_detail("session.new", &Value::Null);
+            }
+            if let Some((name, args)) = entry.action.shortcut() {
+                entry.detail = self.shortcut_detail(name, &args);
+            }
+        }
     }
 }

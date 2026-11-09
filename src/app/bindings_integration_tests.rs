@@ -211,6 +211,71 @@ fn settings_shows_effective_sequences_sources_and_pending_chip_cancels() {
 }
 
 #[test]
+fn commands_details_follow_rebinding_unbinding_and_argument_matches() {
+    let (mut ws, _) = tabbed_workspace("single");
+    overrides(
+        &mut ws,
+        json!([
+            {"keys":"ctrl+shift+t","action":null},
+            {"keys":"ctrl+b>c","action":"client.tab.new"},
+            {"keys":"ctrl+shift+d","action":null},
+            {"keys":"ctrl+j","action":"pane.split","args":{"direction":"right"}}
+        ]),
+    );
+    ws.picker(false);
+    let entries = ws.entries();
+    assert_eq!(
+        entries
+            .iter()
+            .find(|e| e.label == "New tab")
+            .unwrap()
+            .detail,
+        "Ctrl B, C"
+    );
+    assert!(matches!(
+        entries
+            .iter()
+            .find(|e| e.label == "New tab")
+            .unwrap()
+            .action,
+        Intent::ClientAction("client.tab.new", _)
+    ));
+    assert_eq!(
+        entries
+            .iter()
+            .find(|e| e.label == "Split right")
+            .unwrap()
+            .detail,
+        "Ctrl J"
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .find(|e| e.label == "Split down")
+            .unwrap()
+            .detail,
+        "Ctrl Alt D"
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .find(|e| e.label == "Back in history")
+            .unwrap()
+            .detail,
+        "Mouse Back"
+    );
+    overrides(&mut ws, json!([{"keys":"ctrl+shift+t","action":null}]));
+    assert_eq!(
+        ws.entries()
+            .iter()
+            .find(|e| e.label == "New tab")
+            .unwrap()
+            .detail,
+        ""
+    );
+}
+
+#[test]
 fn effective_map_swaps_by_host_and_generation_and_preserves_problems() {
     let mut ws = workspace_hosts(2);
     let overrides = Overrides::parse(&json!([{"keys":"ctrl+b>","action":"client.settings"}]));

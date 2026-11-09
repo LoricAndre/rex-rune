@@ -621,6 +621,25 @@ impl Workspace {
         )
     }
 
+    pub fn shortcut_detail(&self, action: &str, args: &Value) -> String {
+        let empty = |args: &Value| args.is_null() || args.as_object().is_some_and(|a| a.is_empty());
+        self.effective_bindings()
+            .iter()
+            .find(|b| {
+                let bound = b.binding.args.as_ref().unwrap_or(&Value::Null);
+                b.binding.action == action && (bound == args || (empty(bound) && empty(args)))
+            })
+            .and_then(|b| b.chords.as_ref())
+            .map(|chords| {
+                chords
+                    .iter()
+                    .map(|c| c.keycaps().join(" "))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default()
+    }
+
     fn announce_keymap_problems(&mut self, index: usize) {
         let host = &mut self.hosts[index];
         let Some(snapshot) = &host.model.keymap else {
