@@ -23,9 +23,18 @@ pub(super) async fn run(
     let block = request.block_id.clone();
     // This worker's serial control loop queues later input behind the action. Never replay
     // a timed-out action: it may already have changed server state.
-    let reply = tokio::time::timeout(TIMEOUT, control.call(request))
+    let reply = match tokio::time::timeout(TIMEOUT, control.call(request))
         .await
-        .context("Rex client.action timed out after 35 seconds; action was not retried")??;
+        .context("Rex client.action timed out after 35 seconds; action was not retried")?
+    {
+        Ok(reply) => reply,
+        Err(error @ (rexrs::Error::Json(_) | rexrs::Error::RequestTooLarge { .. })) => {
+            // Request sizing and typed reply decoding leave the transport usable.
+            shared.update(|m| m.notice = Some(format!("Rex client.action failed: {error}")));
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
+    };
     if !reply.client_actions.is_empty() {
         shared.update(|m| {
             m.client_actions

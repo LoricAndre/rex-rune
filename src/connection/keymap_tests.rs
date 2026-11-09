@@ -155,6 +155,82 @@ async fn action_has_35_second_budget_and_queues_client_actions_without_servers()
 }
 
 #[tokio::test]
+async fn action_json_and_request_size_errors_notify_without_reconnecting() {
+    for oversized in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut ws = accept(&listener, "rex.control.v1").await;
+            welcome(&mut ws, 11).await;
+            let request = recv(&mut ws).await;
+            send(
+                &mut ws,
+                json!({"type":"response","id":request["id"],"seq":10,"payload":boot()}),
+            )
+            .await;
+            if !oversized {
+                let request = recv(&mut ws).await;
+                assert_eq!(request["method"], "client.action");
+                assert_eq!(request["payload"]["action"], "bad_reply");
+                send(
+                    &mut ws,
+                    json!({"type":"response","id":request["id"],
+                    "payload":{"client_actions":"not an array"}}),
+                )
+                .await;
+            }
+            // Oversize is rejected before sending; malformed replies are consumed.
+            // Either way the next action must use this same connection.
+            let request = recv(&mut ws).await;
+            assert_eq!(request["method"], "client.action");
+            assert_eq!(request["payload"]["action"], "after_error");
+            send(
+                &mut ws,
+                json!({"type":"response","id":request["id"],"payload":{
+                "client_actions":[{"action":"client.sidebar.toggle"}]}}),
+            )
+            .await;
+            assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
+        });
+        let host = HostConnection::spawn(endpoint, None, None, None, false, None);
+        connected(&host).await;
+        let mut bad = rexrs::api::client::Action::new("bad_reply");
+        if oversized {
+            bad.args = Some(json!({"large": "x".repeat(70_000)}));
+        }
+        for request in [bad, rexrs::api::client::Action::new("after_error")] {
+            host.commands
+                .send(HostCommand::Action {
+                    generation: 0,
+                    request: Box::new(request),
+                })
+                .unwrap();
+        }
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while host.model.lock().unwrap().client_actions.is_empty() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        {
+            let model = host.model.lock().unwrap();
+            assert!(model.connected);
+            let notice = model.notice.as_ref().expect("action failure notice");
+            assert!(notice.contains("Rex client.action failed"));
+            assert!(notice.contains(if oversized {
+                "larger than"
+            } else {
+                "JSON error"
+            }));
+            assert_eq!(model.client_actions.len(), 1);
+        }
+        drop(host);
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn keymap_timeout_is_nonfatal() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
