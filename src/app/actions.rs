@@ -384,6 +384,48 @@ pub fn classify(
     }
 }
 
+/// Bindings that can actually win, including prefix-vs-key conflicts. Parsed chords,
+/// not display strings, decide equality; unreadable/mode bindings cannot fire.
+pub fn effective<'a>(
+    map: &'a rex_linux::keymap::Resolved,
+    server: &[rexrs::api::client::InspectResponseAction],
+) -> Vec<&'a rex_linux::keymap::ResolvedBinding> {
+    let mut result: Vec<&rex_linux::keymap::ResolvedBinding> = Vec::new();
+    for candidate in &map.bindings {
+        let Some(chords) = candidate.chords.as_ref() else {
+            continue;
+        };
+        if matches!(classify(&candidate.binding, server), Kind::Skip) {
+            continue;
+        }
+        if result.iter().any(|higher| {
+            let keys = higher.chords.as_ref().unwrap();
+            keys.starts_with(chords) || chords.starts_with(keys)
+        }) {
+            continue;
+        }
+        result.push(candidate);
+    }
+    result
+}
+
+pub fn binding_title(binding: &rexrs::api::client::Binding) -> String {
+    let title = find(&binding.action)
+        .map(|s| s.title())
+        .unwrap_or(&binding.action);
+    let Some(args) = &binding.args else {
+        return title.into();
+    };
+    let detail = match binding.action.as_str() {
+        "pane.split" | "pane.focus" => args["direction"].as_str().unwrap_or_default().to_owned(),
+        "pane.scroll" => format!("{} lines", args["lines"]),
+        "client.tab.goto" => format!("tab {}", args["index"]),
+        "pane.send_key" => args["key"].as_str().unwrap_or_default().to_owned(),
+        _ => return title.into(),
+    };
+    format!("{title} · {detail}")
+}
+
 pub fn declarations() -> Vec<rexrs::api::client::InspectResponseAction> {
     SPECS
         .iter()

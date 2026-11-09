@@ -135,6 +135,25 @@ pub enum Step {
     Run { index: usize, sequence: bool },
 }
 impl Sequence {
+    pub fn label(&self, map: &Resolved) -> Option<String> {
+        if self.depth == 0 {
+            return None;
+        }
+        let chords = map
+            .bindings
+            .get(*self.candidates.first()?)?
+            .chords
+            .as_ref()?;
+        Some(
+            chords
+                .iter()
+                .take(self.depth)
+                .map(|c| c.keycaps().join(" "))
+                .collect::<Vec<_>>()
+                .join(", "),
+        )
+    }
+
     pub fn clear(&mut self) {
         self.candidates.clear();
         self.depth = 0;

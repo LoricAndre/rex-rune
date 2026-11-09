@@ -174,6 +174,43 @@ fn returned_client_actions_are_taken_once_in_order_unknown_names_ignored() {
 }
 
 #[test]
+fn settings_shows_effective_sequences_sources_and_pending_chip_cancels() {
+    let mut ws = workspace();
+    let path = rex_linux::settings::shortcuts::Shortcuts::path(&ws.settings_path);
+    std::fs::write(
+        &path,
+        r#"[{"keys":"ctrl+k","action":null},{"keys":"ctrl+b>c","action":"client.tab.new"}]"#,
+    )
+    .unwrap();
+    ws.settings.shortcut_file = rex_linux::settings::shortcuts::Shortcuts::load(&ws.settings_path);
+    overrides(
+        &mut ws,
+        json!([
+            {"keys":"ctrl+k","action":null},
+            {"keys":"ctrl+b>c","action":"client.tab.new"}
+        ]),
+    );
+    let mut rt = runtime(ws);
+    key(&mut rt, Code::KeyB, ctrl(Key::Command('b')), true, false);
+    assert!(has(&rt, "pending-sequence"));
+    press(&mut rt, Key::Escape);
+    assert_eq!(rt.state.bindings.sequence.depth, 0);
+    rt.frame(0.5);
+    assert!(!has(&rt, "pending-sequence"));
+    rt.update(|s, tx| {
+        s.perform(Intent::Settings, tx);
+        s.open_section(crate::app::panel::SettingsSection::Shortcuts);
+    });
+    rt.frame(0.);
+    let words: Vec<_> = rt.elements().into_iter().filter_map(|e| e.text).collect();
+    assert!(words.iter().any(|s| s == "then"));
+    assert!(words.iter().any(|s| s == "shortcuts.json"));
+    assert!(!words.iter().any(|s| s == "Switch session"));
+    assert!(!has(&rt, "shortcut-problem-0"));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn effective_map_swaps_by_host_and_generation_and_preserves_problems() {
     let mut ws = workspace_hosts(2);
     let overrides = Overrides::parse(&json!([{"keys":"ctrl+b>","action":"client.settings"}]));

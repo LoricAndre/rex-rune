@@ -605,6 +605,22 @@ impl Workspace {
             .unwrap_or(&self.local_keymap)
     }
 
+    pub fn keymap_snapshot(&self) -> Option<&rex_linux::connection::keymap::Snapshot> {
+        self.model()
+            .keymap
+            .as_deref()
+            .filter(|k| self.model().connected && k.generation == self.keymap_generation)
+    }
+
+    pub fn effective_bindings(&self) -> Vec<&rex_linux::keymap::ResolvedBinding> {
+        super::actions::effective(
+            self.effective_keymap(),
+            self.keymap_snapshot()
+                .map(|k| k.reply.actions.as_slice())
+                .unwrap_or(&[]),
+        )
+    }
+
     fn announce_keymap_problems(&mut self, index: usize) {
         let host = &mut self.hosts[index];
         let Some(snapshot) = &host.model.keymap else {

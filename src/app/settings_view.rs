@@ -10,62 +10,6 @@ use rex_linux::settings::{NoticePosition, NotificationsConfig};
 use rune::{Cursor, El, ScrollSpec, Tx, col, el, row, text};
 use rune_kit::{IconButton, Keybind, SegmentedControl, Switch};
 
-/// A chord's keys and what it does.
-type Shortcut = (&'static [&'static str], &'static str);
-
-/// Every workspace shortcut, grouped as Settings → Shortcuts lists them.
-const SHORTCUTS: &[(&str, &[Shortcut])] = &[
-    (
-        "Navigate",
-        &[
-            (&["Ctrl", "K"], "Switch session"),
-            (&["Ctrl", "Shift", "P"], "Commands"),
-            (&["Ctrl", ","], "Settings"),
-            (&["Ctrl", "Tab"], "Next tab across sessions and hosts"),
-            (
-                &["Ctrl", "Shift", "Tab"],
-                "Previous tab across sessions and hosts",
-            ),
-            (&["Ctrl", "PageUp"], "Previous tab in this session"),
-            (&["Ctrl", "PageDown"], "Next tab in this session"),
-            (&["Mouse", "Back / Forward"], "Navigation history"),
-            (&["Ctrl", "Alt", "Arrows"], "Move pane focus"),
-            (&["Ctrl", "Shift", "B"], "Toggle sidebar"),
-        ],
-    ),
-    (
-        "Create and close",
-        &[
-            (&["Ctrl", "Shift", "N"], "New session"),
-            (&["Ctrl", "Shift", "T"], "New tab"),
-            (&["Ctrl", "Shift", "D"], "Split right"),
-            (&["Ctrl", "Alt", "D"], "Split down"),
-            (&["Ctrl", "Shift", "W"], "Close pane or tab"),
-        ],
-    ),
-    (
-        "Panes",
-        &[
-            (&["Ctrl", "Shift", "Enter"], "Zoom pane"),
-            (&["Ctrl", "Shift", "Space"], "Pane actions"),
-            (&["Ctrl", "Shift", "R"], "Resume terminal"),
-        ],
-    ),
-    (
-        "Text and view",
-        &[
-            (&["Ctrl", "Shift", "C"], "Copy"),
-            (&["Ctrl", "Shift", "V"], "Paste"),
-            (&["Ctrl", "Shift", "F"], "Search terminal"),
-            (&["Shift", "PageUp"], "Scroll history up"),
-            (&["Shift", "PageDown"], "Scroll history down"),
-            (&["Ctrl", "+"], "Enlarge interface"),
-            (&["Ctrl", "−"], "Shrink interface"),
-            (&["Ctrl", "0"], "Reset interface zoom"),
-        ],
-    ),
-];
-
 /// A labelled setting: name and optional explanation on the left, its control on the right.
 pub(super) fn setting(label: &str, detail: &str, control: El) -> El {
     let mut words = col()
@@ -491,19 +435,79 @@ fn hosts(s: &Workspace) -> El {
 fn shortcuts(s: &Workspace) -> El {
     let k = kit();
     let mut body = col().gap(4.);
-    for (name, list) in SHORTCUTS {
+    let effective = s.effective_bindings();
+    for name in [
+        "Navigate",
+        "Create and close",
+        "Panes",
+        "Text and view",
+        "Interface",
+        "Server",
+    ] {
+        let list: Vec<_> = effective
+            .iter()
+            .filter(|b| {
+                super::actions::find(&b.binding.action)
+                    .map(|a| a.category())
+                    .unwrap_or("Server")
+                    == name
+            })
+            .collect();
+        if list.is_empty() {
+            continue;
+        }
         body = body.child(group(name));
-        for (keys, label) in *list {
+        for (index, binding) in list.iter().enumerate() {
+            let mut caps = col().gap(3.);
+            for (depth, chord) in binding.chords.as_ref().unwrap().iter().enumerate() {
+                if depth > 0 {
+                    caps = caps.child(text("then").font(ui(10.5)).color(rgb(muted())));
+                }
+                let names = chord.keycaps();
+                let keys: Vec<_> = names.iter().map(String::as_str).collect();
+                caps = caps.child(Keybind::new(&keys).build(k));
+            }
+            let source = match binding.binding.source.as_deref() {
+                Some("linux") => "Linux default",
+                Some("settings") => "shortcuts.json",
+                Some(source) => source,
+                None => "Server",
+            };
             body = body.child(
                 row()
-                    .h(30.)
+                    .key(format!("shortcut-{name}-{index}"))
+                    .min_h(38.)
+                    .py(3.)
                     .gap(12.)
                     .center_y()
-                    .child(el().w(190.).child(Keybind::new(keys).build(k)))
-                    .child(text(*label).font(ui(12.5)).color(rgb(ink()))),
+                    .child(el().w(190.).child(caps))
+                    .child(
+                        col()
+                            .grow(1.)
+                            .min_w(0.)
+                            .gap(2.)
+                            .child(
+                                text(super::actions::binding_title(&binding.binding))
+                                    .font(ui(12.5))
+                                    .color(rgb(ink()))
+                                    .wrap(),
+                            )
+                            .child(text(source).font(ui(10.5)).color(rgb(muted())).wrap()),
+                    ),
             );
         }
     }
+    body = body.child(group("Pointer")).child(
+        row()
+            .min_h(30.)
+            .gap(12.)
+            .center_y()
+            .child(
+                el().w(190.)
+                    .child(Keybind::new(&["Mouse", "Back / Forward"]).build(k)),
+            )
+            .child(text("Navigation history").font(ui(12.5)).color(rgb(ink()))),
+    );
     let diagnostics = &s.effective_keymap().diagnostics;
     if !diagnostics.is_empty() || s.model().keymap_error.is_some() {
         body = body.child(group("Problems"));
@@ -524,6 +528,17 @@ fn shortcuts(s: &Workspace) -> El {
             );
         }
     }
+    body = body.child(group("Files"));
+    if let Some(snapshot) = s.keymap_snapshot() {
+        body = body.child(
+            text(format!("Server: {}", snapshot.reply.config.path))
+                .key("server-shortcuts-path")
+                .font(ui(11.5))
+                .color(rgb(muted()))
+                .selectable(true)
+                .wrap(),
+        );
+    }
     body = body.child(
         text(
             rex_linux::settings::shortcuts::Shortcuts::path(&s.settings_path)
@@ -538,7 +553,7 @@ fn shortcuts(s: &Workspace) -> El {
         .mt(12.),
     );
     body.child(
-        text("These are reserved by Rex; every other key goes to the focused terminal.")
+        text("Edit the overrides file, then return to Rex to reload. Escape cancels a sequence; unbound keys reach the terminal.")
             .font(ui(11.5))
             .color(rgb(muted()))
             .wrap()
