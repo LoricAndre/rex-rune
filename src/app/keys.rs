@@ -5,7 +5,11 @@ use serde_json::{Value, json};
 /// Ghostty's key name for a W3C code: `KeyA` → `key_a`, `Digit1` → `digit_1`,
 /// `ArrowUp` → `arrow_up`, `Numpad0` → `numpad_0`, `F12` → `f12`.
 pub fn code_name(code: PhysicalKeyCode) -> String {
-    let debug = format!("{code:?}");
+    wire_code_name(&format!("{code:?}"))
+}
+
+/// Also used for validated W3C codes in synthesized pane.send_key events.
+pub fn wire_code_name(debug: &str) -> String {
     if let Some(n) = debug.strip_prefix('F')
         && !n.is_empty()
         && n.bytes().all(|b| b.is_ascii_digit())
@@ -176,6 +180,56 @@ pub fn payload(
         "composing": matches!(ev.key, Key::Dead(_)),
         "action": action,
     }))
+}
+
+/// Explicit, layout-free pane.send_key: use the regular payload builder for both edges,
+/// never a US shifted-character table. Physical spellings carry no invented text.
+pub fn synthesize(spelling: &str) -> Option<[Value; 2]> {
+    use rex_linux::keymap::{Chord, Key as K};
+    let chord = Chord::parse(spelling).ok()?;
+    let mods = Mods {
+        ctrl: chord.modifiers.ctrl,
+        alt: chord.modifiers.alt,
+        shift: chord.modifiers.shift,
+        logo: chord.modifiers.logo,
+        ..Mods::default()
+    };
+    let (key, base, wire) = match chord.key {
+        K::Character(c) => (Key::Text(c.to_string()), Some(c), None),
+        K::Physical(code) => (Key::Command('a'), None, Some(wire_code_name(code))),
+        K::Named(name) => {
+            let key = match name {
+                "enter" => Key::Enter,
+                "escape" => Key::Escape,
+                "tab" => Key::Tab,
+                "space" => Key::Text(" ".into()),
+                "backspace" => Key::Backspace,
+                "delete" => Key::Delete,
+                "left" => Key::Left,
+                "right" => Key::Right,
+                "up" => Key::Up,
+                "down" => Key::Down,
+                "home" => Key::Home,
+                "end" => Key::End,
+                "pageup" => Key::PageUp,
+                "pagedown" => Key::PageDown,
+                "insert" => Key::Command('a'),
+                f => Key::Function(f.strip_prefix('f')?.parse().ok()?),
+            };
+            (key, None, (name == "insert").then(|| "insert".into()))
+        }
+    };
+    let event = KeyEvent { key, mods };
+    let mut press = payload(&event, None, base, Action::Press)?;
+    let mut release = payload(&event, None, base, Action::Release)?;
+    if let Some(wire) = wire {
+        for payload in [&mut press, &mut release] {
+            payload["key"] = json!(wire);
+            payload["text"] = json!("");
+            payload["unshifted_codepoint"] = json!(0);
+        }
+    }
+    Some([press, release])
 }
 
 #[cfg(test)]

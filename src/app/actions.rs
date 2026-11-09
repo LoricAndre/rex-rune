@@ -38,6 +38,12 @@ enum Handler {
     Paste,
     Reconnect,
     Scroll,
+    GotoTab,
+    CloseTab,
+    RenameTab,
+    RenameSession,
+    ClosePane,
+    SendKey,
 }
 
 pub struct Spec {
@@ -77,6 +83,12 @@ specs! {
     "pane.paste" => Paste,
     "pane.reconnect" => Reconnect,
     "pane.scroll" => Scroll,
+    "client.tab.goto" => GotoTab,
+    "client.tab.close" => CloseTab,
+    "client.tab.rename" => RenameTab,
+    "session.rename" => RenameSession,
+    "pane.close" => ClosePane,
+    "pane.send_key" => SendKey,
 }
 
 pub fn find(name: &str) -> Option<&'static Spec> {
@@ -84,13 +96,34 @@ pub fn find(name: &str) -> Option<&'static Spec> {
 }
 
 impl Spec {
+    pub fn global(&self) -> bool {
+        matches!(
+            self.handler,
+            Handler::ZoomIn | Handler::ZoomOut | Handler::ZoomReset
+        )
+    }
+    pub fn repeats(&self) -> bool {
+        self.global()
+            || matches!(
+                self.handler,
+                Handler::FocusPane
+                    | Handler::Scroll
+                    | Handler::NextGlobal
+                    | Handler::PreviousGlobal
+            )
+    }
+
     /// Validate before dispatch: invalid arguments must not partially perform an action.
     pub fn accepts(&self, args: &Value) -> bool {
         let Some(object) = args.as_object() else {
             return args.is_null()
                 && !matches!(
                     self.handler,
-                    Handler::Split | Handler::FocusPane | Handler::Scroll
+                    Handler::Split
+                        | Handler::FocusPane
+                        | Handler::Scroll
+                        | Handler::GotoTab
+                        | Handler::SendKey
                 );
         };
         match self.handler {
@@ -109,6 +142,18 @@ impl Spec {
                     && args["lines"]
                         .as_i64()
                         .is_some_and(|n| i32::try_from(n).is_ok())
+            }
+            Handler::GotoTab => {
+                object.len() == 1
+                    && args["index"]
+                        .as_u64()
+                        .is_some_and(|n| n > 0 && usize::try_from(n).is_ok())
+            }
+            Handler::SendKey => {
+                object.len() == 1
+                    && args["key"]
+                        .as_str()
+                        .is_some_and(|key| super::keys::synthesize(key).is_some())
             }
             _ => object.is_empty(),
         }
@@ -169,8 +214,76 @@ pub fn run(s: &mut Workspace, name: &str, args: &Value, tx: &mut Tx) -> bool {
                 term.send(Command::Scroll(args["lines"].as_i64().unwrap() as isize));
             }
         }
+        Handler::GotoTab => {
+            let index = args["index"].as_u64().unwrap() as usize - 1;
+            if let Some(id) = s
+                .model()
+                .view()
+                .and_then(|v| v.windows.get(index))
+                .and_then(|w| w.window_id.clone())
+            {
+                s.perform(Intent::Tab(id), tx);
+            }
+        }
+        Handler::CloseTab | Handler::RenameTab => {
+            if let Some(id) = s.model().window().and_then(|w| w.window_id.clone()) {
+                s.perform(
+                    if matches!(spec.handler, Handler::CloseTab) {
+                        Intent::CloseWindow(id)
+                    } else {
+                        Intent::RenameWindow(id)
+                    },
+                    tx,
+                );
+            }
+        }
+        Handler::RenameSession => s.perform(Intent::RenameSession, tx),
+        Handler::ClosePane => {
+            if let Some(target) = s.focused_block().and_then(|b| s.target(&b)) {
+                s.perform(Intent::Pane(target, super::panel::PaneAction::Close), tx);
+            }
+        }
+        Handler::SendKey => {
+            if let Some(payloads) = args["key"].as_str().and_then(super::keys::synthesize)
+                && let Some(term) = s.active_terminal_mut()
+            {
+                for payload in payloads {
+                    term.send(Command::SendKey(payload));
+                }
+            }
+        }
     }
     true
+}
+
+/// Resolve once per file generation, including argument diagnostics. Invalid bindings
+/// are skipped at match time, so a lower valid action can still be selected.
+pub fn resolve(overrides: &rex_linux::keymap::Overrides) -> rex_linux::keymap::Resolved {
+    let actions: Vec<_> = SPECS
+        .iter()
+        .map(|s| {
+            rexrs::api::client::InspectResponseAction::new(s.name)
+                .kind("client")
+                .repeats(s.repeats())
+        })
+        .collect();
+    let mut map = rex_linux::keymap::resolve(&[rex_linux::keymap::defaults()], overrides, &actions);
+    for binding in &map.bindings {
+        let binding = &binding.binding;
+        if find(&binding.action)
+            .is_some_and(|spec| !spec.accepts(binding.args.as_ref().unwrap_or(&Value::Null)))
+        {
+            map.diagnostics.push(rexrs::api::client::Diagnostic {
+                severity: "warning".into(),
+                source: binding.source.clone(),
+                message: format!("invalid arguments for {:?}", binding.action),
+                action: Some(binding.action.clone()),
+                key: Some(binding.keys.join(" ")),
+                mode: None,
+            });
+        }
+    }
+    map
 }
 
 #[cfg(test)]

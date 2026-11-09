@@ -1,5 +1,7 @@
 //! Headless focus and key-routing checks on Rune's runtime (no server: the one host is a
 //! socket that does not exist).
+#[path = "bindings_integration_tests.rs"]
+mod bindings_integration_tests;
 #[path = "navigation_tests.rs"]
 mod navigation_tests;
 use super::{

@@ -18,7 +18,7 @@ use rex_linux::{
     terminal_theme::{TerminalTheme, ThemeDirs, ThemeInfo, paired},
 };
 use rexrs::api::terminal::SetTheme;
-use rune::{AppHandle, PhysicalKeyCode, TextEdit, Tx};
+use rune::{AppHandle, TextEdit, Tx};
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet},
@@ -68,8 +68,11 @@ pub struct Workspace {
     next_notice: u64,
     zoom_notice: Option<u64>,
     pub drag: Option<DividerDrag>,
-    /// Physical keys whose press went to a terminal; only their releases follow.
-    pub forwarded: HashSet<PhysicalKeyCode>,
+    /// Keys whose press went to a terminal; only their releases follow.
+    pub forwarded: HashSet<super::bindings::Identity>,
+    pub bindings: super::bindings::State,
+    pub local_keymap: rex_linux::keymap::Resolved,
+    pub keymap_generation: u64,
     pub navigation: super::navigation::History,
     /// Panes this window has taken size ownership of since it last came forward.
     pub claimed: HashSet<(HostId, String)>,
@@ -187,6 +190,7 @@ impl Workspace {
                 Ok(theme) => (theme, None),
                 Err(error) => (None, Some(error)),
             };
+        let local_keymap = super::actions::resolve(&settings.shortcut_file.overrides);
         let mut this = Self {
             logo: None,
             images: None,
@@ -202,6 +206,9 @@ impl Workspace {
             zoom_notice: None,
             drag: None,
             forwarded: HashSet::new(),
+            bindings: Default::default(),
+            local_keymap,
+            keymap_generation: 0,
             navigation: Default::default(),
             claimed: HashSet::new(),
             handle,
@@ -504,6 +511,13 @@ impl Workspace {
 
     pub fn window_focus(&mut self, focused: bool) {
         self.window_focused = focused;
+        self.bindings.sequence.clear();
+        if focused {
+            self.reload_shortcuts();
+        } else {
+            self.bindings.consumed.clear();
+            self.forwarded.clear();
+        }
         if !focused {
             for term in self.terminals.values_mut() {
                 term.end_selection();
@@ -513,6 +527,18 @@ impl Workspace {
             self.claimed.clear();
             self.claim_visible();
             self.track_activity(self.active);
+        }
+    }
+
+    pub fn reload_shortcuts(&mut self) {
+        if !self.settings.shortcut_file.reload(&self.settings_path) {
+            return;
+        }
+        self.local_keymap = super::actions::resolve(&self.settings.shortcut_file.overrides);
+        self.keymap_generation += 1;
+        self.bindings.sequence.clear();
+        if let Some(notice) = self.settings.shortcut_file.notice.take() {
+            self.notify(notice);
         }
     }
 
@@ -739,6 +765,9 @@ impl Workspace {
     }
 
     pub fn request(&mut self, method: &str, mut payload: Value) {
+        if method.starts_with("session.focus") {
+            self.bindings.sequence.clear();
+        }
         let Some(session) = self.model().selected.clone() else {
             return;
         };
@@ -1050,6 +1079,8 @@ impl Workspace {
             }
             Intent::Sidebar => self.toggle_sidebar(),
             Intent::Settings => {
+                self.bindings.sequence.clear();
+                self.reload_shortcuts();
                 let back = self.panel.take();
                 self.panel = Some(Panel::new(PanelKind::Settings, "Settings", &[]));
                 self.panel.as_mut().unwrap().target = back.and_then(|p| p.target);
@@ -1426,6 +1457,7 @@ impl Workspace {
     }
 
     pub fn open_panel(&mut self, kind: PanelKind, title: &str, fields: &[(&str, &str, &str)]) {
+        self.bindings.sequence.clear();
         for term in self.terminals.values_mut() {
             term.end_selection();
         }
@@ -1478,6 +1510,9 @@ impl Workspace {
     /// Show a Settings section; Integrations reads the agents' state when first shown.
     pub fn open_section(&mut self, section: SettingsSection) {
         self.settings_section = section;
+        if section == SettingsSection::Shortcuts {
+            self.reload_shortcuts();
+        }
         if section == SettingsSection::Integrations
             && self.integrations.status == super::integrations::AgentStatus::Unknown
         {
@@ -1493,6 +1528,7 @@ impl Workspace {
     }
 
     pub fn close_panel(&mut self, tx: &mut Tx) {
+        self.bindings.sequence.clear();
         self.panel = None;
         tx.blur();
     }

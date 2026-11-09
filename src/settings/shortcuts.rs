@@ -12,6 +12,7 @@ pub struct Shortcuts {
     /// Taken once by the UI; Problems keeps the diagnostics after dismissal.
     pub notice: Option<String>,
     pub imported: Option<usize>,
+    stamp: Option<(std::time::SystemTime, u64)>,
 }
 
 impl Shortcuts {
@@ -22,6 +23,7 @@ impl Shortcuts {
     /// This never writes the file. A bad file is no reason to prevent startup.
     pub fn load(workspace: &Path) -> Self {
         let mut shortcuts = Self {
+            stamp: Self::stamp(&Self::path(workspace)),
             path: Self::path(workspace),
             ..Self::default()
         };
@@ -47,6 +49,22 @@ impl Shortcuts {
             )),
         }
         shortcuts
+    }
+
+    fn stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
+        let metadata = std::fs::metadata(path).ok()?;
+        Some((metadata.modified().ok()?, metadata.len()))
+    }
+
+    /// Focus/Settings checks only stat the file; parse only when mtime or length changes.
+    /// This never imports or writes. Missing files are a stable stamp too.
+    pub fn reload(&mut self, workspace: &Path) -> bool {
+        let path = Self::path(workspace);
+        if self.path == path && self.stamp == Self::stamp(&path) {
+            return false;
+        }
+        *self = Self::load(workspace);
+        true
     }
 
     pub(super) fn problem(&mut self, message: String) {
@@ -139,6 +157,31 @@ mod tests {
         fn drop(&mut self) {
             std::fs::remove_dir_all(&self.0).unwrap();
         }
+    }
+
+    #[test]
+    fn reload_is_metadata_gated_and_never_imports_or_writes() {
+        let fixture = Fixture::new();
+        let mut shortcuts = Shortcuts::load(&fixture.workspace());
+        assert!(!shortcuts.reload(&fixture.workspace()));
+        std::fs::write(fixture.shortcuts(), r#"[{"keys":"ctrl+k","action":null}]"#).unwrap();
+        assert!(shortcuts.reload(&fixture.workspace()));
+        assert!(!shortcuts.reload(&fixture.workspace()));
+        assert_eq!(shortcuts.overrides.layer.removals.len(), 1);
+        std::fs::write(fixture.shortcuts(), "bad").unwrap();
+        assert!(shortcuts.reload(&fixture.workspace()));
+        assert_eq!(shortcuts.overrides.diagnostics.len(), 1);
+        assert!(!shortcuts.reload(&fixture.workspace()));
+        std::fs::write(
+            fixture.workspace(),
+            r#"{"keybindings":[{"key":"ctrl+k","action":null}]}"#,
+        )
+        .unwrap();
+        std::fs::remove_file(fixture.shortcuts()).unwrap();
+        assert!(shortcuts.reload(&fixture.workspace()));
+        assert!(shortcuts.overrides.layer.removals.is_empty());
+        assert!(!fixture.shortcuts().exists());
+        assert!(!shortcuts.reload(&fixture.workspace()));
     }
 
     #[test]

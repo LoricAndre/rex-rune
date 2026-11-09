@@ -84,6 +84,8 @@ fn parse_font_size(value: &str) -> std::result::Result<f32, String> {
 pub enum Command {
     Selection(crate::terminal::selection::Input),
     Key(Value),
+    /// Explicit pane.send_key only; normal keys always use client.key.
+    SendKey(Value),
     Paste(String),
     /// A `block.event` mouse payload: `action`, `button`, `x`, `y` (cells) and `mods`.
     Mouse(Value),
@@ -1657,7 +1659,7 @@ async fn handle_command(
                     }
                     // Releases, pointer motion and wheel turns never claim the block; presses do.
                     let passive = match &input {
-                        Command::Key(key) => key["action"] == "release",
+                        Command::Key(key) | Command::SendKey(key) => key["action"] == "release",
                         Command::Mouse(mouse) => mouse["action"] != "press",
                         Command::Wheel(_) => true,
                         _ => false,
@@ -1691,13 +1693,15 @@ async fn handle_command(
                     {
                         let _ = worker.commands.send(DataCommand::Bottom);
                     }
-                    if matches!(input, Command::Key(_) | Command::Paste(_))
-                        && let Some(connection) = shared
-                            .model
-                            .lock()
-                            .expect("host model")
-                            .terminals
-                            .get(&block)
+                    if matches!(
+                        input,
+                        Command::Key(_) | Command::SendKey(_) | Command::Paste(_)
+                    ) && let Some(connection) = shared
+                        .model
+                        .lock()
+                        .expect("host model")
+                        .terminals
+                        .get(&block)
                     {
                         connection
                             .model
@@ -1713,6 +1717,9 @@ async fn handle_command(
                                 json!({"session_id":session,"block_id":block,"key":key}),
                             )
                             .await?;
+                        }
+                        Command::SendKey(key) => {
+                            request(control, "block.event", json!({"session_id":session,"block_id":block,"event":{"type":"key","payload":key}})).await?;
                         }
                         Command::Paste(text) => {
                             request(control, "block.event", json!({"session_id":session,"block_id":block,"event":{"type":"paste","payload":{"text":text}}})).await?;

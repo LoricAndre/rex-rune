@@ -1,6 +1,7 @@
 //! The Rune front end.
 mod actions;
 mod activity;
+mod bindings;
 mod dialogs;
 mod discover;
 mod fonts;
