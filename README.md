@@ -150,28 +150,46 @@ The SSH user is the login on that machine, which is also the user whose Rex serv
 
 Global tab navigation uses cached tab order without enabling extra prefetch: a session whose view is not loaded is one stop, and selecting it loads its tabs. Crossing sessions or hosts settles after 150 ms without another cycle, coalescing fast repeats rather than attaching each intermediate session. The first stop can attach before key repeat begins. During settling there is no target preview, and typing still goes to the displayed pane. Back/Forward history is local to this window and survives reconnects; unavailable targets are skipped. Commands also exposes these navigation actions. Ctrl Tab is a removable client default, including in Kitty-aware editors.
 
-| Shortcut | Action |
-| --- | --- |
-| Ctrl K | Search sessions across saved hosts |
-| Ctrl Shift P | Search commands, sessions and current-session tabs |
-| Ctrl Shift N / T | New session on the active host / new tab |
-| Ctrl Shift D / Ctrl Alt D | Split right / down |
-| Ctrl Tab / Ctrl Shift Tab | Next / previous tab across connected hosts and sessions, in sidebar order (wraps) |
-| Ctrl PageUp / PageDown | Previous / next tab within the current session (server-controlled, no wrap) |
-| Mouse Back / Forward | Revisit tabs, sessions and hosts in navigation history |
-| Ctrl Alt arrows | Focus an adjacent pane (Alt arrows reach terminal programs) |
-| Ctrl Shift Enter | Zoom / restore the focused pane |
-| Ctrl Shift Space | Focused-pane actions |
-| Ctrl Shift W | Close the focused pane, or the tab when it has one pane (asks first) |
-| Ctrl , | Settings |
-| Ctrl Shift B | Collapse / restore the sidebar |
-| Ctrl Shift C / V | Copy selection / paste text (bracketed-paste aware), or upload copied files or an image |
-| Ctrl Shift F | Search the focused terminal's screen and scrollback |
-| Ctrl Shift R | Resume the focused terminal's data stream |
-| Shift PageUp / PageDown, wheel | Scroll local history |
-| Ctrl + / Ctrl − / Ctrl 0 | Enlarge / shrink / reset the whole interface |
+| Shortcut | Behavior | Action (and args where required) |
+| --- | --- | --- |
+| Ctrl K | Search sessions across saved hosts | `session.switch` |
+| Ctrl Shift P | Search commands, sessions and current-session tabs | `client.palette.toggle` |
+| Ctrl Shift N / T | New session on the active host / new tab | `session.new` / `client.tab.new` |
+| Ctrl Shift D / Ctrl Alt D | Split right / down | `pane.split`, `{"direction":"right"}` / `{"direction":"down"}` |
+| Ctrl Tab / Ctrl Shift Tab | Next / previous tab across connected hosts and sessions, in sidebar order (wraps) | `client.tab.next_global` / `client.tab.previous_global` |
+| Ctrl PageUp / PageDown | Previous / next tab within the current session (server-controlled, no wrap) | `client.tab.previous` / `client.tab.next` |
+| Mouse Back / Forward | Revisit tabs, sessions and hosts in navigation history | `client.history.back` / `client.history.forward` |
+| Ctrl Alt arrows | Focus an adjacent pane (Alt arrows reach terminal programs) | `pane.focus`, `{"direction":"left"}` (or `right`, `up`, `down`) |
+| Ctrl Shift Enter | Zoom / restore the focused pane | `pane.zoom` |
+| Ctrl Shift Space | Focused-pane actions | `pane.actions` |
+| Ctrl Shift W | Close the focused pane, or the tab when it has one pane (asks first) | `client.close` |
+| Ctrl , | Settings | `client.settings` |
+| Ctrl Shift B | Collapse / restore the sidebar | `client.sidebar.toggle` |
+| Ctrl Shift C / V | Copy selection / paste text (bracketed-paste aware), or upload copied files or an image | `pane.copy` / `pane.paste` |
+| Ctrl Shift F | Search the focused terminal's screen and scrollback | `client.search` |
+| Ctrl Shift R | Resume the focused terminal's data stream | `pane.reconnect` |
+| Shift PageUp / PageDown, wheel | Scroll local history | `pane.scroll`, `{"lines":-20}` / `{"lines":20}` (wheel is pointer input) |
+| Ctrl + / Ctrl − / Ctrl 0 | Enlarge / shrink / reset the whole interface | `client.zoom.in` / `client.zoom.out` / `client.zoom.reset` |
 
 These are the client defaults; bound chords do not reach terminal programs, and every other key goes to the focused pane. Interface zoom changes in 10% steps (70–150%), is saved as `ui_scale`, and is independent of the terminal font size. `Ctrl =` and the numpad `+`/`−` also work.
+
+The following actions have no default key binding:
+
+| Action | Args schema | Behavior |
+| --- | --- | --- |
+| `client.tab.goto` | `{"index": integer >= 1}` | Focus the 1-based tab in the current session |
+| `client.tab.close` | None | Confirm closing the current tab |
+| `client.tab.rename` | None | Open the current tab's rename dialog |
+| `session.rename` | None | Open the current session's rename dialog |
+| `pane.close` | None | Confirm closing the focused pane |
+| `pane.send_key` | `{"key": "single chord"}` | Send a synthesizable key directly to the PTY, bypassing Lua bindings |
+
+Omit `args` for actions with no arguments (an empty object also works).
+For argument-taking actions, supply exactly the required field: `pane.split`
+accepts `direction` = `right` or `down`; `pane.focus` also accepts `left` and
+`up`; `pane.scroll` takes a signed 32-bit integer `lines` (negative scrolls up).
+`pane.send_key` takes a single supported chord, not a sequence; for example
+`{"key":"ctrl+b"}`.
 
 ### Configuring shortcuts
 
