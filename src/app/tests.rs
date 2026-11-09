@@ -3689,10 +3689,20 @@ fn ctrl_shift_f_searches_the_focused_terminal_without_typing_into_it() {
     assert_eq!(sent(), ["key"]);
 
     // The shortcut runs a named action, which bindings can run by its name.
-    assert_eq!(super::input::SEARCH, "client.search");
+    assert_eq!(super::actions::SEARCH, "client.search");
     rt.update(|s, tx| {
-        assert!(!super::input::run_action(s, "client.nothing", tx));
-        assert!(super::input::run_action(s, super::input::SEARCH, tx));
+        assert!(!super::actions::run(
+            s,
+            "client.nothing",
+            &serde_json::Value::Null,
+            tx
+        ));
+        assert!(super::actions::run(
+            s,
+            super::actions::SEARCH,
+            &serde_json::Value::Null,
+            tx
+        ));
     });
     rt.frame(1. / 60.);
     assert!(

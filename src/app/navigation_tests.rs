@@ -3,7 +3,7 @@
 use super::*;
 #[path = "navigation_review_tests.rs"]
 mod review;
-use crate::app::input::{self, HISTORY_BACK, HISTORY_FORWARD, NEXT_GLOBAL, PREVIOUS_GLOBAL};
+use crate::app::actions::{self, HISTORY_BACK, HISTORY_FORWARD, NEXT_GLOBAL, PREVIOUS_GLOBAL};
 use crate::app::navigation::Visit;
 use std::time::{Duration, Instant};
 
@@ -413,7 +413,7 @@ fn named_actions_are_in_commands_and_keep_modal_mouse_navigation_out() {
     let (mut rt, rx) = recorded_history();
     rt.update(|s, tx| {
         for (name, expected) in [(NEXT_GLOBAL, "single"), (PREVIOUS_GLOBAL, "split")] {
-            assert!(input::run_action(s, name, tx));
+            assert!(actions::run(s, name, &serde_json::Value::Null, tx));
             assert_eq!(
                 s.navigation
                     .pending
@@ -426,9 +426,14 @@ fn named_actions_are_in_commands_and_keep_modal_mouse_navigation_out() {
             );
         }
         s.navigation.cancel();
-        assert!(input::run_action(s, HISTORY_BACK, tx));
+        assert!(actions::run(s, HISTORY_BACK, &serde_json::Value::Null, tx));
         acknowledge(s);
-        assert!(input::run_action(s, HISTORY_FORWARD, tx));
+        assert!(actions::run(
+            s,
+            HISTORY_FORWARD,
+            &serde_json::Value::Null,
+            tx
+        ));
         acknowledge(s);
         s.picker(false);
         for name in [
@@ -436,12 +441,12 @@ fn named_actions_are_in_commands_and_keep_modal_mouse_navigation_out() {
             PREVIOUS_GLOBAL,
             HISTORY_BACK,
             HISTORY_FORWARD,
-            input::SEARCH,
+            actions::SEARCH,
         ] {
             assert!(
                 s.entries()
                     .iter()
-                    .any(|e| matches!(e.action, Intent::ClientAction(n) if n == name))
+                    .any(|e| matches!(e.action, Intent::ClientAction(n, _) if n == name))
             );
         }
     });

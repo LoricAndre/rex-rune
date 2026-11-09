@@ -13,7 +13,7 @@ pub enum Intent {
     Select(usize, String),
     Tab(String),
     /// A named client action shared with the shortcut dispatcher.
-    ClientAction(&'static str),
+    ClientAction(&'static str, Value),
     Switcher,
     /// Create a session on a host at once, named when a switcher query gave a name.
     CreateOn(usize, Option<String>),
@@ -525,27 +525,27 @@ impl Workspace {
                 (
                     "Next tab across hosts",
                     "Ctrl Tab",
-                    Intent::ClientAction(super::input::NEXT_GLOBAL),
+                    Intent::ClientAction(super::actions::NEXT_GLOBAL, Value::Null),
                 ),
                 (
                     "Previous tab across hosts",
                     "Ctrl Shift Tab",
-                    Intent::ClientAction(super::input::PREVIOUS_GLOBAL),
+                    Intent::ClientAction(super::actions::PREVIOUS_GLOBAL, Value::Null),
                 ),
                 (
                     "Back in history",
                     "Mouse Back",
-                    Intent::ClientAction(super::input::HISTORY_BACK),
+                    Intent::ClientAction(super::actions::HISTORY_BACK, Value::Null),
                 ),
                 (
                     "Forward in history",
                     "Mouse Forward",
-                    Intent::ClientAction(super::input::HISTORY_FORWARD),
+                    Intent::ClientAction(super::actions::HISTORY_FORWARD, Value::Null),
                 ),
                 (
                     "Search terminal…",
                     "Ctrl Shift F",
-                    Intent::ClientAction(super::input::SEARCH),
+                    Intent::ClientAction(super::actions::SEARCH, Value::Null),
                 ),
                 ("New session", "Ctrl Shift N", Intent::NewSession),
                 ("New tab", "Ctrl Shift T", Intent::NewWindow),

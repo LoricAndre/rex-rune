@@ -4,6 +4,7 @@
 //! scrolling. So no default button may exist outside an open modal (the main view has none),
 //! and `on_key` takes every key it forwards.
 use super::{
+    actions::{self, NEXT_GLOBAL, PREVIOUS_GLOBAL, SEARCH},
     keys::{self, Action},
     panel::{Intent, PanelKind},
     workspace::{HostId, Workspace},
@@ -80,86 +81,69 @@ pub fn zoom_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
         (_, Some(Code::Digit0)) if !ev.mods.shift => 0,
         _ => return false,
     };
-    s.change_ui_scale(step, tx);
-    true
-}
-
-/// Opens the focused pane's search field.
-pub const SEARCH: &str = "client.search";
-pub const NEXT_GLOBAL: &str = "client.tab.next_global";
-pub const PREVIOUS_GLOBAL: &str = "client.tab.previous_global";
-pub const HISTORY_BACK: &str = "client.history.back";
-pub const HISTORY_FORWARD: &str = "client.history.forward";
-
-/// Runs the client action a binding names. False when no action has that name.
-pub fn run_action(s: &mut Workspace, name: &str, tx: &mut Tx) -> bool {
-    match name {
-        SEARCH => s.open_search(),
-        NEXT_GLOBAL => s.cycle_tab(1, tx),
-        PREVIOUS_GLOBAL => s.cycle_tab(-1, tx),
-        HISTORY_BACK => s.navigate_history(-1, tx),
-        HISTORY_FORWARD => s.navigate_history(1, tx),
-        _ => return false,
-    }
-    true
+    actions::run(
+        s,
+        match step {
+            1 => "client.zoom.in",
+            -1 => "client.zoom.out",
+            _ => "client.zoom.reset",
+        },
+        &serde_json::Value::Null,
+        tx,
+    )
 }
 
 /// Workspace shortcuts with no popup open. True when one ran.
 fn shortcut(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
     let m = ev.mods;
     if ctrl(ev) && !m.alt && ev.key == Key::Tab {
-        return run_action(
+        return actions::run(
             s,
             if m.shift {
                 PREVIOUS_GLOBAL
             } else {
                 NEXT_GLOBAL
             },
+            &serde_json::Value::Null,
             tx,
         );
     }
     if ctrl(ev) && m.shift && !m.alt {
         if letter(ev, tx, 'b') {
-            s.perform(Intent::Sidebar, tx);
+            actions::run(s, "client.sidebar.toggle", &json!(null), tx);
         } else if letter(ev, tx, 'p') {
-            s.picker(false);
+            actions::run(s, "client.palette.toggle", &json!(null), tx);
         } else if letter(ev, tx, 'n') {
-            s.perform(Intent::NewSession, tx);
+            actions::run(s, "session.new", &json!(null), tx);
         } else if letter(ev, tx, 't') {
-            s.perform(Intent::NewWindow, tx);
+            actions::run(s, "client.tab.new", &json!(null), tx);
         } else if letter(ev, tx, 'w') {
-            s.close_focused(tx);
+            actions::run(s, "client.close", &json!(null), tx);
         } else if letter(ev, tx, 'd') {
-            s.perform(Intent::Split("horizontal"), tx);
+            actions::run(s, "pane.split", &json!({"direction":"right"}), tx);
         } else if letter(ev, tx, 'f') {
-            run_action(s, SEARCH, tx);
+            actions::run(s, SEARCH, &json!(null), tx);
         } else if ev.key == Key::Enter {
-            s.perform(Intent::Zoom, tx);
+            actions::run(s, "pane.zoom", &json!(null), tx);
         } else if space(ev, tx) {
-            if let Some(block) = s.focused_block() {
-                s.pane_menu(block, None);
-            }
+            actions::run(s, "pane.actions", &json!(null), tx);
         } else if letter(ev, tx, 'c') {
-            if let Some(text) = s.active_terminal().and_then(|t| t.copy_text()) {
-                tx.copy(text);
-            }
+            actions::run(s, "pane.copy", &json!(null), tx);
         } else if letter(ev, tx, 'v') {
-            s.paste_clipboard(tx);
+            actions::run(s, "pane.paste", &json!(null), tx);
         } else if letter(ev, tx, 'r') {
-            if let Some(term) = s.active_terminal_mut() {
-                term.send(Command::Reconnect);
-            }
+            actions::run(s, "pane.reconnect", &json!(null), tx);
         } else {
             return false;
         }
         return true;
     }
     if ctrl(ev) && !m.shift && !m.alt && letter(ev, tx, 'k') {
-        s.picker(true);
+        actions::run(s, "session.switch", &json!(null), tx);
     } else if ctrl(ev) && !m.shift && !m.alt && comma(ev, tx) {
-        s.perform(Intent::Settings, tx);
+        actions::run(s, "client.settings", &json!(null), tx);
     } else if ctrl(ev) && m.alt && !m.shift && letter(ev, tx, 'd') {
-        s.perform(Intent::Split("vertical"), tx);
+        actions::run(s, "pane.split", &json!({"direction":"down"}), tx);
     } else if m.alt
         && ctrl(ev)
         && !m.shift
@@ -171,19 +155,17 @@ fn shortcut(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
             Key::Up => "up",
             _ => "down",
         };
-        s.request("session.focus_direction", json!({"direction":direction}));
+        actions::run(s, "pane.focus", &json!({"direction":direction}), tx);
     } else if ctrl(ev) && !m.shift && matches!(ev.key, Key::PageUp | Key::PageDown) {
-        let method = if ev.key == Key::PageUp {
-            "session.focus_previous_window"
+        let action = if ev.key == Key::PageUp {
+            "client.tab.previous"
         } else {
-            "session.focus_next_window"
+            "client.tab.next"
         };
-        s.request(method, json!({}));
+        actions::run(s, action, &json!(null), tx);
     } else if m.shift && !ctrl(ev) && matches!(ev.key, Key::PageUp | Key::PageDown) {
         let lines = if ev.key == Key::PageUp { -20 } else { 20 };
-        if let Some(term) = s.active_terminal_mut() {
-            term.send(Command::Scroll(lines));
-        }
+        actions::run(s, "pane.scroll", &json!({"lines":lines}), tx);
     } else {
         return false;
     }

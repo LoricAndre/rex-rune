@@ -941,7 +941,7 @@ impl Workspace {
                     self.select_window(self.active, session, id, tx);
                 }
             }
-            Intent::ClientAction(name) => { super::input::run_action(self, name, tx); }
+            Intent::ClientAction(name, args) => { super::actions::run(self, name, &args, tx); }
             Intent::Switcher => self.picker(true),
             Intent::NewSession => self.create_session(self.active, None, tx),
             Intent::CreateOn(host, name) => self.create_session(host, name, tx),
