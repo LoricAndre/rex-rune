@@ -629,12 +629,20 @@ fn shortcuts(s: &Workspace) -> El {
     body = body.child(group("Files"));
     if let Some(snapshot) = s.keymap_snapshot() {
         body = body.child(
-            text(format!("Server: {}", snapshot.reply.config.path))
-                .key("server-shortcuts-path")
-                .font(ui(11.5))
-                .color(rgb(muted()))
-                .selectable(true)
-                .wrap(),
+            text(format!(
+                "Server: {}{}",
+                snapshot.reply.config.path,
+                if snapshot.reply.config.exists {
+                    ""
+                } else {
+                    " (not created)"
+                }
+            ))
+            .key("server-shortcuts-path")
+            .font(ui(11.5))
+            .color(rgb(muted()))
+            .selectable(true)
+            .wrap(),
         );
     }
     body = body.child(

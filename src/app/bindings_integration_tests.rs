@@ -311,6 +311,33 @@ fn effective_map_swaps_by_host_and_generation_and_preserves_problems() {
 }
 
 #[test]
+fn server_config_path_marks_only_missing_files() {
+    for exists in [false, true] {
+        let mut ws = workspace();
+        server_map(&mut ws, vec![], vec![]);
+        let snapshot = std::sync::Arc::make_mut(ws.hosts[0].model.keymap.as_mut().unwrap());
+        snapshot.reply.config.path = "/server/init.lua".into();
+        snapshot.reply.config.exists = exists;
+        ws.perform(Intent::Settings, &mut rune::Tx::default());
+        let mut rt = runtime(ws);
+        click(&mut rt, "settings-section:shortcuts");
+        let elements = rt.elements();
+        let path = elements
+            .iter()
+            .find(|e| e.key.as_deref() == Some("server-shortcuts-path"))
+            .unwrap();
+        assert_eq!(
+            path.text.as_deref(),
+            Some(if exists {
+                "Server: /server/init.lua"
+            } else {
+                "Server: /server/init.lua (not created)"
+            })
+        );
+    }
+}
+
+#[test]
 fn settings_diagnostic_sets_toast_once_per_host_never_file_or_linux() {
     let mut ws = workspace();
     capture_host(&mut ws, 0);
