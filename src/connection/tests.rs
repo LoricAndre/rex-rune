@@ -564,6 +564,30 @@ fn progress_reports_set_and_clear_a_blocks_progress() {
 }
 
 #[test]
+fn progress_goes_when_another_process_of_the_same_name_takes_the_foreground() {
+    use activity::TerminalProgress::Set;
+    let mut model = HostModel::default();
+    let python = |pids: Vec<u64>| activity::BlockEvent::Process {
+        name: Some("python".into()),
+        pids,
+    };
+    let progress = activity::BlockEvent::Progress(Some(Set(Some(42))));
+    model.apply_block_event("s", "b".into(), python(vec![11, 1]));
+    model.apply_block_event("s", "b".into(), progress);
+    model.apply_block_event("s", "b".into(), python(vec![11, 1]));
+    assert_eq!(
+        model.progress.get("b").copied(),
+        Some(Set(Some(42))),
+        "the same process keeps its report"
+    );
+    model.apply_block_event("s", "b".into(), python(vec![12, 1]));
+    assert!(
+        model.progress.is_empty(),
+        "a new python must not inherit the last one's report"
+    );
+}
+
+#[test]
 fn program_names_prefer_the_script_and_drop_login_dashes() {
     let name = |v: Value| activity::program_name(&v);
     assert_eq!(
