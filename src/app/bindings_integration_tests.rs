@@ -389,6 +389,49 @@ fn server_config_path_marks_only_missing_files() {
 }
 
 #[test]
+fn changed_shortcuts_reach_offline_hosts_but_unchanged_touches_send_nothing() {
+    use rex_linux::settings::shortcuts::Shortcuts;
+    let mut ws = workspace_hosts(2);
+    let receivers = [capture_host(&mut ws, 0), capture_host(&mut ws, 1)];
+    ws.hosts[0].model.connected = true;
+    ws.hosts[1].model.connected = false;
+    let path = Shortcuts::path(&ws.settings_path);
+    std::fs::write(&path, "[]").unwrap();
+    ws.settings.shortcut_file = Shortcuts::load(&ws.settings_path);
+    let old = ws.keymap_generation;
+    std::fs::write(&path, r#"[{"keys":"ctrl+j","action":"client.tab.new"}]"#).unwrap();
+    ws.reload_shortcuts();
+    assert_eq!(ws.keymap_generation, old + 1);
+    for rx in &receivers {
+        let commands: Vec<_> = rx.try_iter().collect();
+        assert_eq!(commands.len(), 1);
+        let HostCommand::Keymap(declaration) = &commands[0] else {
+            panic!("expected keymap declaration");
+        };
+        assert_eq!(declaration.generation, old + 1);
+        assert_eq!(declaration.overrides, ws.settings.shortcut_file.overrides);
+    }
+    let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(modified + std::time::Duration::from_secs(1))
+        .unwrap();
+    assert!(
+        ws.settings.shortcut_file.changed(),
+        "exercise a genuine timestamp change"
+    );
+    ws.reload_shortcuts();
+    assert_eq!(ws.keymap_generation, old + 1);
+    assert!(!ws.settings.shortcut_file.changed());
+    assert!(receivers.iter().all(|rx| rx.is_empty()));
+    ws.reload_shortcuts();
+    assert!(receivers.iter().all(|rx| rx.is_empty()));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn shortcut_import_notice_uses_custom_config_filenames() {
     let ws = workspace();
     std::fs::write(
