@@ -648,8 +648,9 @@ impl Workspace {
         if !host.model.connected || snapshot.generation != self.keymap_generation {
             return;
         }
+        // Local parse diagnostics already produced one file notice, not one per host.
         let mut problems: Vec<_> = snapshot
-            .resolved
+            .reply
             .diagnostics
             .iter()
             .filter(|d| d.source.as_deref() == Some("settings"))

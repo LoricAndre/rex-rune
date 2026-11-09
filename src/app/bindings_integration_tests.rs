@@ -338,6 +338,44 @@ fn server_config_path_marks_only_missing_files() {
 }
 
 #[test]
+fn a_bad_shortcut_entry_notifies_once_across_two_connected_hosts() {
+    let mut ws = workspace_hosts(2);
+    let path = rex_linux::settings::shortcuts::Shortcuts::path(&ws.settings_path);
+    std::fs::write(&path, r#"[{"keys":"ctrl+b>","action":"client.settings"}]"#).unwrap();
+    let _receivers = [capture_host(&mut ws, 0), capture_host(&mut ws, 1)];
+    ws.reload_shortcuts();
+    assert_eq!(ws.settings.shortcut_file.overrides.diagnostics.len(), 1);
+    assert_eq!(ws.notices.len(), 1);
+    assert!(ws.notices[0].text.contains(&path.display().to_string()));
+    for index in 0..2 {
+        {
+            let mut model = ws.hosts[index].connection.model.lock().unwrap();
+            let reply = rexrs::api::client::KeymapResponse::default();
+            model.connected = true;
+            model.keymap = Some(std::sync::Arc::new(
+                rex_linux::connection::keymap::Snapshot {
+                    generation: ws.keymap_generation,
+                    resolved: rex_linux::keymap::Resolved::from_server(
+                        &reply,
+                        &ws.settings.shortcut_file.overrides,
+                    ),
+                    reply,
+                },
+            ));
+        }
+        ws.sync(index, &mut rune::Tx::default());
+        assert_eq!(
+            ws.notices.len(),
+            1,
+            "host {index} duplicated the file notice"
+        );
+    }
+    assert_eq!(ws.effective_keymap().diagnostics.len(), 1);
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_file(&ws.settings_path).ok();
+}
+
+#[test]
 fn settings_diagnostic_sets_toast_once_per_host_never_file_or_linux() {
     let mut ws = workspace();
     capture_host(&mut ws, 0);
