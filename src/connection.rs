@@ -1297,7 +1297,6 @@ async fn run_host(
             for event in queued { handle_event(event, &mut control, shared, &mut workers, &mut state, keymap.as_deref()).await?; }
             state.prune(&shared.model.lock().expect("host model"));
             shared.status("Connected", true);
-            if let Some(declaration) = &keymap { keymap::refresh(&mut control, shared, declaration).await; }
             reconcile(&endpoint, shared, &sender, &mut workers);
             for (block, worker) in &workers {
                 if let Some((cols, rows, w, h)) = worker.size { resize(&mut control, &worker.session, block, cols, rows, w, h).await?; }
@@ -1305,6 +1304,8 @@ async fn run_host(
             reconcile(&endpoint, shared, &sender, &mut workers);
             declare_themes(&mut control, shared, &mut state, &workers, theme.as_ref()).await;
             query_activity(&mut control, shared, &mut state, &workers).await;
+            // Restore terminal sizes and state before a best-effort keymap can wait.
+            if let Some(declaration) = &keymap { keymap::refresh(&mut control, shared, declaration).await; }
             retry = 0;
             prefetch.reset();
             let mut pace = tokio::time::interval(prefetch::PACE);
