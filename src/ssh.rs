@@ -120,10 +120,17 @@ impl Target {
     }
 
     /// The options every `ssh` run uses: never prompt, trust a machine's key the first time
-    /// (and refuse a changed one), notice a dead link within a minute. Logging stays at its
-    /// default so a server's banner (how Tailscale SSH explains a refused login) is seen.
+    /// (and refuse a changed one), notice a dead link within a minute, and keep clear of a
+    /// `ControlMaster` in the user's configuration, which would take the forward over and keep
+    /// it after this `ssh` ends, so the next forward of that path never listens. Logging stays
+    /// at its default so a server's banner (how Tailscale SSH explains a refused login) is
+    /// seen.
     fn options(&self) -> Vec<String> {
         let mut args = vec![
+            "-o".into(),
+            "ControlMaster=no".into(),
+            "-o".into(),
+            "ControlPath=none".into(),
             "-o".into(),
             "BatchMode=yes".into(),
             "-o".into(),
@@ -215,6 +222,9 @@ fn check_script(socket: &str) -> String {
 /// A running `ssh -L` forward. Dropping it ends the forward.
 pub struct Tunnel {
     child: tokio::process::Child,
+    /// Held here because `Child::wait` closes the stdin it still owns, and that would end the
+    /// remote `cat` and with it the login the forward lives on.
+    _stdin: Option<tokio::process::ChildStdin>,
     stderr: Arc<Mutex<String>>,
     local: PathBuf,
     endpoint: String,
@@ -259,7 +269,7 @@ impl Tunnel {
         // The remote `cat` ends when its input does, so if this process dies without dropping
         // the tunnel, the closed stdin pipe still ends the forward instead of leaving `ssh`
         // behind.
-        let mut child = tokio::process::Command::new("ssh")
+        let child = tokio::process::Command::new("ssh")
             .args(target.options())
             .args([
                 "-T",
@@ -279,18 +289,7 @@ impl Tunnel {
             .kill_on_drop(true)
             .spawn()
             .map_err(ssh_error)?;
-        let stderr = Arc::new(Mutex::new(String::new()));
-        if let Some(pipe) = child.stderr.take() {
-            let sink = stderr.clone();
-            tokio::spawn(drain(pipe, sink));
-        }
-        let mut tunnel = Tunnel {
-            child,
-            stderr,
-            endpoint: format!("unix://{}", local.display()),
-            local,
-            target: target.clone(),
-        };
+        let mut tunnel = Tunnel::adopt(child, target, local);
         let started = std::time::Instant::now();
         loop {
             if let Some(status) = tunnel.child.try_wait()? {
@@ -305,6 +304,22 @@ impl Tunnel {
                 tunnel.target.destination()
             );
             tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    fn adopt(mut child: tokio::process::Child, target: &Target, local: PathBuf) -> Tunnel {
+        let stderr = Arc::new(Mutex::new(String::new()));
+        if let Some(pipe) = child.stderr.take() {
+            let sink = stderr.clone();
+            tokio::spawn(drain(pipe, sink));
+        }
+        Tunnel {
+            _stdin: child.stdin.take(),
+            child,
+            stderr,
+            endpoint: format!("unix://{}", local.display()),
+            local,
+            target: target.clone(),
         }
     }
 
@@ -560,6 +575,43 @@ mod tests {
         assert!(own.exists(), "this process's directory stays");
         assert!(other.exists(), "anything else is left alone");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn waiting_for_a_tunnel_to_end_leaves_its_login_running() {
+        // Stands in for `ssh … cat`, which ends when its stdin does.
+        let child = tokio::process::Command::new("sh")
+            .args(["-c", "cat >/dev/null; echo the login ended >&2; exit 3"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let target = Target::parse("ssh://me@box").unwrap().unwrap();
+        let local = std::env::temp_dir().join(format!("rex-tunnel-{}.sock", std::process::id()));
+        let mut tunnel = Tunnel::adopt(child, &target, local);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), tunnel.closed())
+                .await
+                .is_err(),
+            "the forward lasts as long as this process holds it"
+        );
+        // This process ending closes the pipe, and that ends the forward.
+        tunnel._stdin = None;
+        let error = tokio::time::timeout(Duration::from_secs(5), tunnel.closed())
+            .await
+            .expect("the login ends with its stdin");
+        assert!(error.to_string().starts_with("ssh me@box"), "{error}");
+    }
+
+    #[test]
+    fn ssh_stays_clear_of_a_shared_control_master() {
+        let target = Target::parse("ssh://me@box").unwrap().unwrap();
+        let options = target.options();
+        for option in ["ControlMaster=no", "ControlPath=none"] {
+            assert!(options.iter().any(|o| o == option), "{option}: {options:?}");
+        }
     }
 
     #[test]
