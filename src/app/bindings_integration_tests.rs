@@ -174,6 +174,57 @@ fn returned_client_actions_are_taken_once_in_order_unknown_names_ignored() {
 }
 
 #[test]
+fn returned_actions_allow_changed_pane_focus_but_guard_workspace_and_panels() {
+    for changed in ["pane", "session", "generation", "panel", "popup", "host"] {
+        let (mut ws, _rx) = tabbed_workspace("split");
+        let mut model = ws.hosts[0].model.clone();
+        assert_eq!(ws.focused_block().as_deref(), Some("block:b"));
+        model.views.get_mut("s").unwrap().windows[1].focused_block_id = Some("block:c".into());
+        model
+            .client_actions
+            .push(rex_linux::connection::actions::Queued {
+                generation: ws.keymap_generation,
+                session: Some("s".into()),
+                block: Some("block:b".into()),
+                action: rexrs::api::client::ClientAction {
+                    action: "client.sidebar.toggle".into(),
+                    args: None,
+                },
+            });
+        match changed {
+            "session" => model.selected = Some("different".into()),
+            "generation" => ws.keymap_generation += 1,
+            "panel" => ws.perform(Intent::Settings, &mut rune::Tx::default()),
+            "popup" => ws.picker(false),
+            "host" => {
+                ws.settings.hosts.push(ws.settings.hosts[0].clone());
+                ws.connect_host(1, false);
+                ws.active = 1;
+            }
+            _ => {}
+        }
+        *ws.hosts[0].connection.model.lock().unwrap() = model;
+        let before = ws.sidebar.is_open();
+        ws.sync(0, &mut rune::Tx::default());
+        assert_eq!(
+            ws.sidebar.is_open() != before,
+            changed == "pane",
+            "{changed}"
+        );
+        assert!(
+            ws.hosts[0]
+                .connection
+                .model
+                .lock()
+                .unwrap()
+                .client_actions
+                .is_empty()
+        );
+        std::fs::remove_file(&ws.settings_path).ok();
+    }
+}
+
+#[test]
 fn settings_shows_effective_sequences_sources_and_pending_chip_cancels() {
     let mut ws = workspace();
     let path = rex_linux::settings::shortcuts::Shortcuts::path(&ws.settings_path);

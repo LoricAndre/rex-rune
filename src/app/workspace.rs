@@ -474,21 +474,18 @@ impl Workspace {
         let action_context = (
             self.active,
             self.model().selected.clone(),
-            self.focused_block(),
             self.keymap_generation,
         );
         for queued in client_actions {
-            // A slow response must not act on a different host/pane after navigation.
-            if index != action_context.0
-                || queued.generation != action_context.3
+            // Focus events following the reply may legitimately move to another pane.
+            // Keep host/session/generation guards, and never act behind a popup or dialog.
+            if self.panel.is_some()
+                || index != action_context.0
+                || queued.generation != action_context.2
                 || queued
                     .session
                     .as_ref()
                     .is_some_and(|id| action_context.1.as_ref() != Some(id))
-                || queued
-                    .block
-                    .as_ref()
-                    .is_some_and(|id| action_context.2.as_ref() != Some(id))
             {
                 self.inform(
                     "Returned client action skipped because its workspace context changed.",
