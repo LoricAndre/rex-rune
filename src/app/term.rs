@@ -1310,6 +1310,101 @@ mod tests {
         }
     }
 
+    /// A fixed cell, since the measured one follows whichever fonts another test has loaded.
+    fn clipped_metrics() -> Metrics {
+        Metrics {
+            cell: (10., 20.),
+            ..metrics(15.)
+        }
+    }
+
+    struct ClippedState {
+        term: Term,
+    }
+    fn clipped_view(s: &ClippedState, _: &mut Cx<ClippedState>) -> El {
+        let look = GridLook {
+            cursor: None,
+            ime: false,
+            colors: TermColors::default(),
+        };
+        el().w_full()
+            .h_full()
+            .child(grid("g", &s.term, &clipped_metrics(), look))
+    }
+
+    /// The search highlights `term` draws: (first column, row in the pane, selected).
+    fn drawn_matches(term: Term) -> Vec<(u32, u32, bool)> {
+        let (cw, ch) = clipped_metrics().cell;
+        let mut rt = Runtime::new(
+            ClippedState { term },
+            clipped_view,
+            (600., 200.),
+            Env::default(),
+        );
+        rt.frame(1. / 60.);
+        let mut drawn: Vec<_> = rt
+            .instances
+            .iter()
+            .filter(|q| q.params[1] == rune::render::KIND_RECT && q.fill[3] > 0.1)
+            .map(|q| {
+                (
+                    (q.rect[0] / cw).round() as u32,
+                    (q.rect[1] / ch).round() as u32,
+                    q.fill[3] > 0.4,
+                )
+            })
+            .collect();
+        drawn.sort_unstable();
+        drawn
+    }
+
+    #[test]
+    fn search_matches_stay_on_their_rows_when_the_pane_clips_a_taller_terminal() {
+        use rex_linux::{
+            connection::{Connection, TerminalSender},
+            terminal::{Renderer, search::Controller},
+        };
+        // Another client owns five rows; this pane shows two, the newest, so a screen row and
+        // a row in the pane differ by three.
+        let mut terminal = ghostty_vt::Terminal::new(ghostty_vt::TerminalOptions {
+            cols: 20,
+            rows: 5,
+            ..Default::default()
+        })
+        .unwrap();
+        terminal.vt_write(b"    needle\r\n\r\n\r\nneedle\r\n");
+        let mut search = Controller::default();
+        search.set_needle(Some(&terminal), "needle".into()).unwrap();
+        while search.update(&terminal).unwrap() {}
+        let term_at = |search: &Controller| {
+            let mut frame = Renderer::new().unwrap().frame(&terminal).unwrap();
+            frame.search = search.results(&terminal).unwrap();
+            let (sender, _) = flume::unbounded();
+            let mut term = Term::new(Connection {
+                model: Default::default(),
+                commands: TerminalSender::new(sender, "s".into(), "b".into()),
+                wake: flume::unbounded().1,
+            });
+            term.frame = Some(Arc::new(frame));
+            term.rect = [0., 0., 600., 2. * clipped_metrics().cell.1];
+            term
+        };
+
+        let term = term_at(&search);
+        assert_eq!(term.display_row(clipped_metrics().cell), 3);
+        assert_eq!(
+            drawn_matches(term),
+            [(0, 0, true)],
+            "the newest match, screen row 3, is the pane's first; the clipped one draws nothing"
+        );
+
+        // The older match is above what the pane shows, so the pane follows it there.
+        search.step(&terminal, true).unwrap();
+        let term = term_at(&search);
+        assert_eq!(term.display_row(clipped_metrics().cell), 0);
+        assert_eq!(drawn_matches(term), [(4, 0, true)]);
+    }
+
     /// A row at 1.5 device pixels per point, placed off the pixel grid.
     fn scaled_view(s: &RowState, _: &mut Cx<RowState>) -> El {
         let m = Metrics {
