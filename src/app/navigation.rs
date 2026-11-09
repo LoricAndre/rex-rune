@@ -231,6 +231,7 @@ impl Workspace {
         pending.dispatch_at = None;
         let visit = pending.visit.clone();
         let id = pending.id;
+        let deadline = pending.deadline;
         let Some(host) = self.host_index(visit.host) else {
             self.navigation.cancel();
             return;
@@ -254,6 +255,7 @@ impl Workspace {
             .commands
             .send(HostCommand::Navigate {
                 id,
+                deadline,
                 session: visit.session,
                 window: visit.window,
             })

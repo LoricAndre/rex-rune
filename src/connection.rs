@@ -352,6 +352,8 @@ pub enum HostCommand {
     /// Select a session and optionally focus a window as one correlated navigation.
     Navigate {
         id: u64,
+        /// The UI's deadline, including time spent queued behind other commands.
+        deadline: Instant,
         session: String,
         window: Option<String>,
     },
@@ -1313,6 +1315,15 @@ async fn run_host(
                             }
                             continue;
                         }
+                        if let HostCommand::Navigate { id, deadline, .. } = &command
+                            && Instant::now() >= *deadline
+                        {
+                            shared.update(|m| {
+                                m.navigation_result = Some((*id, false));
+                                m.notice = Some("Navigation expired before it could be sent. Try again.".into());
+                            });
+                            continue;
+                        }
                         if matches!(command, HostCommand::Select(_) | HostCommand::Navigate { .. } | HostCommand::CreateSession { .. }) { preferred = None; }
                         let navigation = match &command { HostCommand::Navigate { id, .. } => Some(*id), _ => None };
                         let outcome = handle_command(command, &mut control, shared, &mut workers, &mut state, &mut theme).await;
@@ -1529,7 +1540,10 @@ async fn handle_command(
                 .await?;
                 refresh(control, shared, state, &session).await?;
             }
-            shared.update(|m| m.selected = Some(session));
+            shared.update(|m| {
+                m.selected = Some(session);
+                m.notice = None;
+            });
         }
         HostCommand::Select(id) => {
             attach(control, shared, state, &id).await?;

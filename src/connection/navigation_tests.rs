@@ -81,6 +81,7 @@ async fn navigation_correlates_success_and_failure_without_extra_attaches() {
         host.commands
             .send(HostCommand::Navigate {
                 id,
+                deadline: Instant::now() + Duration::from_secs(30),
                 session: session.into(),
                 window: window.map(str::to_owned),
             })
@@ -98,6 +99,90 @@ async fn navigation_correlates_success_and_failure_without_extra_attaches() {
 }
 
 #[tokio::test]
+async fn expired_queued_navigation_never_reaches_the_server() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let (blocked, waiting) = tokio::sync::oneshot::channel();
+    let (release, resume) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let mut ws = accept(&listener, "rex.control.v1").await;
+        welcome(&mut ws, 11).await;
+        let request = recv(&mut ws).await;
+        reply(&mut ws, &request, 1, serde_json::to_value(boot()).unwrap()).await;
+        // Hold one awaited operation so navigation waits in the same queue as it
+        // would behind an upload. No long real-time timeout is needed.
+        let claim = recv(&mut ws).await;
+        assert_eq!(claim["method"], "session.own_block");
+        blocked.send(()).unwrap();
+        resume.await.unwrap();
+        reply(&mut ws, &claim, 2, json!({"blocks":[]})).await;
+        let next = ws.next().await;
+        assert!(
+            matches!(next, Some(Ok(Message::Close(_)))),
+            "expired navigation must not attach or focus: {next:?}"
+        );
+    });
+    let host = HostConnection::spawn(endpoint, None, None, None, false, None);
+    connected(&host).await;
+    host.commands
+        .send(HostCommand::Claim {
+            session: SESSION.into(),
+            blocks: vec!["b".into()],
+        })
+        .unwrap();
+    waiting.await.unwrap();
+    let deadline = Instant::now() + Duration::from_millis(20);
+    host.commands
+        .send(HostCommand::Navigate {
+            id: 19,
+            deadline,
+            session: "other".into(),
+            window: Some("w".into()),
+        })
+        .unwrap();
+    tokio::time::sleep_until(deadline.into()).await;
+    release.send(()).unwrap();
+    assert!(!navigation_result(&host, 19).await);
+    {
+        let m = host.model.lock().unwrap();
+        assert!(m.connected, "expiry is not a transport failure");
+        assert_eq!(m.protocol.attach_requests, 0);
+        assert_eq!(m.selected.as_deref(), Some(SESSION));
+        assert!(m.notice.as_ref().unwrap().contains("expired"));
+    }
+    drop(host);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn selecting_the_current_session_clears_a_sticky_notice() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let mut ws = accept(&listener, "rex.control.v1").await;
+        welcome(&mut ws, 11).await;
+        let request = recv(&mut ws).await;
+        reply(&mut ws, &request, 1, serde_json::to_value(boot()).unwrap()).await;
+        assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
+    });
+    let host = HostConnection::spawn(endpoint, None, None, None, false, None);
+    connected(&host).await;
+    host.model.lock().unwrap().notice = Some("Upload failed".into());
+    host.commands
+        .send(HostCommand::Navigate {
+            id: 23,
+            deadline: Instant::now() + Duration::from_secs(30),
+            session: SESSION.into(),
+            window: None,
+        })
+        .unwrap();
+    assert!(navigation_result(&host, 23).await);
+    assert_eq!(host.model.lock().unwrap().notice, None);
+    drop(host);
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn disconnected_navigation_is_failed_by_id_not_replayed() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
@@ -106,6 +191,7 @@ async fn disconnected_navigation_is_failed_by_id_not_replayed() {
     host.commands
         .send(HostCommand::Navigate {
             id: 17,
+            deadline: Instant::now() + Duration::from_secs(30),
             session: SESSION.into(),
             window: Some("w".into()),
         })
