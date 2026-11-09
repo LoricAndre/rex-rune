@@ -129,6 +129,17 @@ impl InitialSize {
             .filter(|_| self.live_owner && !self.ready)
             .map(|since| since + INITIAL_SIZE_PATIENCE)
     }
+
+    /// Ends a wait past its bound for good; true when that just happened.
+    fn give_up(&mut self, now: Instant) -> bool {
+        let due = self.deadline().is_some_and(|deadline| now >= deadline);
+        if due {
+            self.expected = None;
+            self.since = None;
+            self.ready = true;
+        }
+        due
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -275,6 +286,12 @@ impl Term {
     /// When this pane stops waiting for a frame at its size and draws anyway, while it waits.
     pub fn draws_anyway_at(&self) -> Option<Instant> {
         self.initial_size.deadline()
+    }
+
+    /// Stops waiting for a frame at this pane's size once the bound has passed; true the one
+    /// time that changes what it draws.
+    pub fn draw_anyway(&mut self, now: Instant) -> bool {
+        self.initial_size.give_up(now)
     }
 
     pub fn status(&self) -> Status {
@@ -1260,6 +1277,29 @@ mod tests {
         );
         size.observe(Some((100, 30)));
         assert_eq!(size.deadline(), None, "no bound once the size arrived");
+    }
+
+    #[test]
+    fn a_wait_that_runs_out_ends_once_even_if_the_size_never_comes() {
+        let status = Status {
+            live: true,
+            owner: true,
+            status: String::new(),
+        };
+        let mut size = InitialSize::default();
+        size.transition(&status);
+        size.layout((100, 30), Some((80, 24)));
+        let deadline = size.deadline().expect("a wait is on");
+        assert!(!size.give_up(deadline - Duration::from_millis(1)));
+        assert!(size.give_up(deadline), "the bound passed");
+        assert!(!size.give_up(deadline), "only once");
+        assert_eq!(size.deadline(), None, "nothing left to wake for");
+        assert!(size.renders(&status));
+        size.layout((100, 30), Some((80, 24)));
+        assert!(
+            size.renders(&status),
+            "the same ownership epoch doesn't wait again"
+        );
     }
 
     #[test]
