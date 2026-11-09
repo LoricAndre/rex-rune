@@ -384,6 +384,7 @@ impl Workspace {
     /// Save `host`, make it the active one and connect. Nothing happens for an endpoint the
     /// workspace already has; it is selected instead.
     pub fn add_host(&mut self, host: Host, tx: &mut Tx) {
+        self.navigation.cancel();
         if let Some(existing) = self
             .settings
             .hosts

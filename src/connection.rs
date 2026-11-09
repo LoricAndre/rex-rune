@@ -175,6 +175,8 @@ pub struct HostModel {
     pub protocol: ProtocolStats,
     pub sessions: Vec<session::Session>,
     pub selected: Option<String>,
+    /// Completion of the latest client navigation request (id, success), not a notice.
+    pub navigation_result: Option<(u64, bool)>,
     pub views: HashMap<String, session::ViewResponse>,
     pub terminals: HashMap<String, Connection>,
     /// Each terminal block's OSC 7501 records, by record id (empty for the root record).
@@ -347,6 +349,14 @@ pub enum HostCommand {
         blocks: Vec<String>,
     },
     Select(String),
+    /// Select a session and optionally focus a window as one correlated navigation.
+    Navigate {
+        id: u64,
+        /// The UI's deadline, including time spent queued behind other commands.
+        deadline: Instant,
+        session: String,
+        window: Option<String>,
+    },
     /// The sessions whose views to load in the background, for listing their tabs; empty
     /// stops loading.
     PrefetchViews(HashSet<String>),
@@ -1305,8 +1315,21 @@ async fn run_host(
                             }
                             continue;
                         }
-                        if matches!(command, HostCommand::Select(_) | HostCommand::CreateSession { .. }) { preferred = None; }
+                        if let HostCommand::Navigate { id, deadline, .. } = &command
+                            && Instant::now() >= *deadline
+                        {
+                            shared.update(|m| {
+                                m.navigation_result = Some((*id, false));
+                                m.notice = Some("Navigation expired before it could be sent. Try again.".into());
+                            });
+                            continue;
+                        }
+                        if matches!(command, HostCommand::Select(_) | HostCommand::Navigate { .. } | HostCommand::CreateSession { .. }) { preferred = None; }
+                        let navigation = match &command { HostCommand::Navigate { id, .. } => Some(*id), _ => None };
                         let outcome = handle_command(command, &mut control, shared, &mut workers, &mut state, &mut theme).await;
+                        if let Some(id) = navigation {
+                            shared.update(|m| m.navigation_result = Some((id, outcome.is_ok())));
+                        }
                         if let Err(error) = outcome {
                             shared.update(|m| m.notice = Some(format!("{error:#}")));
                             if !matches!(error.downcast_ref::<rexrs::Error>(), Some(rexrs::Error::Api(_))) { return Err(error); }
@@ -1340,6 +1363,7 @@ async fn run_host(
                     Ok(HostCommand::Shutdown) | Err(_) => return Ok(()),
                     Ok(HostCommand::Reconnect) => break,
                     Ok(HostCommand::Select(id)) => preferred = Some(id),
+                    Ok(HostCommand::Navigate { id, .. }) => reject_navigation(shared, id),
                     Ok(HostCommand::Visibility(visible)) => shared.update(|m|m.visible=visible),
                     Ok(HostCommand::PrefetchViews(sessions)) => prefetch.set_eligible(sessions),
                     Ok(HostCommand::Theme(new)) => theme = new,
@@ -1361,6 +1385,7 @@ async fn run_host(
             match command {
                 HostCommand::Shutdown => return Ok(()),
                 HostCommand::Select(id) => preferred = Some(id),
+                HostCommand::Navigate { id, .. } => reject_navigation(shared, id),
                 HostCommand::Visibility(visible) => shared.update(|m| m.visible = visible),
                 HostCommand::PrefetchViews(sessions) => prefetch.set_eligible(sessions),
                 HostCommand::Theme(new) => theme = new,
@@ -1374,6 +1399,14 @@ async fn run_host(
             }
         }
     }
+}
+
+fn reject_navigation(shared: &Shared, id: u64) {
+    shared.update(|m| {
+        m.navigation_result = Some((id, false));
+        m.notice =
+            Some("Navigation not sent while disconnected. Try again after reconnecting.".into());
+    });
 }
 
 /// A search runs on the pane's own terminal, so it needs no server: it reaches the pane's worker
@@ -1489,6 +1522,27 @@ async fn handle_command(
                         m.set_owner(id, b["owner"].as_str());
                     }
                 }
+            });
+        }
+        HostCommand::Navigate {
+            session, window, ..
+        } => {
+            let selected = shared.model.lock().expect("host model").selected.clone();
+            if selected.as_ref() != Some(&session) {
+                attach(control, shared, state, &session).await?;
+            }
+            if let Some(window) = window {
+                request(
+                    control,
+                    "session.focus_window",
+                    json!({"session_id":session,"window_id":window}),
+                )
+                .await?;
+                refresh(control, shared, state, &session).await?;
+            }
+            shared.update(|m| {
+                m.selected = Some(session);
+                m.notice = None;
             });
         }
         HostCommand::Select(id) => {

@@ -86,11 +86,19 @@ pub fn zoom_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
 
 /// Opens the focused pane's search field.
 pub const SEARCH: &str = "client.search";
+pub const NEXT_GLOBAL: &str = "client.tab.next_global";
+pub const PREVIOUS_GLOBAL: &str = "client.tab.previous_global";
+pub const HISTORY_BACK: &str = "client.history.back";
+pub const HISTORY_FORWARD: &str = "client.history.forward";
 
 /// Runs the client action a binding names. False when no action has that name.
-pub fn run_action(s: &mut Workspace, name: &str) -> bool {
+pub fn run_action(s: &mut Workspace, name: &str, tx: &mut Tx) -> bool {
     match name {
         SEARCH => s.open_search(),
+        NEXT_GLOBAL => s.cycle_tab(1, tx),
+        PREVIOUS_GLOBAL => s.cycle_tab(-1, tx),
+        HISTORY_BACK => s.navigate_history(-1, tx),
+        HISTORY_FORWARD => s.navigate_history(1, tx),
         _ => return false,
     }
     true
@@ -99,6 +107,17 @@ pub fn run_action(s: &mut Workspace, name: &str) -> bool {
 /// Workspace shortcuts with no popup open. True when one ran.
 fn shortcut(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
     let m = ev.mods;
+    if ctrl(ev) && !m.alt && ev.key == Key::Tab {
+        return run_action(
+            s,
+            if m.shift {
+                PREVIOUS_GLOBAL
+            } else {
+                NEXT_GLOBAL
+            },
+            tx,
+        );
+    }
     if ctrl(ev) && m.shift && !m.alt {
         if letter(ev, tx, 'b') {
             s.perform(Intent::Sidebar, tx);
@@ -113,7 +132,7 @@ fn shortcut(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
         } else if letter(ev, tx, 'd') {
             s.perform(Intent::Split("horizontal"), tx);
         } else if letter(ev, tx, 'f') {
-            run_action(s, SEARCH);
+            run_action(s, SEARCH, tx);
         } else if ev.key == Key::Enter {
             s.perform(Intent::Zoom, tx);
         } else if space(ev, tx) {

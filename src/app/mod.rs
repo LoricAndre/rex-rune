@@ -6,6 +6,7 @@ mod fonts;
 mod input;
 mod integrations;
 mod keys;
+mod navigation;
 mod notify;
 mod panel;
 mod panes;
@@ -88,6 +89,18 @@ pub(crate) fn view(s: &Workspace, cx: &mut Cx<Workspace>) -> El {
     root = root.child(open.unwrap_or_else(popups::overlay));
     let mut window = el()
         .key("window")
+        .pointer_buttons([rune::PointerButton::Back, rune::PointerButton::Forward])
+        .on_press_tx(|s: &mut Workspace, tx: &mut Tx| {
+            if s.panel.is_some() || s.drag.is_some() {
+                return;
+            }
+            let action = match tx.button() {
+                rune::PointerButton::Back => input::HISTORY_BACK,
+                rune::PointerButton::Forward => input::HISTORY_FORWARD,
+                _ => return,
+            };
+            input::run_action(s, action, tx);
+        })
         // With no focused control, Rune sends releases only to the outermost node.
         .on_key_up(input::on_key_up)
         .w_full()
@@ -114,7 +127,7 @@ pub(crate) fn view(s: &Workspace, cx: &mut Cx<Workspace>) -> El {
 }
 
 fn poll(s: &mut Workspace, _: f64, tx: &mut Tx) -> bool {
-    let mut changed = false;
+    let mut changed = s.poll_navigation(std::time::Instant::now(), tx);
     if let Some(panel) = &mut s.panel
         && std::mem::take(&mut panel.reveal)
     {

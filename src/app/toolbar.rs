@@ -8,7 +8,6 @@ use super::{
     workspace::Workspace,
 };
 use rune::{Cursor, El, PointerButton, ScrollPos, Tx, col, el, row, text};
-use serde_json::json;
 
 /// A chip's press: consume it (chips never drag the window) and keep the terminal focused.
 fn chip_press(e: El) -> El {
@@ -114,7 +113,7 @@ fn tab_track(s: &Workspace) -> El {
                     if tx.button() == PointerButton::Middle {
                         s.perform(Intent::CloseWindow(press_id.clone()), tx);
                     } else {
-                        s.request("session.focus_window", json!({"window_id":press_id}));
+                        s.perform(Intent::Tab(press_id.clone()), tx);
                         tx.blur();
                     }
                 })
