@@ -1615,7 +1615,7 @@ mod tests {
         frame.search = search.results(&terminal).unwrap();
         assert_eq!(frame.search.as_ref().unwrap().matches.len(), 2);
 
-        let m = metrics(15.);
+        let m = clipped_metrics();
         let mut term = Term::new(Connection {
             model: Default::default(),
             commands: TerminalSender::new(flume::unbounded().0, "s".into(), "b".into()),
@@ -1631,7 +1631,7 @@ mod tests {
                 ime: false,
                 colors: TermColors::default(),
             };
-            grid("g", term, &metrics(15.), look)
+            grid("g", term, &clipped_metrics(), look)
         };
         let mut rt = Runtime::new(term, view, (200., 100.), Env::default());
         rt.frame(0.);
