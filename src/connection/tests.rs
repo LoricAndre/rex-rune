@@ -1650,3 +1650,72 @@ async fn a_server_without_set_theme_is_told_once_and_never_again() {
     );
     drop(host);
 }
+
+#[tokio::test]
+async fn searching_needs_no_server_while_the_host_reconnects() {
+    // Nothing listens here, so the host stays between attempts.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
+    let host = HostConnection::spawn(endpoint, None, None, None, true, None);
+    let send = |command| {
+        host.commands
+            .send(HostCommand::Terminal {
+                session: "s".into(),
+                block: "b".into(),
+                command,
+            })
+            .unwrap();
+    };
+    let notice = || host.model.lock().unwrap().notice.clone();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    send(Command::Search("needle".into()));
+    send(Command::SearchStep(true));
+    send(Command::Search(String::new()));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(notice(), None, "a search is this client's own");
+
+    // Input still isn't taken for later.
+    send(Command::Reconnect);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        notice().is_some_and(|n| n.contains("not sent while disconnected")),
+        "{:?}",
+        notice()
+    );
+    drop(host);
+}
+
+#[tokio::test]
+async fn a_worker_gets_its_search_whatever_the_control_connection_is_doing() {
+    let (commands, received) = flume::unbounded();
+    let workers = HashMap::from([(
+        "b".to_owned(),
+        PaneWorker {
+            session: "s".into(),
+            commands,
+            task: tokio::spawn(async {}),
+            size: None,
+        },
+    )]);
+    assert!(forward_search(
+        &workers,
+        "b",
+        &Command::Search("needle".into())
+    ));
+    assert!(forward_search(&workers, "b", &Command::SearchStep(false)));
+    assert!(
+        forward_search(&workers, "gone", &Command::SearchStep(false)),
+        "a closed pane's search goes nowhere, and needs no notice"
+    );
+    assert!(!forward_search(&workers, "b", &Command::Reconnect));
+    assert!(matches!(
+        received.try_recv(),
+        Ok(DataCommand::Search(needle)) if needle == "needle"
+    ));
+    assert!(matches!(
+        received.try_recv(),
+        Ok(DataCommand::SearchStep(false))
+    ));
+    assert!(received.try_recv().is_err());
+}

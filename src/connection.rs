@@ -1351,6 +1351,7 @@ async fn run_host(
                     Ok(HostCommand::Terminal { block, command: Command::Resize(a,b,c,d), .. }) => {
                         if let Some(worker) = workers.get_mut(&block) { worker.size = Some((a,b,c,d)); }
                     }
+                    Ok(HostCommand::Terminal { block, command, .. }) if forward_search(&workers, &block, &command) => {}
                     Ok(_) => shared.update(|m| m.notice = Some("Action not sent while disconnected. Try it again after reconnecting.".into())),
                 }
             }
@@ -1366,10 +1367,28 @@ async fn run_host(
                 HostCommand::Ticket { reply, .. } => {
                     let _ = reply.send(Err("Host is reconnecting".into()));
                 }
+                HostCommand::Terminal { block, command, .. } => {
+                    forward_search(&workers, &block, &command);
+                }
                 _ => {}
             }
         }
     }
+}
+
+/// A search runs on the pane's own terminal, so it needs no server: it reaches the pane's worker
+/// even while the host reconnects, or closing a search then would leave its highlights behind.
+/// False for any other command.
+fn forward_search(workers: &HashMap<String, PaneWorker>, block: &str, command: &Command) -> bool {
+    let command = match command {
+        Command::Search(needle) => DataCommand::Search(needle.clone()),
+        Command::SearchStep(older) => DataCommand::SearchStep(*older),
+        _ => return false,
+    };
+    if let Some(worker) = workers.get(block) {
+        let _ = worker.commands.send(command);
+    }
+    true
 }
 
 /// Reserves every file of one drop or paste as a batch, then streams them off the control
