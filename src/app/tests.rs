@@ -3569,5 +3569,18 @@ fn ctrl_shift_f_searches_the_focused_terminal_without_typing_into_it() {
     assert_eq!(focused(&rt), None, "the terminal has the keyboard again");
     press(&mut rt, Key::Text("x".into()));
     assert_eq!(sent(), ["key"]);
+
+    // The shortcut runs a named action, which bindings can run by its name.
+    assert_eq!(super::input::SEARCH, "client.search");
+    rt.update(|s, _| {
+        assert!(!super::input::run_action(s, "client.nothing"));
+        assert!(super::input::run_action(s, super::input::SEARCH));
+    });
+    rt.frame(1. / 60.);
+    assert!(
+        focused(&rt).is_some_and(|path| path.contains("search-field:block:a")),
+        "client.search opens the search field: {:?}",
+        focused(&rt)
+    );
     std::fs::remove_file(&rt.state.settings_path).ok();
 }
