@@ -21,7 +21,8 @@ path and instance ID; the config hash and keymap contents should be stable.
 ## Observations used by Phase 6
 
 - Standard modifier order is `ctrl+alt+shift+cmd`; `WIN` canonicalizes to
-  `cmd`, not `super`. Named keys are lowercase.
+  `cmd`, not `super`. `super`, `meta` and `command` also become `cmd`;
+  `opt` becomes `alt` (`option` is an alias too). Named keys are lowercase.
 - Physical codes retain W3C case: `ctrl+[KeyT]`.
 - `ctrl++` survives verbatim. So does an unknown spelling
   (`ctrl+FutureKey`); preserving a spelling does not imply it is parseable.
@@ -33,7 +34,10 @@ path and instance ID; the config hash and keymap contents should be stable.
 - An unavailable Mac-only action remains in the result and has a diagnostic.
   It is not a server action.
 - A sequence hiding a default produces a diagnostic about the losing default;
-  it does not remove it. Diagnostic source is essential to notice policy.
+  it does not remove it. A key hiding a sequence reports `cannot start` and
+  names the winning action. Diagnostic source is essential to notice policy.
+- `nivox-defaults.json` is the complete 29-entry default list from Andrea Zito
+  (nivox), `8037d78`, retained as an import regression fixture.
 
 This fixture supports the implementation informed by Andrea Zito (nivox)'s
 `8037d78` shortcut work; it records Rex's protocol rather than the fork's

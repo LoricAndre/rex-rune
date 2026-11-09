@@ -1150,7 +1150,7 @@ fn invalid_shortcuts_start_with_one_notice_and_a_persistent_settings_problem() {
     std::fs::create_dir_all(&directory).unwrap();
     ws.settings_path = directory.join("workspace.json");
     ws.settings.save(&ws.settings_path).unwrap();
-    let shortcuts = directory.join("shortcuts.json");
+    let shortcuts = rex_linux::settings::shortcuts::Shortcuts::path(&ws.settings_path);
     std::fs::write(&shortcuts, "[broken").unwrap();
     let mut ws = relaunch(&ws);
     assert_eq!(

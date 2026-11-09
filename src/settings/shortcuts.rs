@@ -3,7 +3,10 @@ use crate::keymap::{Overrides, defaults, normalize};
 use anyhow::Result;
 use rexrs::api::client::Diagnostic;
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::{
+    io::{Read, Write},
+    path::{Path, PathBuf},
+};
 
 #[derive(Clone, Debug, Default)]
 pub struct Shortcuts {
@@ -17,20 +20,34 @@ pub struct Shortcuts {
 
 impl Shortcuts {
     pub fn path(workspace: &Path) -> PathBuf {
-        workspace.with_file_name("shortcuts.json")
+        if workspace == super::Settings::path() {
+            return workspace.with_file_name("shortcuts.json");
+        }
+        let mut name = workspace.file_stem().unwrap_or_default().to_os_string();
+        name.push(".shortcuts.json");
+        workspace.with_file_name(name)
     }
 
     /// This never writes the file. A bad file is no reason to prevent startup.
     pub fn load(workspace: &Path) -> Self {
         let mut shortcuts = Self {
-            stamp: Self::stamp(&Self::path(workspace)),
             path: Self::path(workspace),
             ..Self::default()
         };
-        match std::fs::read(&shortcuts.path) {
+        let read = (|| -> std::io::Result<Vec<u8>> {
+            let mut file = std::fs::File::open(&shortcuts.path)?;
+            let metadata = file.metadata()?;
+            shortcuts.stamp = Some((metadata.modified()?, metadata.len()));
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)?;
+            Ok(bytes)
+        })();
+        match read {
+            Ok(bytes) if bytes.iter().all(u8::is_ascii_whitespace) => {}
             Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
                 Ok(value) => {
-                    shortcuts.overrides = Overrides::parse(&value);
+                    let entries = value.get("shortcuts").unwrap_or(&value);
+                    shortcuts.overrides = Overrides::parse(entries);
                     if !shortcuts.overrides.diagnostics.is_empty() {
                         shortcuts.notice = Some(format!(
                             "{} shortcut problem(s) in {}; see Settings → Shortcuts.",
@@ -56,11 +73,15 @@ impl Shortcuts {
         Some((metadata.modified().ok()?, metadata.len()))
     }
 
+    pub fn changed(&self) -> bool {
+        self.stamp != Self::stamp(&self.path)
+    }
+
     /// Focus/Settings checks only stat the file; parse only when mtime or length changes.
     /// This never imports or writes. Missing files are a stable stamp too.
     pub fn reload(&mut self, workspace: &Path) -> bool {
         let path = Self::path(workspace);
-        if self.path == path && self.stamp == Self::stamp(&path) {
+        if self.path == path && !self.changed() {
             return false;
         }
         *self = Self::load(workspace);
@@ -120,11 +141,12 @@ pub(super) fn import_nivox(workspace: &Value, path: &Path) -> Result<Option<usiz
             Some(entry)
         })
         .collect();
-    let file = std::fs::OpenOptions::new()
+    let bytes = serde_json::to_vec_pretty(&imported)?;
+    let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)?;
-    serde_json::to_writer_pretty(file, &imported)?;
+    file.write_all(&bytes)?;
     Ok(Some(imported.len()))
 }
 
@@ -150,13 +172,64 @@ mod tests {
             self.0.join("workspace.json")
         }
         fn shortcuts(&self) -> PathBuf {
-            self.0.join("shortcuts.json")
+            Shortcuts::path(&self.workspace())
         }
     }
     impl Drop for Fixture {
         fn drop(&mut self) {
             std::fs::remove_dir_all(&self.0).unwrap();
         }
+    }
+
+    #[test]
+    fn all_29_nivox_defaults_import_as_an_empty_file() {
+        // Andrea Zito (nivox), 8037d78, default_keybindings(), without edits.
+        let fixture = Fixture::new();
+        let legacy = include_str!("../../tests/fixtures/keymap/nivox-defaults.json");
+        let value: Value = serde_json::from_str(legacy).unwrap();
+        assert_eq!(value["keybindings"].as_array().unwrap().len(), 29);
+        std::fs::write(fixture.workspace(), legacy).unwrap();
+        let loaded = Settings::load(&fixture.workspace()).unwrap();
+        assert_eq!(loaded.shortcut_file.imported, Some(0));
+        assert!(loaded.shortcut_file.notice.is_none());
+        assert_eq!(std::fs::read_to_string(fixture.shortcuts()).unwrap(), "[]");
+    }
+
+    #[test]
+    fn empty_files_and_object_form_are_valid_and_config_paths_are_distinct() {
+        let fixture = Fixture::new();
+        for contents in ["", " \n\t", "[]", r#"{"$schema":"example","shortcuts":[]}"#] {
+            std::fs::write(fixture.shortcuts(), contents).unwrap();
+            let loaded = Shortcuts::load(&fixture.workspace());
+            assert!(loaded.overrides.diagnostics.is_empty(), "{contents}");
+            assert!(loaded.overrides.layer.bindings.is_empty());
+            assert!(!loaded.changed());
+        }
+        std::fs::write(
+            fixture.shortcuts(),
+            r#"{"shortcuts":[{"keys":"ctrl+k","action":null}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            Shortcuts::load(&fixture.workspace())
+                .overrides
+                .layer
+                .removals
+                .len(),
+            1
+        );
+        assert_eq!(
+            Shortcuts::path(&Settings::path()),
+            Settings::path().with_file_name("shortcuts.json")
+        );
+        assert_eq!(
+            Shortcuts::path(&fixture.0.join("demo.json")),
+            fixture.0.join("demo.shortcuts.json")
+        );
+        assert_eq!(
+            Shortcuts::path(&fixture.0.join("other.json")),
+            fixture.0.join("other.shortcuts.json")
+        );
     }
 
     #[test]

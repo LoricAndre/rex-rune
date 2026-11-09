@@ -3,6 +3,21 @@
     {
       "action": "client.settings",
       "keys": [
+        "ctrl+x"
+      ],
+      "source": "settings"
+    },
+    {
+      "action": "client.tab.new",
+      "keys": [
+        "ctrl+x",
+        "y"
+      ],
+      "source": "settings"
+    },
+    {
+      "action": "client.settings",
+      "keys": [
         "ctrl+b",
         "d"
       ],
@@ -21,6 +36,42 @@
         "ctrl+k"
       ],
       "source": "settings"
+    },
+    {
+      "action": "client.settings",
+      "keys": [
+        "cmd+h"
+      ],
+      "source": "init.lua:13"
+    },
+    {
+      "action": "client.settings",
+      "keys": [
+        "alt+o"
+      ],
+      "source": "init.lua:12"
+    },
+    {
+      "action": "client.settings",
+      "keys": [
+        "cmd+i"
+      ],
+      "source": "init.lua:11"
+    },
+    {
+      "action": "client.settings",
+      "keys": [
+        "cmd+u"
+      ],
+      "source": "init.lua:10"
+    },
+    {
+      "action": "client.mac.only",
+      "keys": [
+        "ctrl+b",
+        "z"
+      ],
+      "source": "init.lua:9"
     },
     {
       "action": "client.mac.only",
@@ -126,9 +177,9 @@
   "config": {
     "exists": true,
     "generation": 1,
-    "hash": "dbda0a2d28a59af8f886a14451b1a8acaaee387a963a8c886b159bbb9074a01d",
-    "instance_id": "b27f1620-63f0-468e-90ca-3a1b282f56d0",
-    "path": "/tmp/rex-keymap-ch7n_o4b/init.lua"
+    "hash": "4805092390b8b83816152c00aea0475debaa89e15a41212f55cb9fd4cadf85e5",
+    "instance_id": "22ccfbd6-b0c6-4187-ac2a-1a1b6a5ffbe2",
+    "path": "/tmp/rex-keymap-mph461bk/init.lua"
   },
   "diagnostics": [
     {
@@ -139,8 +190,22 @@
       "source": "init.lua:7"
     },
     {
+      "action": "client.mac.only",
+      "key": "ctrl+b z",
+      "message": "unknown action \"client.mac.only\"",
+      "severity": "warning",
+      "source": "init.lua:9"
+    },
+    {
       "key": "ctrl+q",
       "message": "nothing is bound to \"ctrl+q\"",
+      "severity": "warning",
+      "source": "settings"
+    },
+    {
+      "action": "client.tab.new",
+      "key": "ctrl+x y",
+      "message": "key sequence \"ctrl+x y\" (settings) cannot start, because \"ctrl+x\" is bound to \"client.settings\" above it (settings)",
       "severity": "warning",
       "source": "settings"
     },

@@ -505,7 +505,11 @@ impl Overrides {
                     "settings",
                     format!("shortcuts[{index}]: {error}"),
                     value.get("action").and_then(Value::as_str),
-                    value.get("keys").and_then(Value::as_str).map(str::to_owned),
+                    value
+                        .get("keys")
+                        .and_then(Value::as_str)
+                        .and_then(|k| normalize(k).ok())
+                        .map(|k| k.join(" ")),
                 )),
             }
         }
@@ -642,20 +646,27 @@ fn resolve_layers(
             if *winner_default && *loser_default {
                 continue;
             }
-            let kind = if winner.keys.len() > 1 {
-                "key sequence"
-            } else {
-                "key"
-            };
-            diagnostics.push(problem(
-                loser.source.as_deref().unwrap_or_default(),
+            let message = if winner.keys.len() > 1 {
                 format!(
-                    "{:?} ({}) cannot fire, because {kind} {:?} is bound above it ({})",
+                    "{:?} ({}) cannot fire, because key sequence {:?} is bound above it ({})",
                     loser.keys.join(" "),
                     loser.source.as_deref().unwrap_or_default(),
                     winner.keys.join(" "),
                     winner.source.as_deref().unwrap_or_default()
-                ),
+                )
+            } else {
+                format!(
+                    "key sequence {:?} ({}) cannot start, because {:?} is bound to {:?} above it ({})",
+                    loser.keys.join(" "),
+                    loser.source.as_deref().unwrap_or_default(),
+                    winner.keys.join(" "),
+                    winner.action,
+                    winner.source.as_deref().unwrap_or_default()
+                )
+            };
+            diagnostics.push(problem(
+                loser.source.as_deref().unwrap_or_default(),
+                message,
                 Some(&loser.action),
                 Some(loser.keys.join(" ")),
             ));
@@ -875,6 +886,11 @@ mod tests {
             assert!(diagnostic.message.starts_with(&format!("shortcuts[{i}]:")));
             assert_eq!(diagnostic.source.as_deref(), Some("settings"));
         }
+        assert_eq!(overrides.diagnostics[0].key, None);
+        assert_eq!(overrides.diagnostics[1].key.as_deref(), Some("ctrl+k"));
+        let alias =
+            Overrides::parse(&json!([{"keys":"CTRL+B>C", "action":"pane.zoom", "args":null}]));
+        assert_eq!(alias.diagnostics[0].key.as_deref(), Some("ctrl+b c"));
         for invalid in [Value::Null, json!({}), json!("ctrl+k")] {
             let parsed = Overrides::parse(&invalid);
             assert!(parsed.layer.bindings.is_empty());
@@ -970,6 +986,11 @@ mod tests {
             (5, Binding::new(["ctrl+l"], "client.key.forward")),
             (6, Binding::new(["ctrl+[KeyT]"], "client.tab.new")),
             (7, Binding::new(["ctrl+m"], "client.mac.only")),
+            (9, Binding::new(["ctrl+b", "z"], "client.mac.only")),
+            (10, Binding::new(["super+u"], "client.settings")),
+            (11, Binding::new(["meta+i"], "client.settings")),
+            (12, Binding::new(["opt+o"], "client.settings")),
+            (13, Binding::new(["command+h"], "client.settings")),
         ] {
             layers.push(KeymapDefault::new(format!("init.lua:{line}")).bindings([binding]));
         }

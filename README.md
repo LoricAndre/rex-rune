@@ -148,7 +148,7 @@ The SSH user is the login on that machine, which is also the user whose Rex serv
 
 ## Keyboard shortcuts
 
-Global tab navigation uses cached tab order without enabling extra prefetch: a session whose view is not loaded is one stop, and selecting it loads its tabs. Crossing sessions or hosts settles after 150 ms without another cycle, coalescing fast repeats rather than attaching each intermediate session. The first stop can attach before key repeat begins. During settling there is no target preview, and typing still goes to the displayed pane. Back/Forward history is local to this window and survives reconnects; unavailable targets are skipped. Commands also exposes these navigation actions. Bindings are not configurable yet; Ctrl Tab is currently reserved by this client, including in Kitty-aware editors.
+Global tab navigation uses cached tab order without enabling extra prefetch: a session whose view is not loaded is one stop, and selecting it loads its tabs. Crossing sessions or hosts settles after 150 ms without another cycle, coalescing fast repeats rather than attaching each intermediate session. The first stop can attach before key repeat begins. During settling there is no target preview, and typing still goes to the displayed pane. Back/Forward history is local to this window and survives reconnects; unavailable targets are skipped. Commands also exposes these navigation actions. Ctrl Tab is a removable client default, including in Kitty-aware editors.
 
 | Shortcut | Action |
 | --- | --- |
@@ -171,7 +171,39 @@ Global tab navigation uses cached tab order without enabling extra prefetch: a s
 | Shift PageUp / PageDown, wheel | Scroll local history |
 | Ctrl + / Ctrl − / Ctrl 0 | Enlarge / shrink / reset the whole interface |
 
-These chords are reserved by the client and do not reach terminal programs; every other key goes to the focused pane. Interface zoom changes in 10% steps (70–150%), is saved as `ui_scale`, and is independent of the terminal font size. `Ctrl =` and the numpad `+`/`−` also work.
+These are the client defaults; bound chords do not reach terminal programs, and every other key goes to the focused pane. Interface zoom changes in 10% steps (70–150%), is saved as `ui_scale`, and is independent of the terminal font size. `Ctrl =` and the numpad `+`/`−` also work.
+
+### File-edited shortcuts (Phase 6 draft)
+
+For the default workspace, edit `$XDG_CONFIG_HOME/rex-linux/shortcuts.json` (normally
+`~/.config/rex-linux/shortcuts.json`). With a custom `--config /path/demo.json`,
+edit `/path/demo.shortcuts.json`. The app never writes this file, except for the
+one-time import of custom bindings from nivox's legacy `keybindings` field.
+
+The preferred format is an object; a bare array also works. A missing, empty or
+whitespace-only file means no overrides. Bad entries are skipped; invalid JSON
+uses defaults and appears in Settings → Shortcuts → Problems.
+
+```json
+{
+  "shortcuts": [
+    {"keys": "ctrl+b>c", "action": "client.tab.new"},
+    {"keys": "ctrl+tab", "action": null},
+    {"keys": "ctrl+shift+tab", "action": null}
+  ]
+}
+```
+
+Later entries win; `null` frees those exact keys for the terminal. Hand edits reload
+when the window regains focus or Settings opens, gated by file mtime and length.
+`cmd`/`super` means Super, not Ctrl. Physical keys use W3C names such as
+`ctrl+[KeyT]`; sequences use `>`, Escape cancels, and a failed tail goes to the
+terminal without retrying it as a new shortcut. Non-ASCII bindings such as
+`ctrl+é` work in the client but are not readable by the server's parser, like the
+client-only `ctrl++` extension. Ordinary terminal keys still use `client.key`.
+
+**Draft limitation:** local defaults and overrides are active; server-layer keymap
+integration and effective-keymap Settings/Commands display are still in progress.
 
 Double-click selects a word (including shell paths), and triple-click selects a line. Selection stays attached to terminal content as history or output scrolls; dragging above or below the grid autoscrolls. Hold Shift to select locally or scroll local history when a fullscreen TUI owns the mouse. Without Shift, ordinary TUI mouse reporting is unchanged.
 

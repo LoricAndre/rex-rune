@@ -10,7 +10,7 @@ fn recorded_keymap_has_layers_sequences_forwarding_and_standard_spelling() {
     assert_eq!(request.defaults[0].name, "linux");
     assert_eq!(request.overrides[0].name, "settings");
     assert!(reply.config.exists);
-    assert_eq!(reply.bindings.len(), 17);
+    assert_eq!(reply.bindings.len(), 24);
     let keys: Vec<_> = reply.bindings.iter().map(|b| b.keys.clone()).collect();
     assert!(keys.contains(&vec!["ctrl+alt+shift+cmd+k".into()]));
     assert!(keys.contains(&vec!["ctrl++".into()]));
@@ -25,8 +25,18 @@ fn recorded_keymap_has_layers_sequences_forwarding_and_standard_spelling() {
             .any(|b| { b.keys == ["ctrl+b", "x"] && b.action == "client.key.forward" })
     );
     assert_eq!(reply.bindings[0].source.as_deref(), Some("settings"));
-    assert_eq!(reply.bindings[1].action, "client.settings");
-    assert_eq!(reply.bindings[2].action, "client.tab.new");
+    assert_eq!(reply.bindings[0].keys, ["ctrl+x"]);
+    assert_eq!(reply.bindings[1].keys, ["ctrl+x", "y"]);
+    for spelling in ["cmd+u", "cmd+i", "alt+o", "cmd+h"] {
+        assert!(keys.contains(&vec![spelling.into()]));
+    }
+    assert!(
+        reply
+            .diagnostics
+            .iter()
+            .any(|d| d.key.as_deref() == Some("ctrl+b z"))
+    );
+    assert!(reply.diagnostics.iter().any(|d| d.message == r#"key sequence "ctrl+x y" (settings) cannot start, because "ctrl+x" is bound to "client.settings" above it (settings)"#));
     assert!(reply.diagnostics.iter().any(|d| {
         d.source.as_deref() == Some("settings") && d.key.as_deref() == Some("ctrl+q")
     }));

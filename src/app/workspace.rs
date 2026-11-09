@@ -247,9 +247,15 @@ impl Workspace {
         if let Some(error) = theme_error {
             this.notify(format!("{error:#}; following the server's colours"));
         }
-        if let Some(count) = this.settings.shortcut_file.imported.take() {
+        if let Some(count) = this
+            .settings
+            .shortcut_file
+            .imported
+            .take()
+            .filter(|&n| n > 0)
+        {
             this.inform(format!(
-                "Imported {count} shortcuts from nivox's keybindings."
+                "Moved {count} custom shortcut(s) from workspace.json to shortcuts.json."
             ));
         }
         if let Some(problem) = this.settings.shortcut_file.notice.take() {

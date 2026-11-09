@@ -107,7 +107,9 @@
             "d"
           ],
           "action": "client.settings"
-        }
+        },
+        {"keys":["ctrl+x","y"],"action":"client.tab.new"},
+        {"keys":["ctrl+x"],"action":"client.settings"}
       ],
       "removals": [
         {
