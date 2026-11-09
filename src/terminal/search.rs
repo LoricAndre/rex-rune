@@ -166,15 +166,17 @@ impl Controller {
 
 /// A match's cells on screen, cut to the viewport; none when it is off screen.
 fn on_screen(terminal: &Terminal, found: &Selection<'_>) -> Result<Option<Match>> {
-    let point = |at| -> Result<Option<(u16, u16)>> {
-        Ok(terminal
-            .point_from_grid_ref(&at, PointSpace::Viewport)?
-            .and_then(|p| Some((p.x, u16::try_from(p.y).ok()?))))
-    };
     let last = (
         terminal.cols()?.saturating_sub(1),
         terminal.rows()?.saturating_sub(1),
     );
+    // A cell below a scrolled-up viewport still gets a viewport row, past the last one.
+    let point = |at| -> Result<Option<(u16, u16)>> {
+        Ok(terminal
+            .point_from_grid_ref(&at, PointSpace::Viewport)?
+            .and_then(|p| Some((p.x, u16::try_from(p.y).ok()?)))
+            .filter(|p| p.1 <= last.1))
+    };
     Ok(match (point(found.start())?, point(found.end())?) {
         (None, None) => None,
         (start, end) => Some(Match {
@@ -264,5 +266,71 @@ mod tests {
                 end: (5, 0)
             }]
         );
+    }
+
+    #[test]
+    fn a_match_below_a_scrolled_up_viewport_is_off_screen() {
+        let mut terminal = Terminal::new(ghostty_vt::TerminalOptions {
+            cols: 20,
+            rows: 5,
+            max_scrollback: 1 << 20,
+        })
+        .unwrap();
+        terminal.vt_write(b"needle top\r\n");
+        for row in 0..12 {
+            terminal.vt_write(format!("row {row}\r\n").as_bytes());
+        }
+        terminal.vt_write(b"needle bottom\r\n");
+        let mut search = Controller::default();
+        search.set_needle(Some(&terminal), "needle".into()).unwrap();
+        finish(&mut search, &terminal);
+        search.step(&terminal, true).unwrap();
+        let results = search.results(&terminal).unwrap().unwrap();
+        assert_eq!(results.total, 2);
+        let older = Match {
+            start: (0, 0),
+            end: (5, 0),
+        };
+        assert_eq!(results.selected, Some(older));
+        assert_eq!(
+            results.matches,
+            [older],
+            "the newer match is below the screen"
+        );
+    }
+
+    /// Ghostty's search picks an older match first, and then walks toward newer ones, once a
+    /// terminal restored from a snapshot has been resized. Every match is still reached. Its
+    /// internals decide this (`terminal/search/screen.zig`), and a pane this client owns meets
+    /// it whenever it resizes after attaching, so it wants an upstream fix.
+    #[test]
+    #[ignore = "Ghostty's search order on a restored, resized terminal; see the comment"]
+    fn a_restored_and_resized_terminal_selects_the_newest_match_first() {
+        let mut restored = Terminal::new(ghostty_vt::TerminalOptions {
+            cols: 80,
+            rows: 24,
+            max_scrollback: 1 << 20,
+        })
+        .unwrap();
+        restored.vt_write(b"mise WARN x\r\n\r\n$ ");
+        let snapshot = ghostty_vt::snapshot::encode(&restored).unwrap();
+        let mut stream = crate::terminal::TerminalStream::new(1);
+        stream.feed(&snapshot).unwrap();
+        let terminal = stream.terminal.as_mut().unwrap();
+        terminal.resize(120, 29, 0, 0).unwrap();
+        terminal.vt_write(b"\x1b[H\x1b[2J\x1b[3J      needle-top\r\n\r\n\r\n");
+        for row in 1..=28 {
+            terminal.vt_write(format!("row {row}\r\n").as_bytes());
+        }
+        terminal.vt_write(b"needle-bottom\r\n$ ");
+        let terminal = stream.terminal.as_ref().unwrap();
+        let mut search = Controller::default();
+        for needle in ["n", "ne", "nee", "need", "needl", "needle"] {
+            search.set_needle(Some(terminal), needle.into()).unwrap();
+            search.update(terminal).unwrap();
+        }
+        finish(&mut search, terminal);
+        let selected = search.results(terminal).unwrap().unwrap().selected.unwrap();
+        assert_eq!(selected.start.0, 0, "needle-bottom, not needle-top");
     }
 }
