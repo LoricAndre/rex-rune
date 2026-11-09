@@ -101,6 +101,9 @@ fn dispatch(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx, global_only: bool) ->
                 }
                 actions::Kind::Forward => {
                     if sequence {
+                        // Suppress held-tail repeats after completing the sequence.
+                        // forward() still records the press in forwarded, so its release
+                        // reaches client.key even though this identity is consumed.
                         s.bindings.consumed.insert(identity, true);
                     }
                     let prefix = binding.keys[..binding.keys.len() - 1].to_vec();
@@ -217,14 +220,14 @@ pub fn on_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if dispatch(s, ev, tx, false) {
         return true;
     }
-    if tx.focused().is_some() {
-        // A control the pointer focused (rare: controls blur after their press) keeps its key.
-        tx.blur();
-    }
     forward(s, ev, tx, Vec::new())
 }
 
-fn forward(s: &mut Workspace, ev: &KeyEvent, tx: &Tx, prefix: Vec<String>) -> bool {
+fn forward(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx, prefix: Vec<String>) -> bool {
+    if tx.focused().is_some() {
+        // Both unbound keys and explicit forward bindings return focus to the terminal.
+        tx.blur();
+    }
     let code = tx.physical_key();
     let action = if tx.key_repeat() {
         Action::Repeat
