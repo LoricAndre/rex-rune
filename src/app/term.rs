@@ -859,16 +859,23 @@ fn same_decoration(a: &RunStyle, b: &RunStyle) -> bool {
         == (b.underline, b.underline_color, b.overline, b.fg)
 }
 
+/// A straight line's thickness in points: one point in whole device pixels, as sprites' are.
+fn line_thickness(px: f32) -> f32 {
+    px.round().max(1.) / px
+}
+
+/// The centre of a line that starts on a whole device pixel `top` points down the cell.
+fn line_centre(top: f32, px: f32) -> f32 {
+    (top * px).round() / px + line_thickness(px) / 2.
+}
+
 /// A run's underline (single, double, curly, dotted or dashed) and overline, `width` wide in a
 /// cell `height` tall, drawn at `px` device pixels per point.
 fn decoration_shape(style: &RunStyle, width: f32, height: f32, px: f32) -> Shape {
     let mut shape = Shape::new();
     let color = rgb(style.underline_color.unwrap_or(style.fg));
-    // Straight lines are one point thick in whole device pixels, as sprites' are, and start
-    // on a whole device pixel `top` points down the cell.
-    let light = px.round().max(1.);
-    let thick = light / px;
-    let centre = |top: f32| ((top * px).round() + light / 2.) / px;
+    let thick = line_thickness(px);
+    let centre = |top: f32| line_centre(top, px);
     let y = centre(height - 2.);
     match style.underline {
         Underline::Single => {
@@ -1521,6 +1528,22 @@ mod tests {
         );
         assert_eq!(heavy.len(), 4, "heavy lines are twice as thick: {lines:?}");
         assert_unbroken(&lines);
+    }
+
+    #[test]
+    fn decoration_lines_land_on_whole_device_pixels() {
+        for px in [1., 1.25, 1.5, 1.75, 2., 2.5, 3.] {
+            let thick = line_thickness(px) * px;
+            assert_eq!(thick, thick.round(), "whole pixels thick at {px}");
+            assert_eq!(thick, f32::max(px, 1.).round(), "one point at {px}");
+            for top in [0.5, 17., 19., 20.5] {
+                let edge = (line_centre(top, px) - line_thickness(px) / 2.) * px;
+                assert!(
+                    (edge - edge.round()).abs() < 1e-3,
+                    "{top} at {px} starts on a pixel: {edge}"
+                );
+            }
+        }
     }
 
     #[test]
