@@ -1,4 +1,6 @@
 use super::*;
+#[path = "navigation_tests.rs"]
+mod navigation_tests;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
