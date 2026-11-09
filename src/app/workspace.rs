@@ -18,7 +18,7 @@ use rex_linux::{
     terminal_theme::{TerminalTheme, ThemeDirs, ThemeInfo, paired},
 };
 use rexrs::api::terminal::SetTheme;
-use rune::{AppHandle, PhysicalKeyCode, TextEdit, Tx};
+use rune::{AppHandle, TextEdit, Tx};
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet},
@@ -36,6 +36,8 @@ pub struct HostState {
     pub model: HostModel,
     /// The sessions this host's worker was last told to load views of.
     pub prefetch: HashSet<String>,
+    /// Settings-source diagnostic sets already announced for this host, across reconnects.
+    pub keymap_notices: HashSet<String>,
 }
 
 pub struct DividerDrag {
@@ -68,8 +70,11 @@ pub struct Workspace {
     next_notice: u64,
     zoom_notice: Option<u64>,
     pub drag: Option<DividerDrag>,
-    /// Physical keys whose press went to a terminal; only their releases follow.
-    pub forwarded: HashSet<PhysicalKeyCode>,
+    /// Keys whose press went to a terminal; only their releases follow.
+    pub forwarded: HashSet<super::bindings::Identity>,
+    pub bindings: super::bindings::State,
+    pub local_keymap: rex_linux::keymap::Resolved,
+    pub keymap_generation: u64,
     pub navigation: super::navigation::History,
     /// Panes this window has taken size ownership of since it last came forward.
     pub claimed: HashSet<(HostId, String)>,
@@ -187,6 +192,7 @@ impl Workspace {
                 Ok(theme) => (theme, None),
                 Err(error) => (None, Some(error)),
             };
+        let local_keymap = super::actions::resolve(&settings.shortcut_file.overrides);
         let mut this = Self {
             logo: None,
             images: None,
@@ -202,6 +208,9 @@ impl Workspace {
             zoom_notice: None,
             drag: None,
             forwarded: HashSet::new(),
+            bindings: Default::default(),
+            local_keymap,
+            keymap_generation: 0,
             navigation: Default::default(),
             claimed: HashSet::new(),
             handle,
@@ -240,6 +249,32 @@ impl Workspace {
         if let Some(error) = theme_error {
             this.notify(format!("{error:#}; following the server's colours"));
         }
+        if let Some(count) = this
+            .settings
+            .shortcut_file
+            .imported
+            .take()
+            .filter(|&n| n > 0)
+        {
+            let from = this
+                .settings_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy();
+            let to = this
+                .settings
+                .shortcut_file
+                .path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy();
+            this.inform(format!(
+                "Moved {count} custom shortcut(s) from {from} to {to}."
+            ));
+        }
+        if let Some(problem) = this.settings.shortcut_file.notice.take() {
+            this.notify(problem);
+        }
         for index in 0..this.settings.hosts.len() {
             this.connect_host(index, explicit);
         }
@@ -270,6 +305,9 @@ impl Workspace {
             index == self.active,
             self.declared_theme(),
         );
+        let _ = connection
+            .commands
+            .send(HostCommand::Keymap(Box::new(self.keymap_declaration())));
         let id = HostId(self.next_host);
         self.next_host += 1;
         let receiver = connection.wake.clone();
@@ -288,6 +326,7 @@ impl Workspace {
             connection,
             model,
             prefetch: HashSet::new(),
+            keymap_notices: HashSet::new(),
         }
     }
 
@@ -375,7 +414,7 @@ impl Workspace {
     pub fn sync(&mut self, index: usize, tx: &mut Tx) {
         let id = self.hosts[index].id;
         let old_session = self.hosts[index].model.selected.clone();
-        let (model, notices, clipboard, bells) = {
+        let (model, notices, clipboard, bells, client_actions) = {
             let mut shared = self.hosts[index]
                 .connection
                 .model
@@ -384,7 +423,8 @@ impl Workspace {
             let notices = std::mem::take(&mut shared.notices);
             let clipboard = shared.clipboard.take();
             let bells = std::mem::take(&mut shared.bells);
-            (shared.clone(), notices, clipboard, bells)
+            let client_actions = std::mem::take(&mut shared.client_actions);
+            (shared.clone(), notices, clipboard, bells, client_actions)
         };
         for (block, connection) in &model.terminals {
             let key = (id, block.clone());
@@ -422,7 +462,43 @@ impl Workspace {
         if model.theme_declared {
             self.note_theme_declared();
         }
+        if index == self.active
+            && (self.hosts[index].model.keymap_revision != model.keymap_revision
+                || self.hosts[index].model.connected != model.connected
+                || old_session != model.selected)
+        {
+            self.bindings.sequence.clear();
+        }
         self.hosts[index].model = model;
+        self.announce_keymap_problems(index);
+        let action_context = (
+            self.active,
+            self.model().selected.clone(),
+            self.keymap_generation,
+        );
+        for queued in client_actions {
+            // Focus events following the reply may legitimately move to another pane.
+            // Keep host/session/generation guards, and never act behind a popup or dialog.
+            if self.panel.is_some()
+                || index != action_context.0
+                || queued.generation != action_context.2
+                || queued
+                    .session
+                    .as_ref()
+                    .is_some_and(|id| action_context.1.as_ref() != Some(id))
+            {
+                self.inform(
+                    "Returned client action skipped because its workspace context changed.",
+                );
+                continue;
+            }
+            super::actions::run(
+                self,
+                &queued.action.action,
+                queued.action.args.as_ref().unwrap_or(&Value::Null),
+                tx,
+            );
+        }
         if let Some(copy) = clipboard
             && self.window_focused
             && self.panel.is_none()
@@ -496,6 +572,13 @@ impl Workspace {
 
     pub fn window_focus(&mut self, focused: bool) {
         self.window_focused = focused;
+        self.bindings.sequence.clear();
+        if focused {
+            self.reload_shortcuts();
+        } else {
+            self.bindings.consumed.clear();
+            self.forwarded.clear();
+        }
         if !focused {
             for term in self.terminals.values_mut() {
                 term.end_selection();
@@ -505,6 +588,115 @@ impl Workspace {
             self.claimed.clear();
             self.claim_visible();
             self.track_activity(self.active);
+        }
+    }
+
+    fn keymap_declaration(&self) -> rex_linux::connection::keymap::Declaration {
+        let overrides = self.settings.shortcut_file.overrides.clone();
+        rex_linux::connection::keymap::Declaration {
+            generation: self.keymap_generation,
+            request: rexrs::api::client::Keymap::new()
+                .actions(super::actions::declarations())
+                .server_actions("all")
+                .defaults([rex_linux::keymap::defaults()])
+                .overrides([overrides.layer.clone()]),
+            overrides,
+        }
+    }
+
+    pub fn effective_keymap(&self) -> &rex_linux::keymap::Resolved {
+        self.hosts[self.active]
+            .model
+            .keymap
+            .as_ref()
+            .filter(|k| self.model().connected && k.generation == self.keymap_generation)
+            .map(|k| &k.resolved)
+            .unwrap_or(&self.local_keymap)
+    }
+
+    pub fn keymap_snapshot(&self) -> Option<&rex_linux::connection::keymap::Snapshot> {
+        self.model()
+            .keymap
+            .as_deref()
+            .filter(|k| self.model().connected && k.generation == self.keymap_generation)
+    }
+
+    pub fn effective_bindings(&self) -> Vec<&rex_linux::keymap::ResolvedBinding> {
+        super::actions::effective(
+            self.effective_keymap(),
+            self.keymap_snapshot()
+                .map(|k| k.reply.actions.as_slice())
+                .unwrap_or(&[]),
+        )
+    }
+
+    pub fn shortcut_detail(&self, action: &str, args: &Value) -> String {
+        let empty = |args: &Value| args.is_null() || args.as_object().is_some_and(|a| a.is_empty());
+        self.effective_bindings()
+            .iter()
+            .find(|b| {
+                let bound = b.binding.args.as_ref().unwrap_or(&Value::Null);
+                b.binding.action == action && (bound == args || (empty(bound) && empty(args)))
+            })
+            .and_then(|b| b.chords.as_ref())
+            .map(|chords| {
+                chords
+                    .iter()
+                    .map(|c| c.keycaps().join(" "))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default()
+    }
+
+    fn announce_keymap_problems(&mut self, index: usize) {
+        let host = &mut self.hosts[index];
+        let Some(snapshot) = &host.model.keymap else {
+            return;
+        };
+        if !host.model.connected || snapshot.generation != self.keymap_generation {
+            return;
+        }
+        // Local parse diagnostics already produced one file notice, not one per host.
+        let mut problems: Vec<_> = snapshot
+            .reply
+            .diagnostics
+            .iter()
+            .filter(|d| d.source.as_deref() == Some("settings"))
+            .map(|d| serde_json::to_string(d).expect("diagnostic"))
+            .collect();
+        problems.sort();
+        problems.dedup();
+        if problems.is_empty() {
+            return;
+        }
+        let count = problems.len();
+        if host.keymap_notices.insert(problems.join("\n")) {
+            self.notify(format!(
+                "{count} shortcut problem(s) on {}; see Settings → Shortcuts.",
+                self.settings.hosts[index].label
+            ));
+        }
+    }
+
+    pub fn reload_shortcuts(&mut self) {
+        let previous = self.settings.shortcut_file.overrides.clone();
+        if !self.settings.shortcut_file.reload(&self.settings_path) {
+            return;
+        }
+        if previous == self.settings.shortcut_file.overrides {
+            return;
+        }
+        self.local_keymap = super::actions::resolve(&self.settings.shortcut_file.overrides);
+        self.keymap_generation += 1;
+        self.bindings.sequence.clear();
+        // Disconnected workers retain the declaration for their next successful connect too.
+        let declaration = self.keymap_declaration();
+        for index in 0..self.hosts.len() {
+            self.send(index, HostCommand::Keymap(Box::new(declaration.clone())));
+        }
+        if let Some(notice) = self.settings.shortcut_file.notice.take() {
+            self.notify(notice);
         }
     }
 
@@ -731,6 +923,9 @@ impl Workspace {
     }
 
     pub fn request(&mut self, method: &str, mut payload: Value) {
+        if method.starts_with("session.focus") {
+            self.bindings.sequence.clear();
+        }
         let Some(session) = self.model().selected.clone() else {
             return;
         };
@@ -857,6 +1052,7 @@ impl Workspace {
     }
 
     pub fn activate_host(&mut self, host: usize, tx: &mut Tx) {
+        self.bindings.sequence.clear();
         self.observe_navigation();
         self.navigation.cancel();
         self.settings.hosts[host].collapsed = false;
@@ -933,7 +1129,7 @@ impl Workspace {
                     self.select_window(self.active, session, id, tx);
                 }
             }
-            Intent::ClientAction(name) => { super::input::run_action(self, name, tx); }
+            Intent::ClientAction(name, args) => { super::actions::run(self, name, &args, tx); }
             Intent::Switcher => self.picker(true),
             Intent::NewSession => self.create_session(self.active, None, tx),
             Intent::CreateOn(host, name) => self.create_session(host, name, tx),
@@ -1042,6 +1238,8 @@ impl Workspace {
             }
             Intent::Sidebar => self.toggle_sidebar(),
             Intent::Settings => {
+                self.bindings.sequence.clear();
+                self.reload_shortcuts();
                 let back = self.panel.take();
                 self.panel = Some(Panel::new(PanelKind::Settings, "Settings", &[]));
                 self.panel.as_mut().unwrap().target = back.and_then(|p| p.target);
@@ -1418,6 +1616,7 @@ impl Workspace {
     }
 
     pub fn open_panel(&mut self, kind: PanelKind, title: &str, fields: &[(&str, &str, &str)]) {
+        self.bindings.sequence.clear();
         for term in self.terminals.values_mut() {
             term.end_selection();
         }
@@ -1470,6 +1669,9 @@ impl Workspace {
     /// Show a Settings section; Integrations reads the agents' state when first shown.
     pub fn open_section(&mut self, section: SettingsSection) {
         self.settings_section = section;
+        if section == SettingsSection::Shortcuts {
+            self.reload_shortcuts();
+        }
         if section == SettingsSection::Integrations
             && self.integrations.status == super::integrations::AgentStatus::Unknown
         {
@@ -1485,6 +1687,7 @@ impl Workspace {
     }
 
     pub fn close_panel(&mut self, tx: &mut Tx) {
+        self.bindings.sequence.clear();
         self.panel = None;
         tx.blur();
     }

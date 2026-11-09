@@ -1,5 +1,7 @@
 //! The Rune front end.
+mod actions;
 mod activity;
+mod bindings;
 mod dialogs;
 mod discover;
 mod fonts;
@@ -95,11 +97,11 @@ pub(crate) fn view(s: &Workspace, cx: &mut Cx<Workspace>) -> El {
                 return;
             }
             let action = match tx.button() {
-                rune::PointerButton::Back => input::HISTORY_BACK,
-                rune::PointerButton::Forward => input::HISTORY_FORWARD,
+                rune::PointerButton::Back => actions::HISTORY_BACK,
+                rune::PointerButton::Forward => actions::HISTORY_FORWARD,
                 _ => return,
             };
-            input::run_action(s, action, tx);
+            actions::run(s, action, &serde_json::Value::Null, tx);
         })
         // With no focused control, Rune sends releases only to the outermost node.
         .on_key_up(input::on_key_up)
@@ -174,6 +176,8 @@ fn poll(s: &mut Workspace, _: f64, tx: &mut Tx) -> bool {
     changed
 }
 
+#[cfg(test)]
+mod physical_input_tests;
 #[cfg(test)]
 mod tests;
 

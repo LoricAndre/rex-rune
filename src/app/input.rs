@@ -4,56 +4,17 @@
 //! scrolling. So no default button may exist outside an open modal (the main view has none),
 //! and `on_key` takes every key it forwards.
 use super::{
+    actions,
+    bindings::{Context, Input, Step},
     keys::{self, Action},
     panel::{Intent, PanelKind},
     workspace::{HostId, Workspace},
 };
 use rex_linux::connection::Command;
 use rune::{Ime, Key, KeyEvent, PhysicalKeyCode as Code, Tx};
-use serde_json::json;
 
 fn ctrl(ev: &KeyEvent) -> bool {
     ev.mods.ctrl || ev.mods.cmd
-}
-
-fn letter(ev: &KeyEvent, tx: &Tx, c: char) -> bool {
-    let code = match c {
-        'b' => Code::KeyB,
-        'c' => Code::KeyC,
-        'd' => Code::KeyD,
-        'f' => Code::KeyF,
-        'k' => Code::KeyK,
-        'n' => Code::KeyN,
-        'p' => Code::KeyP,
-        'r' => Code::KeyR,
-        't' => Code::KeyT,
-        'v' => Code::KeyV,
-        'w' => Code::KeyW,
-        _ => return false,
-    };
-    // By the character the key types (Dvorak's Ctrl T is where QWERTY's K is), falling back
-    // to its position on layouts without Latin letters.
-    match tx.key_base() {
-        Some(base) if base.is_ascii_alphabetic() => base.eq_ignore_ascii_case(&c),
-        Some(_) => tx.physical_key() == Some(code),
-        None => {
-            ev.is_command(c)
-                || matches!(&ev.key, Key::Text(t) if t.eq_ignore_ascii_case(&c.to_string()))
-                || tx.physical_key() == Some(code)
-        }
-    }
-}
-
-/// Ctrl , by the character the key types, falling back to its position.
-fn comma(ev: &KeyEvent, tx: &Tx) -> bool {
-    let typed = match &ev.key {
-        Key::Command(c) => *c == ',',
-        Key::Text(t) => t == ",",
-        _ => false,
-    };
-    typed
-        || (tx.key_base().is_none_or(|b| !b.is_ascii_punctuation())
-            && tx.physical_key() == Some(Code::Comma))
 }
 
 fn space(ev: &KeyEvent, tx: &Tx) -> bool {
@@ -62,137 +23,118 @@ fn space(ev: &KeyEvent, tx: &Tx) -> bool {
         || matches!(&ev.key, Key::Text(t) if t == " ")
 }
 
-/// Global, including focused form/query fields. Logical punctuation respects the keyboard
-/// layout; numpad operators and unshifted Digit0 also work without AltGr interception.
-pub fn zoom_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
-    if !ctrl(ev) || ev.mods.alt {
-        return false;
-    }
-    let ch = match &ev.key {
-        Key::Command(c) => Some(*c),
-        Key::Text(t) if t.chars().count() == 1 => t.chars().next(),
-        _ => None,
-    };
-    let step = match (ch, tx.physical_key()) {
-        (Some('+' | '='), _) | (_, Some(Code::NumpadAdd)) => 1,
-        (Some('-'), _) | (_, Some(Code::NumpadSubtract)) => -1,
-        (Some('0'), _) | (_, Some(Code::Numpad0)) => 0,
-        (_, Some(Code::Digit0)) if !ev.mods.shift => 0,
-        _ => return false,
-    };
-    s.change_ui_scale(step, tx);
-    true
+/// Global actions also reach fields and dialogs. Matching is still data-driven.
+pub fn global_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    dispatch(s, ev, tx, true)
 }
 
-/// Opens the focused pane's search field.
-pub const SEARCH: &str = "client.search";
-pub const NEXT_GLOBAL: &str = "client.tab.next_global";
-pub const PREVIOUS_GLOBAL: &str = "client.tab.previous_global";
-pub const HISTORY_BACK: &str = "client.history.back";
-pub const HISTORY_FORWARD: &str = "client.history.forward";
-
-/// Runs the client action a binding names. False when no action has that name.
-pub fn run_action(s: &mut Workspace, name: &str, tx: &mut Tx) -> bool {
-    match name {
-        SEARCH => s.open_search(),
-        NEXT_GLOBAL => s.cycle_tab(1, tx),
-        PREVIOUS_GLOBAL => s.cycle_tab(-1, tx),
-        HISTORY_BACK => s.navigate_history(-1, tx),
-        HISTORY_FORWARD => s.navigate_history(1, tx),
-        _ => return false,
+fn dispatch(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx, global_only: bool) -> bool {
+    let input = Input {
+        event: ev,
+        code: tx.physical_key(),
+        base: tx.key_base(),
+        repeat: tx.key_repeat(),
+    };
+    let identity = input.identity();
+    // A modal may have taken the previous release; a fresh press starts a new hold.
+    if !input.repeat {
+        s.bindings.consumed.remove(&identity);
     }
-    true
-}
-
-/// Workspace shortcuts with no popup open. True when one ran.
-fn shortcut(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
-    let m = ev.mods;
-    if ctrl(ev) && !m.alt && ev.key == Key::Tab {
-        return run_action(
-            s,
-            if m.shift {
-                PREVIOUS_GLOBAL
-            } else {
-                NEXT_GLOBAL
-            },
-            tx,
-        );
-    }
-    if ctrl(ev) && m.shift && !m.alt {
-        if letter(ev, tx, 'b') {
-            s.perform(Intent::Sidebar, tx);
-        } else if letter(ev, tx, 'p') {
-            s.picker(false);
-        } else if letter(ev, tx, 'n') {
-            s.perform(Intent::NewSession, tx);
-        } else if letter(ev, tx, 't') {
-            s.perform(Intent::NewWindow, tx);
-        } else if letter(ev, tx, 'w') {
-            s.close_focused(tx);
-        } else if letter(ev, tx, 'd') {
-            s.perform(Intent::Split("horizontal"), tx);
-        } else if letter(ev, tx, 'f') {
-            run_action(s, SEARCH, tx);
-        } else if ev.key == Key::Enter {
-            s.perform(Intent::Zoom, tx);
-        } else if space(ev, tx) {
-            if let Some(block) = s.focused_block() {
-                s.pane_menu(block, None);
-            }
-        } else if letter(ev, tx, 'c') {
-            if let Some(text) = s.active_terminal().and_then(|t| t.copy_text()) {
-                tx.copy(text);
-            }
-        } else if letter(ev, tx, 'v') {
-            s.paste_clipboard(tx);
-        } else if letter(ev, tx, 'r') {
-            if let Some(term) = s.active_terminal_mut() {
-                term.send(Command::Reconnect);
-            }
-        } else {
-            return false;
-        }
+    if input.repeat && s.bindings.consumed.get(&identity) == Some(&true) {
         return true;
     }
-    if ctrl(ev) && !m.shift && !m.alt && letter(ev, tx, 'k') {
-        s.picker(true);
-    } else if ctrl(ev) && !m.shift && !m.alt && comma(ev, tx) {
-        s.perform(Intent::Settings, tx);
-    } else if ctrl(ev) && m.alt && !m.shift && letter(ev, tx, 'd') {
-        s.perform(Intent::Split("vertical"), tx);
-    } else if m.alt
-        && ctrl(ev)
-        && !m.shift
-        && matches!(ev.key, Key::Left | Key::Right | Key::Up | Key::Down)
-    {
-        let direction = match ev.key {
-            Key::Left => "left",
-            Key::Right => "right",
-            Key::Up => "up",
-            _ => "down",
-        };
-        s.request("session.focus_direction", json!({"direction":direction}));
-    } else if ctrl(ev) && !m.shift && matches!(ev.key, Key::PageUp | Key::PageDown) {
-        let method = if ev.key == Key::PageUp {
-            "session.focus_previous_window"
-        } else {
-            "session.focus_next_window"
-        };
-        s.request(method, json!({}));
-    } else if m.shift && !ctrl(ev) && matches!(ev.key, Key::PageUp | Key::PageDown) {
-        let lines = if ev.key == Key::PageUp { -20 } else { 20 };
-        if let Some(term) = s.active_terminal_mut() {
-            term.send(Command::Scroll(lines));
-        }
-    } else {
-        return false;
+    let context = Context {
+        host: s.hosts[s.active].id,
+        session: s.model().selected.clone(),
+        pane: s.focused_block(),
+        panel: s.panel.is_some(),
+        focus: tx.focused().map(str::to_owned),
+        generation: s.keymap_generation,
+        server_revision: s.model().keymap_revision,
+        connected: s.model().connected,
+    };
+    if s.bindings.context.as_ref() != Some(&context) {
+        s.bindings.sequence.clear();
+        s.bindings.context = Some(context);
     }
-    true
+    let model = &s.hosts[s.active].model;
+    let snapshot = model
+        .keymap
+        .as_ref()
+        .filter(|k| model.connected && k.generation == s.keymap_generation);
+    let server_actions = snapshot.map(|k| k.reply.actions.as_slice()).unwrap_or(&[]);
+    let map = model
+        .keymap
+        .as_ref()
+        .filter(|k| model.connected && k.generation == s.keymap_generation)
+        .map(|k| &k.resolved)
+        .unwrap_or(&s.local_keymap);
+    let step = s.bindings.sequence.advance(map, input, |i| {
+        let binding = &map.bindings[i].binding;
+        match actions::classify(binding, server_actions) {
+            actions::Kind::Local(spec) => !global_only || spec.global(),
+            actions::Kind::Forward | actions::Kind::Server { .. } => {
+                !global_only && model.connected
+            }
+            actions::Kind::Skip => false,
+        }
+    });
+    match step {
+        Step::None => false,
+        Step::Pending => {
+            s.bindings.consumed.insert(identity, true);
+            true
+        }
+        Step::Run { index, sequence } => {
+            let binding = map.bindings[index].binding.clone();
+            match actions::classify(&binding, server_actions) {
+                actions::Kind::Local(spec) => {
+                    s.bindings
+                        .consumed
+                        .insert(identity, sequence || !spec.repeats());
+                    actions::run(
+                        s,
+                        &binding.action,
+                        binding.args.as_ref().unwrap_or(&serde_json::Value::Null),
+                        tx,
+                    )
+                }
+                actions::Kind::Forward => {
+                    if sequence {
+                        // Suppress held-tail repeats after completing the sequence.
+                        // forward() still records the press in forwarded, so its release
+                        // reaches client.key even though this identity is consumed.
+                        s.bindings.consumed.insert(identity, true);
+                    }
+                    let prefix = binding.keys[..binding.keys.len() - 1].to_vec();
+                    forward(s, ev, tx, prefix)
+                }
+                actions::Kind::Server { repeats } => {
+                    s.bindings.consumed.insert(identity, sequence || !repeats);
+                    let mut request = rexrs::api::client::Action::new(binding.action).origin("key");
+                    request.args = binding.args;
+                    request.session_id = s.model().selected.clone();
+                    if request.session_id.is_some() {
+                        request.block_id = s.focused_block();
+                    }
+                    s.send(
+                        s.active,
+                        rex_linux::connection::HostCommand::Action {
+                            generation: s.keymap_generation,
+                            request: Box::new(request),
+                        },
+                    );
+                    true
+                }
+                actions::Kind::Skip => false,
+            }
+        }
+    }
 }
 
 /// Keys a list popup (switcher, Commands, host step, pane menu) takes, from its field or root.
 pub fn list_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
-    if zoom_key(s, ev, tx) {
+    if global_key(s, ev, tx) {
         return true;
     }
     if s.panel.as_ref().is_some_and(|p| p.rename.is_some()) {
@@ -235,7 +177,7 @@ pub fn list_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
 /// Keys a terminal's search field takes: Enter selects the next older match and Shift+Enter
 /// the next newer one; Escape closes the search.
 pub fn search_key(s: &mut Workspace, key: &(HostId, String), ev: &KeyEvent, tx: &mut Tx) -> bool {
-    if zoom_key(s, ev, tx) {
+    if global_key(s, ev, tx) {
         return true;
     }
     match ev.key {
@@ -256,19 +198,18 @@ pub fn rename_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
         Key::Enter => s.finish_rename(true),
         Key::Escape => s.finish_rename(false),
         Key::Tab | Key::Up | Key::Down => {}
-        _ => return zoom_key(s, ev, tx),
+        _ => return global_key(s, ev, tx),
     }
     true
 }
 
 pub fn on_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
-    if zoom_key(s, ev, tx) {
-        return true;
-    }
-    let code = tx.physical_key();
     if let Some(panel) = &s.panel {
         if panel.is_list() && tx.focused().is_none() {
             return list_key(s, ev, tx);
+        }
+        if global_key(s, ev, tx) {
+            return true;
         }
         if ev.key == Key::Escape && tx.focused().is_none() {
             s.cancel_panel(tx);
@@ -276,13 +217,18 @@ pub fn on_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
         }
         return false;
     }
-    if shortcut(s, ev, tx) {
+    if dispatch(s, ev, tx, false) {
         return true;
     }
+    forward(s, ev, tx, Vec::new())
+}
+
+fn forward(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx, prefix: Vec<String>) -> bool {
     if tx.focused().is_some() {
-        // A control the pointer focused (rare: controls blur after their press) keeps its key.
+        // Both unbound keys and explicit forward bindings return focus to the terminal.
         tx.blur();
     }
+    let code = tx.physical_key();
     let action = if tx.key_repeat() {
         Action::Repeat
     } else {
@@ -297,10 +243,23 @@ pub fn on_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
     term.clear_selection();
     if let Some(payload) = keys::payload(ev, code, base, action) {
-        term.send(Command::Key(payload));
-        if let Some(code) = code {
-            s.forwarded.insert(code);
-        }
+        term.send(if prefix.is_empty() {
+            Command::Key(payload)
+        } else {
+            Command::KeyWithPrefix {
+                key: payload,
+                prefix,
+            }
+        });
+        s.forwarded.insert(
+            Input {
+                event: ev,
+                code,
+                base,
+                repeat: false,
+            }
+            .identity(),
+        );
     }
     true
 }
@@ -308,14 +267,19 @@ pub fn on_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
 /// A release reaches the PTY only when its press did: keys a shortcut, popup or field took
 /// keep their releases local, even when the popup closed in between.
 pub fn on_key_up(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
-    let Some(code) = tx.physical_key() else {
-        return false;
-    };
-    if !s.forwarded.remove(&code) {
-        return s.panel.is_none();
-    }
-    let code = Some(code);
+    let code = tx.physical_key();
     let base = tx.key_base();
+    let identity = Input {
+        event: ev,
+        code,
+        base,
+        repeat: false,
+    }
+    .identity();
+    let consumed = s.bindings.consumed.remove(&identity).is_some();
+    if !s.forwarded.remove(&identity) {
+        return consumed || s.panel.is_none();
+    }
     if let Some(term) = s.active_terminal_mut()
         && term.status().live
         && let Some(payload) = keys::payload(ev, code, base, Action::Release)

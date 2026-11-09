@@ -13,6 +13,11 @@ dependency graph sees a single `rune`.
 
 ## Changes
 
+- `Runtime::physical_key_input` is public so Rex's headless tests can inject the native
+  physical/logical pair, base character, repeat and release without scripts or private
+  runtime access. No dispatch behavior changes. `src/app/physical_input_tests.rs` checks
+  base/code/modifier delivery, repeat reporting and release routing through this API.
+
 Rex draws its own window controls in a borderless window. At this revision a borderless
 Linux window cannot minimize, maximize from a button, edge-resize or open the window
 manager's menu. The patch adds the following without changing existing behavior on macOS:

@@ -148,30 +148,135 @@ The SSH user is the login on that machine, which is also the user whose Rex serv
 
 ## Keyboard shortcuts
 
-Global tab navigation uses cached tab order without enabling extra prefetch: a session whose view is not loaded is one stop, and selecting it loads its tabs. Crossing sessions or hosts settles after 150 ms without another cycle, coalescing fast repeats rather than attaching each intermediate session. The first stop can attach before key repeat begins. During settling there is no target preview, and typing still goes to the displayed pane. Back/Forward history is local to this window and survives reconnects; unavailable targets are skipped. Commands also exposes these navigation actions. Bindings are not configurable yet; Ctrl Tab is currently reserved by this client, including in Kitty-aware editors.
+Global tab navigation uses cached tab order without enabling extra prefetch: a session whose view is not loaded is one stop, and selecting it loads its tabs. Crossing sessions or hosts settles after 150 ms without another cycle, coalescing fast repeats rather than attaching each intermediate session. The first stop can attach before key repeat begins. During settling there is no target preview, and typing still goes to the displayed pane. Back/Forward history is local to this window and survives reconnects; unavailable targets are skipped. Commands also exposes these navigation actions. Ctrl Tab is a client default; remove it (see recipes) to pass it to editors such as Neovim.
 
-| Shortcut | Action |
-| --- | --- |
-| Ctrl K | Search sessions across saved hosts |
-| Ctrl Shift P | Search commands, sessions and current-session tabs |
-| Ctrl Shift N / T | New session on the active host / new tab |
-| Ctrl Shift D / Ctrl Alt D | Split right / down |
-| Ctrl Tab / Ctrl Shift Tab | Next / previous tab across connected hosts and sessions, in sidebar order (wraps) |
-| Ctrl PageUp / PageDown | Previous / next tab within the current session (server-controlled, no wrap) |
-| Mouse Back / Forward | Revisit tabs, sessions and hosts in navigation history |
-| Ctrl Alt arrows | Focus an adjacent pane (Alt arrows reach terminal programs) |
-| Ctrl Shift Enter | Zoom / restore the focused pane |
-| Ctrl Shift Space | Focused-pane actions |
-| Ctrl Shift W | Close the focused pane, or the tab when it has one pane (asks first) |
-| Ctrl , | Settings |
-| Ctrl Shift B | Collapse / restore the sidebar |
-| Ctrl Shift C / V | Copy selection / paste text (bracketed-paste aware), or upload copied files or an image |
-| Ctrl Shift F | Search the focused terminal's screen and scrollback |
-| Ctrl Shift R | Resume the focused terminal's data stream |
-| Shift PageUp / PageDown, wheel | Scroll local history |
-| Ctrl + / Ctrl − / Ctrl 0 | Enlarge / shrink / reset the whole interface |
+| Shortcut | Behavior | Action (and args where required) |
+| --- | --- | --- |
+| Ctrl K | Search sessions across saved hosts | `session.switch` |
+| Ctrl Shift P | Search commands, sessions and current-session tabs | `client.palette.toggle` |
+| Ctrl Shift N / T | New session on the active host / new tab | `session.new` / `client.tab.new` |
+| Ctrl Shift D / Ctrl Alt D | Split right / down | `pane.split`, `{"direction":"right"}` / `{"direction":"down"}` |
+| Ctrl Tab / Ctrl Shift Tab | Next / previous tab across connected hosts and sessions, in sidebar order (wraps) | `client.tab.next_global` / `client.tab.previous_global` |
+| Ctrl PageUp / PageDown | Previous / next tab within the current session (server-controlled, no wrap) | `client.tab.previous` / `client.tab.next` |
+| Mouse Back / Forward | Revisit tabs, sessions and hosts in navigation history | `client.history.back` / `client.history.forward` |
+| Ctrl Alt arrows | Focus an adjacent pane (Alt arrows reach terminal programs) | `pane.focus`, `{"direction":"left"}` (or `right`, `up`, `down`) |
+| Ctrl Shift Enter | Zoom / restore the focused pane | `pane.zoom` |
+| Ctrl Shift Space | Focused-pane actions | `pane.actions` |
+| Ctrl Shift W | Close the focused pane, or the tab when it has one pane (asks first) | `client.close` |
+| Ctrl , | Settings | `client.settings` |
+| Ctrl Shift B | Collapse / restore the sidebar | `client.sidebar.toggle` |
+| Ctrl Shift C / V | Copy selection / paste text (bracketed-paste aware), or upload copied files or an image | `pane.copy` / `pane.paste` |
+| Ctrl Shift F | Search the focused terminal's screen and scrollback | `client.search` |
+| Ctrl Shift R | Resume the focused terminal's data stream | `pane.reconnect` |
+| Shift PageUp / PageDown, wheel | Scroll local history | `pane.scroll`, `{"lines":-20}` / `{"lines":20}` (wheel is pointer input) |
+| Ctrl + / Ctrl − / Ctrl 0 | Enlarge / shrink / reset the whole interface | `client.zoom.in` / `client.zoom.out` / `client.zoom.reset` |
 
-These chords are reserved by the client and do not reach terminal programs; every other key goes to the focused pane. Interface zoom changes in 10% steps (70–150%), is saved as `ui_scale`, and is independent of the terminal font size. `Ctrl =` and the numpad `+`/`−` also work.
+These are the client defaults; bound chords do not reach terminal programs, and every other key goes to the focused pane. Interface zoom changes in 10% steps (70–150%), is saved as `ui_scale`, and is independent of the terminal font size. `Ctrl =` and the numpad `+`/`−` also work.
+
+The following actions have no default key binding:
+
+| Action | Args schema | Behavior |
+| --- | --- | --- |
+| `client.tab.goto` | `{"index": integer >= 1}` | Focus the 1-based tab in the current session |
+| `client.tab.close` | None | Confirm closing the current tab |
+| `client.tab.rename` | None | Open the current tab's rename dialog |
+| `session.rename` | None | Open the current session's rename dialog |
+| `pane.close` | None | Confirm closing the focused pane |
+| `pane.send_key` | `{"key": "single chord"}` | Send a synthesizable key directly to the PTY, bypassing Lua bindings |
+
+Omit `args` for actions with no arguments (an empty object also works).
+For argument-taking actions, supply exactly the required field: `pane.split`
+accepts `direction` = `right` or `down`; `pane.focus` also accepts `left` and
+`up`; `pane.scroll` takes a signed 32-bit integer `lines` (negative scrolls up).
+`pane.send_key` takes a single supported chord, not a sequence; for example
+`{"key":"ctrl+b"}`.
+
+### Configuring shortcuts
+
+For the default workspace, edit `$XDG_CONFIG_HOME/rex-linux/shortcuts.json` (normally
+`~/.config/rex-linux/shortcuts.json`). With a custom `--config /path/demo.json`,
+edit `/path/demo.shortcuts.json`. The app never writes this file, except for the
+one-time import of custom bindings from nivox's legacy `keybindings` field.
+
+The preferred format is an object; a bare array also works. A missing, empty or
+whitespace-only file means no overrides. Bad entries are skipped; invalid JSON
+uses defaults and appears in Settings → Shortcuts → Problems.
+
+```json
+{
+  "shortcuts": [
+    {"keys": "ctrl+b>c", "action": "client.tab.new"},
+    {"keys": "ctrl+tab", "action": null},
+    {"keys": "ctrl+shift+tab", "action": null}
+  ]
+}
+```
+
+Layers run lowest to highest: **Linux defaults → each server’s Rex config → client overrides**.
+The app sends its defaults, override layer and action registry to `client.keymap`;
+`rex.bind`, `rex.unbind`, Lua-function sequences and config-file actions participate
+in the same resolution. The active host’s map is used—not a union of hosts.
+When that host is offline, has not answered, or rejects the keymap request, local
+defaults plus overrides work instead. A keymap error never disconnects the host;
+Settings → Shortcuts retains its explanation. Config changes refresh by hash and
+server instance, and every reconnect registers again.
+
+Later entries win; `null` frees those exact keys for the terminal. Hand edits reload
+when the window regains focus or Settings opens, gated by file mtime and length.
+`cmd`/`super` means Super, not Ctrl. Physical keys use W3C names such as
+`ctrl+[KeyT]`; sequences use `>`, Escape cancels, and a failed tail goes to the
+terminal without retrying it as a new shortcut. Non-ASCII bindings such as
+`ctrl+é` work in the client but are not readable by the server's parser, like the
+client-only `ctrl++` extension. Ordinary terminal keys still use `client.key`.
+
+Server action calls use a dedicated 35-second timeout (Rex allows an action 30 seconds).
+The host's control loop is serial: later input and control commands queue behind a
+running action. Failed or timed-out input is never replayed automatically. Known
+returned client actions are performed once, in order; unknown names are ignored.
+No cross-server `servers` list is advertised. A returned action whose original
+host, session, pane or local keymap generation is no longer current is skipped
+with an informational notice rather than applied to a different target.
+
+Settings → Shortcuts shows effective keycaps, “then” between sequence steps,
+sources, persistent Problems and both config paths. Commands shows the highest
+binding for each action and argument set, or no shortcut when unbound. Only
+settings-source diagnostic sets toast, once per distinct set per host; file and
+default-layer diagnostics stay in Problems. A pending sequence shows `Ctrl B …`
+in the toolbar. Host/pane/session/focus/map changes and opening a dialog cancel it.
+
+Only popup navigation/editing keys and Escape cancelling a sequence stay reserved;
+zoom is global (including fields), but it is still rebindable. Hold-to-repeat works
+for zoom, pane focus/scroll, within-session tab navigation (Ctrl PageUp/PageDown)
+and global tab cycling. Other completed shortcuts and
+prefix repeats are suppressed, and releases only reach terminals when presses did.
+
+#### More recipes
+
+```json
+{
+  "shortcuts": [
+    {"keys":"ctrl+shift+t", "action":null},
+    {"keys":"ctrl+b>c", "action":"client.tab.new"},
+    {"keys":"ctrl+b>shift+5", "action":"pane.split", "args":{"direction":"right"}},
+    {"keys":"ctrl+b>ctrl+b", "action":"pane.send_key", "args":{"key":"ctrl+b"}},
+    {"keys":"ctrl+1", "action":"client.tab.goto", "args":{"index":1}}
+  ]
+}
+```
+
+`pane.send_key` is the explicit escape hatch through `block.event` (press and
+release); normal keys and forwarded Lua sequences use `client.key`, with the
+server’s original prefix spellings. Action arguments are checked before dispatch.
+Keys accept modifier aliases, named keys, F1–F12, W3C physical codes and `>` sequences.
+Letters follow the keyboard layout, with physical US-position fallbacks on
+non-Latin layouts; Shift stays a modifier instead of being folded into the key.
+Key modes, a recording editor, server actions in Commands, pane-resize bindings
+and `client_perform_requested` handling are not implemented in this phase.
+
+The parser, sequence machine, action-registry structure and repeat suppression
+adapt Andrea Zito ([nivox](https://github.com/nivox))’s `8037d78` work. Importing a
+legacy `keybindings` field drops copied defaults, writes only custom entries once,
+and reports a move only when at least one custom entry remains.
 
 Double-click selects a word (including shell paths), and triple-click selects a line. Selection stays attached to terminal content as history or output scrolls; dragging above or below the grid autoscrolls. Hold Shift to select locally or scroll local history when a fullscreen TUI owns the mouse. Without Shift, ordinary TUI mouse reporting is unchanged.
 
@@ -194,6 +299,12 @@ cargo run --locked --no-default-features --bin rex-workspace-probe
 ```
 
 With mise, `mise run test`, `fmt`, `clippy` and `test-rexrs` run the first three commands and the vendored SDK tests; `mise run check` runs them all.
+
+`python3 scripts/keymap-acceptance.py` checks layered bindings, native sequences,
+Lua forwarding, queued client actions, file/server reload, removals and the
+send-key escape hatch on its own disposable Rex server and Xvfb display. It uses
+`target/release/rex-linux` unless `REX_BIN` selects another build, and preserves
+logs/captures in the printed temporary directory.
 
 The `scripts/` directory holds integration checks; each script's docstring lists its requirements (Xvfb, xdotool, a `rex` binary, `wayland-info`, …). Some use the configured Rex server rather than starting their own: point them at a disposable server you control. Wayland checks use the running compositor; X11 checks use an isolated display.
 

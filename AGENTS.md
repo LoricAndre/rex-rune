@@ -50,7 +50,7 @@ Some probes and Python scripts in `scripts/` connect to the configured Rex serve
 - Terminal content, colours and split geometry are server-owned. The client may *declare* a terminal theme through Rex's `terminal.set_theme`, which the server applies when this client owns the block or no client does, and otherwise defers until this client becomes the owner (the same rule as resize). The client never recolours terminal output locally or invents layout.
 - Ordinary attachment must never start, stop or reconfigure a Rex server, and must never create or destroy a session. Creation is always an explicit user action.
 - Failed input is never replayed automatically; a transport failure pauses affected panes.
-- Workspace shortcuts are reserved by the client; keep every other key flowing to the focused terminal, including key releases only when their press was sent.
+- Effective workspace shortcuts consume their keys, but every binding is removable or replaceable. Keep ordinary keys flowing through `client.key`, including releases only when their press was sent. Only explicit `pane.send_key` uses `block.event` to bypass Lua bindings.
 - Terminal content never animates; chrome motion uses the springs in `theme.rs`.
 - UI changes should follow [DESIGN.md](DESIGN.md). Prefer verifying them in a rendered build (for example with Rune's `-- --snap out.png`) rather than by reading code.
 - Add tests for protocol and state-machine changes; headless UI tests in `src/app/tests.rs` cover focus and dialog behavior.

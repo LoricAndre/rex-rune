@@ -297,6 +297,25 @@ pub fn toolbar(s: &Workspace) -> El {
         ))
         .child(identity(s))
         .child(if s.sidebar_tabs() { el() } else { tab_track(s) })
+        .child(match s.bindings.sequence.label(s.effective_keymap()) {
+            Some(label) => chip(
+                el().key("pending-sequence")
+                    .h(28.)
+                    .max_w(170.)
+                    .px(8.)
+                    .center_y()
+                    .help(format!(
+                        "{label} — waiting for the next key; Escape cancels"
+                    ))
+                    .child(
+                        text(format!("{label} …"))
+                            .font(medium(11.5))
+                            .color(rgb(ink()))
+                            .truncate(),
+                    ),
+            ),
+            None => el(),
+        })
         // Always at least 48pt of window to drag, outside the tabs.
         .child(el().key("title-drag").grow(1.).min_w(48.).h_full())
         .child(

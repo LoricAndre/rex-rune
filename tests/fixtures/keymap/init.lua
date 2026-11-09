@@ -1,0 +1,13 @@
+-- Disposable Phase 6 fixture; never load into a user's server.
+rex.bind("ctrl+k", "client.settings")
+rex.bind("ctrl+b>c", "client.tab.new")
+rex.bind("ctrl+b>x", function(ctx, ev) return true end)
+rex.bind("ctrl+l", function(ctx, ev) return true end)
+rex.bind("ctrl+[KeyT]", "client.tab.new")
+rex.bind("ctrl+m", "client.mac.only")
+rex.unbind("ctrl+r")
+rex.bind("ctrl+b>z", "client.mac.only")
+rex.bind("super+u", "client.settings")
+rex.bind("meta+i", "client.settings")
+rex.bind("opt+o", "client.settings")
+rex.bind("command+h", "client.settings")

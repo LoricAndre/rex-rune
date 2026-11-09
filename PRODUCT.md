@@ -15,11 +15,13 @@ Native Linux desktop (Wayland and X11). Rust, [Rune](https://github.com/anomalyc
 - **Hosts → sessions → tabs.** Saved hosts contain sessions; a session's Rex windows are tabs and its splits are the server's. Navigation must stay useful with a dozen or more sessions across several hosts.
 - **Compact and calm.** One toolbar, rounded pane cards on a flat dark ground. Popups and highlights animate; terminal content never does.
 - **Safe by default.** Closing a pane or tab names what will end and defaults to **Keep running**. A transport failure pauses input rather than queueing it.
-- **Keyboard first.** Workspace shortcuts are reserved by the client; every other key reaches the focused terminal.
+- **Keyboard first.** Workspace shortcuts are rebindable/removable through a user-owned file and Rex’s layered keymap. The active host’s effective map drives dispatch, Settings and Commands; offline defaults still work. Ordinary keys retain Rex’s Lua handling through `client.key`.
 
 ## Capabilities
 
 Saved hosts, sessions, tabs, authoritative splits, snapshot restoration, live output, input, mouse reporting, reconnect and resume. Terminal search covers the screen and scrollback. API revisions 10 and 11 are supported; older servers are refused rather than carried along while Rex is in alpha. Bootstrap bundles the initial terminal tickets; live streams and data resume take priority over new snapshots. On revision 11, files dropped on a pane or pasted are uploaded to the terminal's machine and their paths typed into it. Program activity (OSC 7501) marks tabs and, for tabs out of view, sends desktop notifications. Settings can set up Rex's skill and hooks for coding agents on this machine through the local `rex skill` command, previewing every change.
+
+Shortcuts use Linux defaults, each host’s Rex config and separate client overrides, in that order. Settings explains effective sources and problems without writing the override file. Sequences show their pending prefix and never leak consumed prefixes to programs; only explicit `pane.send_key` bypasses Lua key bindings. Server-side actions execute on their host, and queued known client actions run once on the UI thread.
 
 ## Out of scope for now
 

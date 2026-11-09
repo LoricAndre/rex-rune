@@ -10,62 +10,6 @@ use rex_linux::settings::{NoticePosition, NotificationsConfig};
 use rune::{Cursor, El, ScrollSpec, Tx, col, el, row, text};
 use rune_kit::{IconButton, Keybind, SegmentedControl, Switch};
 
-/// A chord's keys and what it does.
-type Shortcut = (&'static [&'static str], &'static str);
-
-/// Every workspace shortcut, grouped as Settings → Shortcuts lists them.
-const SHORTCUTS: &[(&str, &[Shortcut])] = &[
-    (
-        "Navigate",
-        &[
-            (&["Ctrl", "K"], "Switch session"),
-            (&["Ctrl", "Shift", "P"], "Commands"),
-            (&["Ctrl", ","], "Settings"),
-            (&["Ctrl", "Tab"], "Next tab across sessions and hosts"),
-            (
-                &["Ctrl", "Shift", "Tab"],
-                "Previous tab across sessions and hosts",
-            ),
-            (&["Ctrl", "PageUp"], "Previous tab in this session"),
-            (&["Ctrl", "PageDown"], "Next tab in this session"),
-            (&["Mouse", "Back / Forward"], "Navigation history"),
-            (&["Ctrl", "Alt", "Arrows"], "Move pane focus"),
-            (&["Ctrl", "Shift", "B"], "Toggle sidebar"),
-        ],
-    ),
-    (
-        "Create and close",
-        &[
-            (&["Ctrl", "Shift", "N"], "New session"),
-            (&["Ctrl", "Shift", "T"], "New tab"),
-            (&["Ctrl", "Shift", "D"], "Split right"),
-            (&["Ctrl", "Alt", "D"], "Split down"),
-            (&["Ctrl", "Shift", "W"], "Close pane or tab"),
-        ],
-    ),
-    (
-        "Panes",
-        &[
-            (&["Ctrl", "Shift", "Enter"], "Zoom pane"),
-            (&["Ctrl", "Shift", "Space"], "Pane actions"),
-            (&["Ctrl", "Shift", "R"], "Resume terminal"),
-        ],
-    ),
-    (
-        "Text and view",
-        &[
-            (&["Ctrl", "Shift", "C"], "Copy"),
-            (&["Ctrl", "Shift", "V"], "Paste"),
-            (&["Ctrl", "Shift", "F"], "Search terminal"),
-            (&["Shift", "PageUp"], "Scroll history up"),
-            (&["Shift", "PageDown"], "Scroll history down"),
-            (&["Ctrl", "+"], "Enlarge interface"),
-            (&["Ctrl", "−"], "Shrink interface"),
-            (&["Ctrl", "0"], "Reset interface zoom"),
-        ],
-    ),
-];
-
 /// A labelled setting: name and optional explanation on the left, its control on the right.
 pub(super) fn setting(label: &str, detail: &str, control: El) -> El {
     let mut words = col()
@@ -488,24 +432,234 @@ fn hosts(s: &Workspace) -> El {
     )
 }
 
-fn shortcuts() -> El {
+/// Presentation only: preserve dispatch priority within each action/argument group.
+struct ShortcutRow<'a> {
+    binding: &'a rex_linux::keymap::ResolvedBinding,
+    also_numpad: bool,
+    arrows: bool,
+}
+
+fn shortcut_rows<'a>(
+    effective: &[&'a rex_linux::keymap::ResolvedBinding],
+    category: &str,
+) -> Vec<ShortcutRow<'a>> {
+    use super::actions::{SPECS, find};
+    use rex_linux::keymap::Key;
+
+    let mut list: Vec<_> = effective
+        .iter()
+        .copied()
+        .filter(|b| {
+            find(&b.binding.action)
+                .map(|a| a.category())
+                .unwrap_or("Server")
+                == category
+        })
+        .collect();
+    list.sort_by_cached_key(|b| {
+        (
+            SPECS
+                .iter()
+                .position(|s| s.name == b.binding.action)
+                .unwrap_or(SPECS.len()),
+            b.binding.action.clone(),
+            b.binding
+                .args
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+        )
+    });
+    let default_focus = |b: &&rex_linux::keymap::ResolvedBinding, direction: &str| {
+        b.binding.action == "pane.focus"
+            && b.binding.source.as_deref() == Some("linux")
+            && b.binding.keys == [format!("ctrl+alt+{direction}")]
+            && b.binding.args == Some(serde_json::json!({"direction": direction}))
+    };
+    let arrows = ["left", "right", "up", "down"]
+        .iter()
+        .all(|d| list.iter().any(|b| default_focus(b, d)));
+    let mut rows: Vec<_> = list
+        .iter()
+        .map(|b| ShortcutRow {
+            binding: b,
+            also_numpad: false,
+            arrows: false,
+        })
+        .collect();
+    let mut hidden = std::collections::HashSet::new();
+    for (i, b) in list.iter().enumerate() {
+        if arrows
+            && ["left", "right", "up", "down"]
+                .iter()
+                .any(|d| default_focus(b, d))
+        {
+            if default_focus(b, "down") {
+                rows[i].arrows = true;
+            } else {
+                hidden.insert(i);
+            }
+        }
+        let Some([chord]) = b.chords.as_deref() else {
+            continue;
+        };
+        let Key::Physical(code) = &chord.key else {
+            continue;
+        };
+        let equivalent = match *code {
+            "NumpadAdd" => '+',
+            "NumpadSubtract" => '-',
+            "Numpad0" => '0',
+            _ => continue,
+        };
+        if let Some(j) = list.iter().position(|other| {
+            other.binding.action == b.binding.action
+                && other.binding.args == b.binding.args
+                && other.binding.source == b.binding.source
+                && other.chords.as_deref().is_some_and(|chords| matches!(chords,
+                    [other] if other.modifiers == chord.modifiers && other.key == Key::Character(equivalent)))
+        }) {
+            rows[j].also_numpad = true;
+            hidden.insert(i);
+        }
+    }
+    rows.into_iter()
+        .enumerate()
+        .filter_map(|(i, row)| (!hidden.contains(&i)).then_some(row))
+        .collect()
+}
+
+fn shortcuts(s: &Workspace) -> El {
     let k = kit();
     let mut body = col().gap(4.);
-    for (name, list) in SHORTCUTS {
+    let effective = s.effective_bindings();
+    for name in [
+        "Navigate",
+        "Create and close",
+        "Panes",
+        "Text and view",
+        "Interface",
+        "Server",
+    ] {
+        let list = shortcut_rows(&effective, name);
+        if list.is_empty() {
+            continue;
+        }
         body = body.child(group(name));
-        for (keys, label) in *list {
+        for (index, display) in list.iter().enumerate() {
+            let binding = display.binding;
+            let mut caps = col().gap(3.);
+            for (depth, chord) in binding.chords.as_ref().unwrap().iter().enumerate() {
+                if depth > 0 {
+                    caps = caps.child(text("then").font(ui(10.5)).color(rgb(muted())));
+                }
+                let names = if display.arrows {
+                    vec!["Ctrl".into(), "Alt".into(), "Arrows".into()]
+                } else {
+                    chord.keycaps()
+                };
+                let keys: Vec<_> = names.iter().map(String::as_str).collect();
+                caps = caps.child(Keybind::new(&keys).build(k));
+            }
+            if display.also_numpad {
+                caps = caps.child(text("also numpad").font(ui(10.5)).color(rgb(muted())));
+            }
+            let source = match binding.binding.source.as_deref() {
+                Some("linux") => None,
+                Some("settings") => Some("shortcuts.json"),
+                Some(source) => Some(source),
+                None => Some("Server"),
+            };
+            let mut words = col().grow(1.).min_w(0.).gap(2.).child(
+                text(if display.arrows {
+                    "Focus adjacent pane".into()
+                } else {
+                    super::actions::binding_title(&binding.binding)
+                })
+                .font(ui(12.5))
+                .color(rgb(ink()))
+                .wrap(),
+            );
+            if let Some(source) = source {
+                words = words.child(text(source).font(ui(10.5)).color(rgb(muted())).wrap());
+            }
             body = body.child(
                 row()
-                    .h(30.)
+                    .key(format!("shortcut-{name}-{index}"))
+                    .min_h(38.)
+                    .py(3.)
                     .gap(12.)
                     .center_y()
-                    .child(el().w(190.).child(Keybind::new(keys).build(k)))
-                    .child(text(*label).font(ui(12.5)).color(rgb(ink()))),
+                    .child(el().w(190.).child(caps))
+                    .child(words),
             );
         }
     }
+    body = body.child(group("Pointer")).child(
+        row()
+            .min_h(30.)
+            .gap(12.)
+            .center_y()
+            .child(
+                el().w(190.)
+                    .child(Keybind::new(&["Mouse", "Back / Forward"]).build(k)),
+            )
+            .child(text("Navigation history").font(ui(12.5)).color(rgb(ink()))),
+    );
+    let diagnostics = &s.effective_keymap().diagnostics;
+    if !diagnostics.is_empty() || s.model().keymap_error.is_some() {
+        body = body.child(group("Problems"));
+        if let Some(error) = &s.model().keymap_error {
+            body = body.child(text(error).font(ui(11.5)).color(rgb(warning())).wrap());
+        }
+        for (index, problem) in diagnostics.iter().enumerate() {
+            body = body.child(
+                text(format!(
+                    "{}: {}",
+                    problem.source.as_deref().unwrap_or("keymap"),
+                    problem.message
+                ))
+                .key(format!("shortcut-problem-{index}"))
+                .font(ui(11.5))
+                .color(rgb(warning()))
+                .wrap(),
+            );
+        }
+    }
+    body = body.child(group("Files"));
+    if let Some(snapshot) = s.keymap_snapshot() {
+        body = body.child(
+            text(format!(
+                "Server: {}{}",
+                snapshot.reply.config.path,
+                if snapshot.reply.config.exists {
+                    ""
+                } else {
+                    " (not created)"
+                }
+            ))
+            .key("server-shortcuts-path")
+            .font(ui(11.5))
+            .color(rgb(muted()))
+            .selectable(true)
+            .wrap(),
+        );
+    }
+    body = body.child(
+        text(
+            rex_linux::settings::shortcuts::Shortcuts::path(&s.settings_path)
+                .display()
+                .to_string(),
+        )
+        .key("shortcuts-path")
+        .font(ui(11.5))
+        .color(rgb(muted()))
+        .selectable(true)
+        .wrap()
+        .mt(12.),
+    );
     body.child(
-        text("These are reserved by Rex; every other key goes to the focused terminal.")
+        text("Edit the overrides file, then return to Rex to reload. Escape cancels a sequence; unbound keys reach the terminal.")
             .font(ui(11.5))
             .color(rgb(muted()))
             .wrap()
@@ -572,7 +726,7 @@ pub fn settings(s: &Workspace, viewport: [f32; 2]) -> El {
         SettingsSection::Notifications => notifications(s),
         SettingsSection::Integrations => super::integrations::section(s),
         SettingsSection::Hosts => hosts(s),
-        SettingsSection::Shortcuts => shortcuts(),
+        SettingsSection::Shortcuts => shortcuts(s),
     };
     let content = col()
         .grow(1.)
@@ -613,4 +767,87 @@ pub fn settings(s: &Workspace, viewport: [f32; 2]) -> El {
             .child(el().w(1.).h_full().fill(white(0.06)))
             .child(content),
     )
+}
+
+#[cfg(test)]
+mod shortcut_tests {
+    use super::*;
+    use crate::app::actions;
+    use rex_linux::keymap::Overrides;
+    use serde_json::json;
+
+    #[test]
+    fn defaults_are_compact_and_in_registry_order() {
+        let map = actions::resolve(&Overrides::default());
+        let effective = actions::effective(&map, &[]);
+        let panes = shortcut_rows(&effective, "Panes");
+        let focus: Vec<_> = panes
+            .iter()
+            .filter(|r| r.binding.binding.action == "pane.focus")
+            .collect();
+        assert_eq!(focus.len(), 1);
+        assert!(focus[0].arrows);
+        let interface = shortcut_rows(&effective, "Interface");
+        assert_eq!(interface.iter().filter(|r| r.also_numpad).count(), 3);
+        assert!(
+            !interface
+                .iter()
+                .any(|r| r.binding.binding.keys[0].contains("Numpad"))
+        );
+        for category in [
+            "Navigate",
+            "Create and close",
+            "Panes",
+            "Text and view",
+            "Interface",
+        ] {
+            let rows = shortcut_rows(&effective, category);
+            let positions: Vec<_> = rows
+                .iter()
+                .map(|r| {
+                    actions::SPECS
+                        .iter()
+                        .position(|s| s.name == r.binding.binding.action)
+                        .unwrap()
+                })
+                .collect();
+            assert!(positions.windows(2).all(|w| w[0] <= w[1]));
+        }
+        let scroll: Vec<_> = effective
+            .iter()
+            .filter(|b| b.binding.action == "pane.scroll")
+            .map(|b| actions::binding_title(&b.binding))
+            .collect();
+        assert!(scroll.contains(&"Scroll up · 20 lines".into()));
+        assert!(scroll.contains(&"Scroll down · 20 lines".into()));
+    }
+
+    #[test]
+    fn custom_focus_is_not_folded_and_try_order_is_retained() {
+        let map = actions::resolve(&Overrides::parse(&json!([
+            {"keys":"ctrl+alt+left","action":"pane.focus","args":{"direction":"right"}},
+            {"keys":"ctrl+j","action":"client.tab.new"},
+            {"keys":"ctrl+y","action":"client.tab.new"},
+            {"keys":"ctrl+[Numpad0]","action":"client.zoom.in"}
+        ])));
+        let effective = actions::effective(&map, &[]);
+        assert!(shortcut_rows(&effective, "Panes").iter().all(|r| !r.arrows));
+        let expected: Vec<_> = effective
+            .iter()
+            .filter(|b| b.binding.action == "client.tab.new")
+            .map(|b| &b.binding.keys)
+            .collect();
+        let rows = shortcut_rows(&effective, "Create and close");
+        let actual: Vec<_> = rows
+            .iter()
+            .filter(|r| r.binding.binding.action == "client.tab.new")
+            .map(|r| &r.binding.binding.keys)
+            .collect();
+        assert_eq!(actual, expected);
+        assert!(
+            shortcut_rows(&effective, "Interface")
+                .iter()
+                .any(|r| r.binding.binding.keys == ["ctrl+[Numpad0]"] && !r.also_numpad)
+        );
+    }
 }

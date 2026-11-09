@@ -1,5 +1,7 @@
 //! Headless focus and key-routing checks on Rune's runtime (no server: the one host is a
 //! socket that does not exist).
+#[path = "bindings_integration_tests.rs"]
+mod bindings_integration_tests;
 #[path = "navigation_tests.rs"]
 mod navigation_tests;
 use super::{
@@ -1139,6 +1141,45 @@ fn forms_focus_their_first_field_and_settings_start_on_its_section_list() {
     press(&mut rt, Key::Enter);
     assert_eq!(rt.state.settings.font_size, font + 1.);
     std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn invalid_shortcuts_start_with_one_notice_and_a_persistent_settings_problem() {
+    let mut ws = workspace();
+    let directory = ws.settings_path.with_extension("shortcuts-test");
+    std::fs::create_dir_all(&directory).unwrap();
+    ws.settings_path = directory.join("workspace.json");
+    ws.settings.save(&ws.settings_path).unwrap();
+    let shortcuts = rex_linux::settings::shortcuts::Shortcuts::path(&ws.settings_path);
+    std::fs::write(&shortcuts, "[broken").unwrap();
+    let mut ws = relaunch(&ws);
+    assert_eq!(
+        ws.notices
+            .iter()
+            .filter(|n| n.text.contains("using default shortcuts"))
+            .count(),
+        1
+    );
+    assert!(ws.settings.shortcut_file.notice.is_none());
+    ws.notices.clear();
+    ws.perform(Intent::Settings, &mut rune::Tx::default());
+    let mut rt = runtime(ws);
+    click(&mut rt, "settings-section:shortcuts");
+    assert!(has(&rt, "shortcut-problem-0"));
+    let elements = rt.elements();
+    let problem = elements
+        .iter()
+        .find(|e| e.key.as_deref() == Some("shortcut-problem-0"))
+        .unwrap();
+    assert!(problem.text.as_deref().unwrap().contains("Invalid JSON"));
+    let path = elements
+        .iter()
+        .find(|e| e.key.as_deref() == Some("shortcuts-path"))
+        .unwrap();
+    assert_eq!(path.text.as_deref(), Some(shortcuts.to_str().unwrap()));
+    rt.state.settings.save(&rt.state.settings_path).unwrap();
+    assert_eq!(std::fs::read_to_string(shortcuts).unwrap(), "[broken");
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]
@@ -3650,10 +3691,20 @@ fn ctrl_shift_f_searches_the_focused_terminal_without_typing_into_it() {
     assert_eq!(sent(), ["key"]);
 
     // The shortcut runs a named action, which bindings can run by its name.
-    assert_eq!(super::input::SEARCH, "client.search");
+    assert_eq!(super::actions::SEARCH, "client.search");
     rt.update(|s, tx| {
-        assert!(!super::input::run_action(s, "client.nothing", tx));
-        assert!(super::input::run_action(s, super::input::SEARCH, tx));
+        assert!(!super::actions::run(
+            s,
+            "client.nothing",
+            &serde_json::Value::Null,
+            tx
+        ));
+        assert!(super::actions::run(
+            s,
+            super::actions::SEARCH,
+            &serde_json::Value::Null,
+            tx
+        ));
     });
     rt.frame(1. / 60.);
     assert!(

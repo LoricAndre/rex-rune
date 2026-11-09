@@ -55,7 +55,7 @@ fn form(s: &Workspace, form: &Form) -> El {
                 .placeholder(placeholder.clone())
                 .on_edit(move |s: &mut Workspace| s.edit_input(i))
                 .build(k)
-                .on_key(super::input::zoom_key)
+                .on_key(super::input::global_key)
                 .key(format!("field:{i}")),
         );
     }

@@ -1,0 +1,235 @@
+//! Layout-aware matching and sequence/repeat state, adapted from Andrea Zito
+//! (nivox), 8037d78. Input is plain data: no Tx or workspace needed by the matcher.
+use rex_linux::keymap::{Chord, Key as BindingKey, Modifiers, Resolved};
+use rune::{Key, KeyEvent, PhysicalKeyCode as Code};
+
+#[derive(Clone, Copy)]
+pub struct Input<'a> {
+    pub event: &'a KeyEvent,
+    pub code: Option<Code>,
+    pub base: Option<char>,
+    pub repeat: bool,
+}
+
+/// Identity survives modifier release; logical-only drivers have no physical code.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Identity {
+    Physical(Code),
+    Logical(String),
+}
+impl Input<'_> {
+    pub fn identity(&self) -> Identity {
+        self.code.map(Identity::Physical).unwrap_or_else(|| {
+            Identity::Logical(match &self.event.key {
+                Key::Text(t) => t.to_lowercase(),
+                Key::Command(c) => c.to_lowercase().to_string(),
+                other => format!("{other:?}"),
+            })
+        })
+    }
+}
+
+fn us_character(code: Code) -> Option<char> {
+    let name = format!("{code:?}");
+    if let Some(letter) = name.strip_prefix("Key").filter(|s| s.len() == 1) {
+        return letter.chars().next().map(|c| c.to_ascii_lowercase());
+    }
+    if let Some(digit) = name.strip_prefix("Digit").filter(|s| s.len() == 1) {
+        return digit.chars().next();
+    }
+    Some(match code {
+        Code::Comma => ',',
+        Code::Period => '.',
+        Code::Slash => '/',
+        Code::Backslash => '\\',
+        Code::Semicolon => ';',
+        Code::Quote => '\'',
+        Code::BracketLeft => '[',
+        Code::BracketRight => ']',
+        Code::Backquote => '`',
+        Code::Minus => '-',
+        Code::Equal => '=',
+        Code::Space => ' ',
+        _ => return None,
+    })
+}
+
+fn character(key: &Key) -> Option<char> {
+    match key {
+        Key::Command(c) => Some(*c),
+        Key::Text(t) if t.chars().count() == 1 => t.chars().next(),
+        _ => None,
+    }
+}
+
+pub fn matches(chord: &Chord, input: Input<'_>) -> bool {
+    let m = input.event.mods;
+    let mods = Modifiers {
+        ctrl: m.ctrl || m.cmd,
+        alt: m.alt,
+        shift: m.shift,
+        logo: m.logo,
+    };
+    if chord.modifiers != mods {
+        return false;
+    }
+    match &chord.key {
+        BindingKey::Physical(name) => input.code.is_some_and(|code| {
+            let code = match code {
+                Code::SuperLeft => "MetaLeft".into(),
+                Code::SuperRight => "MetaRight".into(),
+                code => format!("{code:?}"),
+            };
+            code == *name
+        }),
+        BindingKey::Character(wanted) => {
+            let typed = character(&input.event.key);
+            let logical = input.base.or(typed);
+            if logical.is_some_and(|c| c.eq_ignore_ascii_case(wanted)) {
+                return true;
+            }
+            match logical {
+                Some(c) if c.is_ascii_alphanumeric() || c.is_ascii_punctuation() || c == ' ' => {
+                    c.eq_ignore_ascii_case(wanted)
+                        // Without a base, a shifted symbol still has its physical unshifted
+                        // spelling. Do not use this for letters: Dvorak stays logical.
+                        || (input.base.is_none() && m.shift && c.is_ascii_punctuation()
+                            && input.code.and_then(us_character) == Some(*wanted))
+                }
+                _ => input.code.and_then(us_character) == Some(*wanted),
+            }
+        }
+        BindingKey::Named(wanted) => {
+            let name = match &input.event.key {
+                Key::Enter => "enter",
+                Key::Escape => "escape",
+                Key::Tab => "tab",
+                Key::Backspace => "backspace",
+                Key::Delete => "delete",
+                Key::Left => "left",
+                Key::Right => "right",
+                Key::Up => "up",
+                Key::Down => "down",
+                Key::Home => "home",
+                Key::End => "end",
+                Key::PageUp => "pageup",
+                Key::PageDown => "pagedown",
+                Key::Function(n) => return *wanted == format!("f{n}"),
+                key if character(key) == Some(' ') => "space",
+                _ => return false,
+            };
+            name == *wanted
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct Sequence {
+    candidates: Vec<usize>,
+    pub depth: usize,
+}
+#[derive(Debug, PartialEq)]
+pub enum Step {
+    None,
+    Pending,
+    Run { index: usize, sequence: bool },
+}
+impl Sequence {
+    pub fn label(&self, map: &Resolved) -> Option<String> {
+        if self.depth == 0 {
+            return None;
+        }
+        let chords = map
+            .bindings
+            .get(*self.candidates.first()?)?
+            .chords
+            .as_ref()?;
+        Some(
+            chords
+                .iter()
+                .take(self.depth)
+                .map(|c| c.keycaps().join(" "))
+                .collect::<Vec<_>>()
+                .join(", "),
+        )
+    }
+
+    pub fn clear(&mut self) {
+        self.candidates.clear();
+        self.depth = 0;
+    }
+
+    /// Map is already in try order. Availability must include action kind, args and
+    /// panel/global restrictions. Failed tails are never retried as fresh shortcuts.
+    pub fn advance(
+        &mut self,
+        map: &Resolved,
+        input: Input<'_>,
+        available: impl Fn(usize) -> bool,
+    ) -> Step {
+        let depth = self.depth;
+        if depth > 0 && matches!(input.event.key, Key::Modifier { .. }) {
+            return Step::Pending;
+        }
+        if depth > 0 && input.event.key == Key::Escape {
+            self.clear();
+            return Step::Pending;
+        }
+        let indices: Vec<_> = if depth == 0 {
+            (0..map.bindings.len()).collect()
+        } else {
+            self.candidates.clone()
+        };
+        let matching: Vec<_> = indices
+            .into_iter()
+            .filter(|&i| {
+                available(i)
+                    && map.bindings[i]
+                        .chords
+                        .as_ref()
+                        .and_then(|c| c.get(depth))
+                        .is_some_and(|c| matches(c, input))
+            })
+            .collect();
+        let Some(&first) = matching.first() else {
+            self.clear();
+            return Step::None;
+        };
+        if map.bindings[first].binding.keys.len() == depth + 1 {
+            self.clear();
+            return Step::Run {
+                index: first,
+                sequence: depth > 0,
+            };
+        }
+        self.depth += 1;
+        self.candidates = matching
+            .into_iter()
+            .filter(|&i| map.bindings[i].binding.keys.len() > self.depth)
+            .collect();
+        Step::Pending
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Context {
+    pub host: super::workspace::HostId,
+    pub session: Option<String>,
+    pub pane: Option<String>,
+    pub panel: bool,
+    pub focus: Option<String>,
+    pub generation: u64,
+    pub server_revision: u64,
+    pub connected: bool,
+}
+
+#[derive(Default)]
+pub struct State {
+    pub sequence: Sequence,
+    pub context: Option<Context>,
+    /// Consumed presses, even repeating actions, keep releases local.
+    pub consumed: std::collections::HashMap<Identity, bool>,
+}
+
+#[cfg(test)]
+mod tests;

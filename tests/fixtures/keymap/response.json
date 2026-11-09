@@ -1,0 +1,220 @@
+{
+  "bindings": [
+    {
+      "action": "client.settings",
+      "keys": [
+        "ctrl+x"
+      ],
+      "source": "settings"
+    },
+    {
+      "action": "client.tab.new",
+      "keys": [
+        "ctrl+x",
+        "y"
+      ],
+      "source": "settings"
+    },
+    {
+      "action": "client.settings",
+      "keys": [
+        "ctrl+b",
+        "d"
+      ],
+      "source": "settings"
+    },
+    {
+      "action": "client.settings",
+      "keys": [
+        "ctrl+k"
+      ],
+      "source": "settings"
+    },
+    {
+      "action": "client.tab.new",
+      "keys": [
+        "ctrl+k"
+      ],
+      "source": "settings"
+    },
+    {
+      "action": "client.settings",
+      "keys": [
+        "cmd+h"
+      ],
+      "source": "init.lua:13"
+    },
+    {
+      "action": "client.settings",
+      "keys": [
+        "alt+o"
+      ],
+      "source": "init.lua:12"
+    },
+    {
+      "action": "client.settings",
+      "keys": [
+        "cmd+i"
+      ],
+      "source": "init.lua:11"
+    },
+    {
+      "action": "client.settings",
+      "keys": [
+        "cmd+u"
+      ],
+      "source": "init.lua:10"
+    },
+    {
+      "action": "client.mac.only",
+      "keys": [
+        "ctrl+b",
+        "z"
+      ],
+      "source": "init.lua:9"
+    },
+    {
+      "action": "client.mac.only",
+      "keys": [
+        "ctrl+m"
+      ],
+      "source": "init.lua:7"
+    },
+    {
+      "action": "client.tab.new",
+      "keys": [
+        "ctrl+[KeyT]"
+      ],
+      "source": "init.lua:6"
+    },
+    {
+      "action": "client.key.forward",
+      "keys": [
+        "ctrl+l"
+      ],
+      "source": "init.lua:5"
+    },
+    {
+      "action": "client.key.forward",
+      "keys": [
+        "ctrl+b",
+        "x"
+      ],
+      "source": "init.lua:4"
+    },
+    {
+      "action": "client.tab.new",
+      "keys": [
+        "ctrl+b",
+        "c"
+      ],
+      "source": "init.lua:3"
+    },
+    {
+      "action": "client.settings",
+      "keys": [
+        "ctrl+k"
+      ],
+      "source": "init.lua:2"
+    },
+    {
+      "action": "client.settings",
+      "keys": [
+        "ctrl+j"
+      ],
+      "source": "linux"
+    },
+    {
+      "action": "client.tab.new",
+      "keys": [
+        "ctrl+j"
+      ],
+      "source": "linux"
+    },
+    {
+      "action": "client.settings",
+      "keys": [
+        "ctrl+FutureKey"
+      ],
+      "source": "linux"
+    },
+    {
+      "action": "client.settings",
+      "keys": [
+        "ctrl+pageup"
+      ],
+      "source": "linux"
+    },
+    {
+      "action": "client.settings",
+      "keys": [
+        "ctrl+alt+shift+cmd+k"
+      ],
+      "source": "linux"
+    },
+    {
+      "action": "client.zoom.in",
+      "keys": [
+        "ctrl++"
+      ],
+      "source": "linux"
+    },
+    {
+      "action": "client.palette.toggle",
+      "keys": [
+        "ctrl+b"
+      ],
+      "source": "linux"
+    },
+    {
+      "action": "client.palette.toggle",
+      "keys": [
+        "ctrl+k"
+      ],
+      "source": "linux"
+    }
+  ],
+  "config": {
+    "exists": true,
+    "generation": 1,
+    "hash": "4805092390b8b83816152c00aea0475debaa89e15a41212f55cb9fd4cadf85e5",
+    "instance_id": "22ccfbd6-b0c6-4187-ac2a-1a1b6a5ffbe2",
+    "path": "/tmp/rex-keymap-mph461bk/init.lua"
+  },
+  "diagnostics": [
+    {
+      "action": "client.mac.only",
+      "key": "ctrl+m",
+      "message": "unknown action \"client.mac.only\"",
+      "severity": "warning",
+      "source": "init.lua:7"
+    },
+    {
+      "action": "client.mac.only",
+      "key": "ctrl+b z",
+      "message": "unknown action \"client.mac.only\"",
+      "severity": "warning",
+      "source": "init.lua:9"
+    },
+    {
+      "key": "ctrl+q",
+      "message": "nothing is bound to \"ctrl+q\"",
+      "severity": "warning",
+      "source": "settings"
+    },
+    {
+      "action": "client.tab.new",
+      "key": "ctrl+x y",
+      "message": "key sequence \"ctrl+x y\" (settings) cannot start, because \"ctrl+x\" is bound to \"client.settings\" above it (settings)",
+      "severity": "warning",
+      "source": "settings"
+    },
+    {
+      "action": "client.palette.toggle",
+      "key": "ctrl+b",
+      "message": "\"ctrl+b\" (linux) cannot fire, because key sequence \"ctrl+b d\" is bound above it (settings)",
+      "severity": "warning",
+      "source": "linux"
+    }
+  ]
+}

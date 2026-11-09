@@ -1,0 +1,128 @@
+{
+  "actions": [
+    {
+      "name": "client.tab.new",
+      "kind": "client"
+    },
+    {
+      "name": "client.settings",
+      "kind": "client"
+    },
+    {
+      "name": "client.palette.toggle",
+      "kind": "client"
+    },
+    {
+      "name": "client.zoom.in",
+      "kind": "client"
+    }
+  ],
+  "server_actions": "configured",
+  "defaults": [
+    {
+      "name": "linux",
+      "bindings": [
+        {
+          "keys": [
+            "Control+SHIFT+T"
+          ],
+          "action": "client.tab.new"
+        },
+        {
+          "keys": [
+            "ctrl+k"
+          ],
+          "action": "client.palette.toggle"
+        },
+        {
+          "keys": [
+            "ctrl+r"
+          ],
+          "action": "client.settings"
+        },
+        {
+          "keys": [
+            "ctrl+b"
+          ],
+          "action": "client.palette.toggle"
+        },
+        {
+          "keys": [
+            "ctrl++"
+          ],
+          "action": "client.zoom.in"
+        },
+        {
+          "keys": [
+            "WIN+Alt+Shift+Control+K"
+          ],
+          "action": "client.settings"
+        },
+        {
+          "keys": [
+            "ctrl+PageUp"
+          ],
+          "action": "client.settings"
+        },
+        {
+          "keys": [
+            "ctrl+FutureKey"
+          ],
+          "action": "client.settings"
+        },
+        {
+          "keys": [
+            "ctrl+j"
+          ],
+          "action": "client.tab.new"
+        },
+        {
+          "keys": [
+            "ctrl+j"
+          ],
+          "action": "client.settings"
+        }
+      ]
+    }
+  ],
+  "overrides": [
+    {
+      "name": "settings",
+      "bindings": [
+        {
+          "keys": [
+            "ctrl+k"
+          ],
+          "action": "client.tab.new"
+        },
+        {
+          "keys": [
+            "ctrl+k"
+          ],
+          "action": "client.settings"
+        },
+        {
+          "keys": [
+            "ctrl+b",
+            "d"
+          ],
+          "action": "client.settings"
+        },
+        {"keys":["ctrl+x","y"],"action":"client.tab.new"},
+        {"keys":["ctrl+x"],"action":"client.settings"}
+      ],
+      "removals": [
+        {
+          "keys": [
+            "ctrl+shift+t"
+          ]
+        },
+        {
+          "keys": [
+            "ctrl+q"
+          ]
+        }
+      ]
+    }
+  ]
+}

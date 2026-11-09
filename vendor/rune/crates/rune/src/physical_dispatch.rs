@@ -36,9 +36,10 @@ impl<S: 'static> Runtime<S> {
             PhysicalInput::Key { mods, .. } => self.held_mods = *mods,
         }
     }
-    /// Queue a key press with its physical code and logical key, as a native host sends them
-    /// (a script's `{"type": "key", "code": …}`), and its `Tx::key_base`.
-    pub(crate) fn physical_key_input(&mut self, event: PhysicalInput, key: KeyEvent, base: Option<char>) {
+    /// Queue a key press or release with its physical code, logical key and unmodified
+    /// character (`Tx::key_base`), as a native host sends them. Public for headless drivers
+    /// that need layout, repeat and release fidelity; uses the same routing as native input.
+    pub fn physical_key_input(&mut self, event: PhysicalInput, key: KeyEvent, base: Option<char>) {
         self.observe_mods(&event);
         self.physical_then(event, Some(key), base, None);
     }

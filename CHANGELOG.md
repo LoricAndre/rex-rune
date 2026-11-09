@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Bindings in a host's Rex config now take effect in this client.
+
+- Configurable workspace shortcuts on Rex’s `client.keymap`: Linux defaults, per-host config bindings and separate user-owned override files; sequences, layout-aware logical/physical matching, repeat suppression, removable Ctrl Tab, Lua forwarding and server actions. Settings shows effective keycaps, sources and Problems; Commands follows rebinding, and a toolbar chip shows pending sequences. Known `client.action` replies run once on the UI thread; actions use a dedicated 35-second timeout. Legacy nivox custom bindings import once, without copying defaults. Adapted from [Andrea Zito (nivox)](https://github.com/nivox)’s `8037d78` parser, sequence, registry and repeat work. (@nivox)
+
 - Ctrl Tab and Ctrl Shift Tab cycle across connected hosts and sessions in sidebar order. Mouse Back/Forward and Commands revisit window-local history, including across reconnects. Global navigation keeps sidebar-only prefetch and briefly settles cross-session cycling before attachment; Ctrl PageUp/PageDown still use the server's current-session navigation. Adapted from [Joe Goldin](https://github.com/joegoldin)'s global-navigation work. (@joegoldin)
 
 Several of these come from [Lily](https://github.com/kitten-lily)'s fork ([kitten-lily/rex-rune](https://github.com/kitten-lily/rex-rune)); thank you.

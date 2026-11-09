@@ -1,0 +1,144 @@
+{
+  "keybindings": [
+    {
+      "key": "ctrl+k",
+      "action": "session.switch"
+    },
+    {
+      "key": "ctrl+shift+p",
+      "action": "client.commands"
+    },
+    {
+      "key": "ctrl+,",
+      "action": "client.settings"
+    },
+    {
+      "key": "ctrl+shift+b",
+      "action": "client.sidebar.toggle"
+    },
+    {
+      "key": "ctrl+shift+n",
+      "action": "session.new"
+    },
+    {
+      "key": "ctrl+shift+t",
+      "action": "client.tab.new"
+    },
+    {
+      "key": "ctrl+shift+w",
+      "action": "pane.close"
+    },
+    {
+      "key": "ctrl+shift+enter",
+      "action": "pane.zoom"
+    },
+    {
+      "key": "ctrl+shift+space",
+      "action": "pane.actions"
+    },
+    {
+      "key": "ctrl+shift+c",
+      "action": "pane.copy"
+    },
+    {
+      "key": "ctrl+shift+v",
+      "action": "pane.paste"
+    },
+    {
+      "key": "ctrl+shift+r",
+      "action": "pane.reconnect"
+    },
+    {
+      "key": "ctrl+pageup",
+      "action": "client.tab.previous"
+    },
+    {
+      "key": "ctrl+pagedown",
+      "action": "client.tab.next"
+    },
+    {
+      "key": "ctrl+=",
+      "action": "client.zoom.in"
+    },
+    {
+      "key": "ctrl+shift+=",
+      "action": "client.zoom.in"
+    },
+    {
+      "key": "ctrl+-",
+      "action": "client.zoom.out"
+    },
+    {
+      "key": "ctrl+0",
+      "action": "client.zoom.reset"
+    },
+    {
+      "key": "ctrl+[NumpadAdd]",
+      "action": "client.zoom.in"
+    },
+    {
+      "key": "ctrl+[NumpadSubtract]",
+      "action": "client.zoom.out"
+    },
+    {
+      "key": "ctrl+[Numpad0]",
+      "action": "client.zoom.reset"
+    },
+    {
+      "key": "ctrl+shift+d",
+      "action": "pane.split",
+      "args": {
+        "direction": "right"
+      }
+    },
+    {
+      "key": "ctrl+alt+d",
+      "action": "pane.split",
+      "args": {
+        "direction": "down"
+      }
+    },
+    {
+      "key": "ctrl+alt+left",
+      "action": "pane.focus",
+      "args": {
+        "direction": "left"
+      }
+    },
+    {
+      "key": "ctrl+alt+right",
+      "action": "pane.focus",
+      "args": {
+        "direction": "right"
+      }
+    },
+    {
+      "key": "ctrl+alt+up",
+      "action": "pane.focus",
+      "args": {
+        "direction": "up"
+      }
+    },
+    {
+      "key": "ctrl+alt+down",
+      "action": "pane.focus",
+      "args": {
+        "direction": "down"
+      }
+    },
+    {
+      "key": "shift+pageup",
+      "action": "pane.scroll",
+      "args": {
+        "lines": -20
+      }
+    },
+    {
+      "key": "shift+pagedown",
+      "action": "pane.scroll",
+      "args": {
+        "lines": 20
+      }
+    }
+  ]
+}

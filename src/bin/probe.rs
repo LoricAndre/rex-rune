@@ -67,6 +67,23 @@ async fn run() -> Result<()> {
             "wrong negotiated API revision"
         );
     }
+    if let Ok(directory) = std::env::var("REX_KEYMAP_CAPTURE") {
+        ensure!(revision == 11, "keymap fixtures require API revision 11");
+        ensure!(
+            std::env::var("REX_SERVER").as_deref() == Ok(endpoint.as_str()),
+            "keymap capture requires REX_SERVER to equal the explicit disposable endpoint"
+        );
+        let request: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/keymap/request.json"))?;
+        let reply = control.call_raw("client.keymap", request).await?;
+        std::fs::write(
+            std::path::Path::new(&directory).join("response.json"),
+            serde_json::to_string_pretty(&reply)? + "\n",
+        )?;
+        control.close().await?;
+        println!("PASS captured revision-11 client.keymap reply in {directory}");
+        return Ok(());
+    }
     println!("PASS negotiated API revision {revision}");
     let created = control
         .call(
