@@ -20,7 +20,8 @@ pub struct Pending {
     pub id: u64,
     pub deadline: Instant,
     pub dispatch_at: Option<Instant>,
-    origin: Option<Visit>,
+    /// The exact history occurrence to restore, remapped together with the cursor.
+    origin: usize,
 }
 
 #[derive(Default)]
@@ -51,21 +52,13 @@ impl History {
         self.cursor = self.entries.len() - 1;
     }
 
-    fn origin(&self) -> Option<Visit> {
-        self.pending.as_ref().map_or_else(
-            || self.entries.get(self.cursor).cloned(),
-            |p| p.origin.clone(),
-        )
+    fn origin(&self) -> usize {
+        self.pending.as_ref().map_or(self.cursor, |p| p.origin)
     }
 
     pub fn cancel(&mut self) {
-        if let Some(pending) = self.pending.take()
-            && let Some(index) = self
-                .entries
-                .iter()
-                .position(|v| Some(v) == pending.origin.as_ref())
-        {
-            self.cursor = index;
+        if let Some(pending) = self.pending.take() {
+            self.cursor = pending.origin;
         }
     }
 
@@ -74,8 +67,10 @@ impl History {
             self.cancel();
         }
         let old = self.cursor;
+        let old_origin = self.origin();
         let mut kept = Vec::new();
         let mut cursor = 0;
+        let mut origin = 0;
         for (index, entry) in self.entries.drain(..).enumerate() {
             if valid(&entry) {
                 if kept.last() != Some(&entry) {
@@ -84,10 +79,16 @@ impl History {
                 if index <= old {
                     cursor = kept.len() - 1;
                 }
+                if index <= old_origin {
+                    origin = kept.len() - 1;
+                }
             }
         }
         self.entries = kept;
         self.cursor = cursor;
+        if let Some(pending) = &mut self.pending {
+            pending.origin = origin;
+        }
     }
 
     fn step(&mut self, direction: isize) -> Option<Visit> {
@@ -112,13 +113,19 @@ impl Workspace {
 
     pub fn observe_navigation(&mut self) {
         let hosts = &self.hosts;
-        // Views are a cache, emptied on reconnect. Only the session list says that a
-        // session is gone; a closed window is skipped lazily when replaying history.
+        // Sessions establish validity even when reconnect empties the view cache.
+        // A loaded view also lets us prune closed windows and dedupe their neighbours.
         self.navigation.retain(|v| {
-            hosts
-                .iter()
-                .find(|h| h.id == v.host)
-                .is_some_and(|h| h.model.sessions.iter().any(|s| s.session_id == v.session))
+            hosts.iter().find(|h| h.id == v.host).is_some_and(|h| {
+                h.model.sessions.iter().any(|s| s.session_id == v.session)
+                    && v.window.as_ref().is_none_or(|window| {
+                        h.model.views.get(&v.session).is_none_or(|view| {
+                            view.windows
+                                .iter()
+                                .any(|w| w.window_id.as_ref() == Some(window))
+                        })
+                    })
+            })
         });
         if let Some(pending) = &self.navigation.pending {
             let result = hosts
@@ -127,7 +134,9 @@ impl Workspace {
                 .and_then(|h| h.model.navigation_result);
             match result {
                 Some((id, false)) if id == pending.id => self.cancel_navigation(),
-                Some((id, true)) if id == pending.id => {}
+                // The worker refreshed the view before reporting completion. Even if
+                // focus moved meanwhile, this request is finished, not waiting to time out.
+                Some((id, true)) if id == pending.id => self.navigation.pending = None,
                 // Neither an unrelated notice nor a stale view acknowledges our request.
                 _ => return,
             }
@@ -164,7 +173,11 @@ impl Workspace {
     fn cancel_navigation(&mut self) {
         // A failed cross-host replay must return to its origin, not record the target
         // host's previously selected tab and truncate Forward as if we visited it.
-        let origin = self.navigation.origin();
+        let origin = self
+            .navigation
+            .entries
+            .get(self.navigation.origin())
+            .cloned();
         self.navigation.cancel();
         if let Some(host) = origin.and_then(|v| self.host_index(v.host))
             && host != self.active
@@ -194,7 +207,7 @@ impl Workspace {
         self.begin_navigation(visit, origin, false, tx);
     }
 
-    fn begin_navigation(&mut self, visit: Visit, origin: Option<Visit>, defer: bool, tx: &mut Tx) {
+    fn begin_navigation(&mut self, visit: Visit, origin: usize, defer: bool, tx: &mut Tx) {
         self.navigation.serial += 1;
         let now = Instant::now();
         self.navigation.pending = Some(Pending {
@@ -226,6 +239,16 @@ impl Workspace {
         self.drag = None;
         self.settings.hosts[host].collapsed = false;
         self.update_visibility();
+        if !self.hosts[host].model.connected {
+            // An explicit offline selection is a preference for the next bootstrap,
+            // not a focus request to reject and bounce back from. Preserve Select's
+            // reconnect behaviour; don't queue an old window focus for replay.
+            self.navigation.cancel();
+            self.send(host, HostCommand::Select(visit.session));
+            self.save();
+            self.update_title(tx);
+            return;
+        }
         if self.hosts[host]
             .connection
             .commands
@@ -250,6 +273,12 @@ impl Workspace {
         }
         self.observe_navigation();
         let origin = self.navigation.origin();
+        let current = self
+            .navigation
+            .pending
+            .as_ref()
+            .map(|p| p.visit.clone())
+            .or_else(|| self.current_visit());
         let cursor = self.navigation.cursor;
         while let Some(visit) = self.navigation.step(direction) {
             let valid = self
@@ -266,7 +295,7 @@ impl Workspace {
                             })
                         })
                 });
-            if valid {
+            if valid && Some(&visit) != current.as_ref() {
                 self.begin_navigation(visit, origin, false, tx);
                 return;
             }
@@ -370,7 +399,7 @@ mod tests {
             id: 1,
             deadline: Instant::now() + TIMEOUT,
             dispatch_at: None,
-            origin: Some(visit("c")),
+            origin: 2,
         });
         h.observe(visit("c"));
         assert!(h.pending.is_some());
@@ -399,6 +428,30 @@ mod tests {
         assert_eq!(h.entries.len(), 128);
         assert_eq!(h.cursor, 127);
     }
+    #[test]
+    fn retain_remaps_the_pending_origin_as_well_as_the_cursor() {
+        for origin in 0..5 {
+            for cursor in 0..5 {
+                let mut h = History::default();
+                for id in ["a", "gone", "a", "b", "c"] {
+                    h.observe(visit(id));
+                }
+                h.cursor = cursor;
+                h.pending = Some(Pending {
+                    visit: visit("c"),
+                    id: 1,
+                    deadline: Instant::now() + TIMEOUT,
+                    dispatch_at: None,
+                    origin,
+                });
+                h.retain(|v| v.window.as_deref() != Some("gone"));
+                assert_eq!(h.cursor, [0, 0, 0, 1, 2][cursor]);
+                h.cancel();
+                assert_eq!(h.cursor, [0, 0, 0, 1, 2][origin]);
+            }
+        }
+    }
+
     #[test]
     fn retain_deduplicates_and_remaps_every_cursor_position() {
         for cursor in 0..5 {

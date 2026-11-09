@@ -308,6 +308,7 @@ impl Workspace {
         if self.settings.hosts.len() <= 1 || index >= self.hosts.len() {
             return;
         }
+        self.navigation.cancel();
         let state = self.hosts.remove(index);
         self.forget_host(state);
         let host = self.settings.hosts.remove(index);
@@ -1071,6 +1072,7 @@ impl Workspace {
         if !self.hosts[host].model.connected {
             return;
         }
+        self.navigation.cancel();
         if self.panel.is_some() {
             self.close_panel(tx);
         }

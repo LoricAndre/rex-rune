@@ -1,6 +1,8 @@
 //! joegoldin's navigation checks and the evaluator's three scratch regressions,
 //! with explicit correlated acknowledgements and a deterministic debounce clock.
 use super::*;
+#[path = "navigation_review_tests.rs"]
+mod review;
 use crate::app::input::{self, HISTORY_BACK, HISTORY_FORWARD, NEXT_GLOBAL, PREVIOUS_GLOBAL};
 use crate::app::navigation::Visit;
 use std::time::{Duration, Instant};
