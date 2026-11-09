@@ -93,6 +93,20 @@ try:
     def tabs():
         return len(view()["windows"])
 
+    def terminal_key(stroke, expected):
+        current = view()
+        focused = next(w for w in current["windows"]
+                       if w["window_id"] == current["active_window_id"])["focused_block_id"]
+        # Disambiguation makes modified Tab/T observable even when legacy encoding
+        # has no bytes for the chord. cat prints the actual Kitty event from the PTY.
+        desk.type(r"stty -ixon; printf '\033[>1u'; cat -vT")
+        desk.key("Return", stroke, "Return")
+        wait(lambda: expected in accept.terminal_text(sid, focused),
+             f"{stroke} did not reach the terminal as {expected}")
+        desk.key("ctrl+c")
+        desk.type(r"printf '\033[<u'")
+        desk.key("Return")
+
     def new_tab(strokes, description):
         before = tabs()
         desk.key(*strokes)
@@ -102,10 +116,9 @@ try:
     new_tab(["ctrl+j"], "config-file client action")
     new_tab(["ctrl+b", "c"], "config-file client sequence")
     count = tabs()
-    desk.key("ctrl+shift+t")
-    time.sleep(.4)
+    terminal_key("ctrl+shift+t", "^[[116;6u")
     assert tabs() == count, "server unbind did not remove default New tab"
-    print("PASS server unbind", flush=True)
+    print("PASS server unbind reaches terminal as Kitty Ctrl Shift T", flush=True)
     desk.key("ctrl+shift+l")
     wait(lambda: view()["label"] == "lua-direct", "Lua direct function was bypassed")
     desk.key("ctrl+x", "ctrl+s")
@@ -118,10 +131,9 @@ try:
     assert tabs() == count, "queued client action replayed"
 
     active = view()["active_window_id"]
-    desk.key("ctrl+Tab")
-    time.sleep(.4)
+    terminal_key("ctrl+Tab", "^[[9;5u")
     assert view()["active_window_id"] == active, "unbound Ctrl Tab still cycled"
-    print("PASS client override removes Ctrl Tab", flush=True)
+    print("PASS client override removes Ctrl Tab and reaches terminal as Kitty Ctrl Tab", flush=True)
 
     # Settings reloads a hand edit; preference saves must not overwrite it.
     contents = json.dumps({"shortcuts":[{"keys":"ctrl+q","action":"client.tab.new"},
