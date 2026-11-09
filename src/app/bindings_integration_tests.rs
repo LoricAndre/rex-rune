@@ -474,6 +474,37 @@ fn nonrepeating_logical_keys_and_consumed_release_survive_dialog_close() {
 }
 
 #[test]
+fn release_inside_settings_does_not_swallow_the_next_comma_hold() {
+    let (mut ws, _) = tabbed_workspace("single");
+    let (sender, sent) = flume::unbounded();
+    live_terminal(&mut ws, "block:a", &sender);
+    let mut rt = runtime(ws);
+    key(&mut rt, Code::Comma, ctrl(Key::Command(',')), true, false);
+    assert!(rt.state.panel.is_some());
+    key(&mut rt, Code::Comma, ctrl(Key::Command(',')), false, false);
+    rt.update(|s, tx| s.close_panel(tx));
+    rt.frame(0.);
+    for repeat in [false, true, true] {
+        key(
+            &mut rt,
+            Code::Comma,
+            KeyEvent {
+                key: Key::Text(",".into()),
+                mods: Mods::default(),
+            },
+            true,
+            repeat,
+        );
+    }
+    let keys = sent_keys(&sent);
+    assert_eq!(keys.len(), 3, "{keys:?}");
+    assert_eq!(keys[0]["action"], "press");
+    assert_eq!(keys[1]["action"], "repeat");
+    assert_eq!(keys[2]["action"], "repeat");
+    assert!(keys.iter().all(|k| k["key"] == "comma"));
+}
+
+#[test]
 fn repeating_pane_focus_and_context_changes() {
     let (mut ws, rx) = tabbed_workspace("single");
     overrides(

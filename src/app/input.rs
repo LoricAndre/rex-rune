@@ -36,6 +36,10 @@ fn dispatch(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx, global_only: bool) ->
         repeat: tx.key_repeat(),
     };
     let identity = input.identity();
+    // A modal may have taken the previous release; a fresh press starts a new hold.
+    if !input.repeat {
+        s.bindings.consumed.remove(&identity);
+    }
     if input.repeat && s.bindings.consumed.get(&identity) == Some(&true) {
         return true;
     }
