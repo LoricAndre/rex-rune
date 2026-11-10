@@ -19,6 +19,32 @@ pub fn shell_layout(shell: Option<&str>, theme: Option<&SetTheme>) -> Value {
     json!({"block": block})
 }
 
+/// Set the server-side starting directory of a new terminal, without changing shell or theme.
+/// A layout that is not a single block is left alone.
+pub fn with_cwd(layout: &mut Value, cwd: &str) {
+    if let Some(block) = layout.get_mut("block").filter(|b| b.is_object()) {
+        block["options"]["cwd"] = json!(cwd);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn with_cwd_keeps_the_shell_and_theme_and_leaves_splits_alone() {
+    let theme = SetTheme::new().background("#001528");
+    let mut layout = shell_layout(Some("zsh"), Some(&theme));
+    with_cwd(&mut layout, "/srv/app");
+    assert_eq!(
+        layout["block"]["options"],
+        json!({"shell":"zsh","theme":{"background":"#001528"},"cwd":"/srv/app"})
+    );
+    let mut bare = shell_layout(None, None);
+    with_cwd(&mut bare, "/srv/app");
+    assert_eq!(bare["block"]["options"], json!({"cwd":"/srv/app"}));
+    let mut split = json!({"split":{}});
+    with_cwd(&mut split, "/srv/app");
+    assert_eq!(split, json!({"split":{}}));
+}
+
 #[cfg(test)]
 #[test]
 fn shell_layout_sets_the_shell_and_theme_only_when_given() {

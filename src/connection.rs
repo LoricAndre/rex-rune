@@ -389,6 +389,13 @@ pub enum HostCommand {
         method: String,
         payload: Value,
     },
+    /// Explicit tab/split creation, inheriting the named source block's shell directory.
+    /// A failed or slow read leaves the server's default starting directory unchanged.
+    NewTerminal {
+        method: String,
+        payload: Value,
+        cwd_from: String,
+    },
     Terminal {
         session: String,
         block: String,
@@ -697,6 +704,15 @@ async fn request(control: &mut Client, method: &str, payload: Value) -> Result<V
             .await
             .context("Rex request timed out; action was not retried")??,
     )
+}
+
+/// Read on the server, not this machine or an OSC 7 cache. Bound the optional read so a
+/// missing/unsupported process query cannot hold up creation indefinitely.
+async fn shell_dir_of(control: &mut Client, session: &str, block: &str) -> Option<String> {
+    let method = format!("{}.process", activity::TERMINAL);
+    let args = json!({"session_id":session,"block_id":block,"args":{}});
+    let reply = tokio::time::timeout(Duration::from_secs(1), control.call_raw(&method, args));
+    activity::shell_dir(&reply.await.ok()?.ok()?)
 }
 
 async fn attach(
@@ -1663,6 +1679,23 @@ async fn handle_command(
                     result => result?,
                 }
             }
+        }
+        HostCommand::NewTerminal {
+            method,
+            mut payload,
+            cwd_from,
+        } => {
+            let session = payload["session_id"]
+                .as_str()
+                .context("new terminal session")?
+                .to_owned();
+            if let Some(dir) = shell_dir_of(control, &session, &cwd_from).await {
+                crate::layout::with_cwd(&mut payload["layout"], &dir);
+            }
+            // Creation is sent once. A failure follows the ordinary request path; never replay.
+            request(control, &method, payload).await?;
+            shared.update(|m| m.notice = None);
+            refresh(control, shared, state, &session).await?;
         }
         HostCommand::Ticket {
             session,

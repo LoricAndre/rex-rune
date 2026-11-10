@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- New tabs and splits start in the source pane's shell directory on its server, including shells that do not report OSC 7. Pane-menu splits use the pane the menu names. Missing or slow directory reads fall back to the server's default; new sessions are unchanged. Adapted from @kitten-lily.
+
 ## 0.4.1 - 2026-11-09
 
 ### Changed
