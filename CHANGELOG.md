@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Opt-in Remote control per saved host (off even locally), eight view-only client actions, explicit refusals with server-command alternatives, host/target/panel/typing guards, five-second stale-request limits and reconnect-scoped replies. Every performed request names its host and requester in a six-second in-app notice.
+- `session.select session_id=… [window_id=…]` shows a session on the requesting host, with acknowledgement, a five-second deadline and history integration. `client.tab.goto index=-1` selects the last tab. Checked live against private preview.14 servers, including a real SSH host.
+- A client label in Settings → Remote Hosts, defaulting to the hostname and sent in HELLO; edits apply after reopening.
+
 ## 0.4.2 - 2026-11-09
 
 ### Added

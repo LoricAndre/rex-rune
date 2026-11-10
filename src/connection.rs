@@ -83,6 +83,7 @@ fn parse_font_size(value: &str) -> std::result::Result<f32, String> {
 
 pub mod actions;
 pub mod keymap;
+pub mod perform;
 
 pub enum Command {
     Selection(crate::terminal::selection::Input),
@@ -188,6 +189,8 @@ pub struct HostModel {
     pub keymap_revision: u64,
     /// Taken once before cloning the worker model into the UI.
     pub client_actions: Vec<actions::Queued>,
+    pub performs: Vec<perform::Pending>,
+    pub connection_epoch: u64,
     pub protocol: ProtocolStats,
     pub sessions: Vec<session::Session>,
     pub selected: Option<String>,
@@ -357,6 +360,11 @@ impl HostModel {
 }
 
 pub enum HostCommand {
+    PerformReply {
+        epoch: u64,
+        call_id: String,
+        outcome: perform::Outcome,
+    },
     Keymap(Box<keymap::Declaration>),
     Action {
         generation: u64,
@@ -434,6 +442,8 @@ struct PendingTicket {
 
 #[derive(Default)]
 struct ControlState {
+    // Earliest possible arrival of events buffered during the preceding busy step.
+    performs_since: Option<Instant>,
     bootstrap_seq: u64,
     list_seq: u64,
     view_seq: HashMap<String, u64>,
@@ -656,6 +666,26 @@ impl HostConnection {
         // The terminal theme to declare; none declares nothing.
         theme: Option<SetTheme>,
     ) -> Self {
+        Self::spawn_labeled(
+            endpoint,
+            preferred,
+            create,
+            block,
+            visible,
+            theme,
+            crate::settings::hostname(),
+        )
+    }
+
+    pub fn spawn_labeled(
+        endpoint: String,
+        preferred: Option<String>,
+        create: Option<(String, Option<String>)>,
+        block: Option<String>,
+        visible: bool,
+        theme: Option<SetTheme>,
+        label: String,
+    ) -> Self {
         let model = Arc::new(Mutex::new(HostModel {
             visible,
             status: "Connecting…".into(),
@@ -673,6 +703,7 @@ impl HostConnection {
             create,
             block,
             theme,
+            label,
         };
         std::thread::Builder::new()
             .name("rex-host".into())
@@ -1080,29 +1111,7 @@ async fn handle_event(
     // This is a directed request, not a session update: even an unattached session or a
     // sequence below bootstrap's cutoff needs an answer on this same connection.
     if event.name == "client_perform_requested" {
-        if let Some(call_id) = event.payload["call_id"].as_str() {
-            let action = event.payload["action"].as_str().unwrap_or("unknown");
-            let reply = rexrs::api::client::Reply::new(call_id).error(
-                rexrs::api::client::ReplyError::new(
-                    "not_supported",
-                    format!("Rex Linux does not support remote client actions: {action}. Use Rex session, window and block commands to manage server state; use the app for interface actions."),
-                ),
-            );
-            match tokio::time::timeout(Duration::from_secs(8), control.call(reply)).await {
-                Ok(Ok(_)) => {}
-                Ok(Err(
-                    error @ (rexrs::Error::Transport(_)
-                    | rexrs::Error::Closed { .. }
-                    | rexrs::Error::Protocol(_)),
-                )) => {
-                    return Err(error.into());
-                }
-                Ok(Err(error)) => log::debug!("client.reply refusal failed: {error}"),
-                Err(error) => log::debug!("client.reply refusal timed out: {error}"),
-            }
-            // A failed refusal does not invalidate the connection. Never retry a reply.
-        }
-        return Ok(());
+        return perform::receive(control, shared, event.payload, state.performs_since).await;
     }
     // Config-wide events have no session sequence. Do not broaden includes().
     if event.name == "keymap_changed" {
@@ -1236,6 +1245,7 @@ async fn handle_event(
 
 /// What a host connection starts with.
 struct Startup {
+    label: String,
     preferred: Option<String>,
     create: Option<(String, Option<String>)>,
     block: Option<String>,
@@ -1254,6 +1264,7 @@ async fn run_host(
         mut create,
         block: mut initial_block,
         mut theme,
+        label,
     } = startup;
     let mut token: Option<String> = None;
     let mut workers = HashMap::<String, PaneWorker>::new();
@@ -1276,11 +1287,13 @@ async fn run_host(
                 }
                 None => configured.clone(),
             };
-            let mut control = transport::control(&endpoint, token.as_deref()).await?;
+            let mut control = transport::control_with_label(&endpoint, token.as_deref(), &label).await?;
             let identity = control.welcome().client.as_ref().context("Rex client identity")?;
             token = Some(identity.reconnect_token.clone());
             let wanted = preferred.clone().or_else(|| shared.model.lock().expect("host model").selected.clone());
             shared.update(|m| {
+                m.connection_epoch += 1;
+                m.performs.clear();
                 m.client_id = identity.id.clone();
                 m.protocol.api_revision = control.welcome().api_revision;
                 m.views.clear();
@@ -1293,6 +1306,7 @@ async fn run_host(
                 m.activity_epoch += 1;
             });
             let mut state = ControlState::default();
+            let mut busy_since = Some(Instant::now());
             let boot = bootstrap_request(wanted.as_deref(), create.is_some(), workers.values().map(|w| w.session.clone()));
             let started = Instant::now();
             shared.update(|m| m.protocol.bootstrap_requests += 1);
@@ -1338,6 +1352,7 @@ async fn run_host(
                 request(&mut control, "session.focus_block", json!({"session_id":id,"block_id":block})).await?;
                 refresh(&mut control, shared, &mut state, id).await?;
             }
+            state.performs_since = busy_since;
             let queued: Vec<_> = control.drain_events().collect();
             for event in queued { handle_event(event, &mut control, shared, &mut workers, &mut state, keymap.as_deref()).await?; }
             state.prune(&shared.model.lock().expect("host model"));
@@ -1356,10 +1371,31 @@ async fn run_host(
             prefetch.reset();
             let mut pace = tokio::time::interval(prefetch::PACE);
             pace.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            let mut expiry = tokio::time::interval(Duration::from_millis(100));
             loop {
+                state.performs_since = state.performs_since.or(busy_since.take());
+                if state.performs_since.is_some() {
+                    // Buffered requests share the busy step's start, even when it took less
+                    // than MAX_WAIT. They must not gain another five seconds in the UI queue.
+                    use futures_util::FutureExt;
+                    if let Some(event) = control.next_event().now_or_never() {
+                        handle_event(event?, &mut control, shared, &mut workers, &mut state, keymap.as_deref()).await?;
+                        state.prune(&shared.model.lock().expect("host model"));
+                        reconcile(&endpoint, shared, &sender, &mut workers);
+                        declare_themes(&mut control, shared, &mut state, &workers, theme.as_ref()).await;
+                        query_activity(&mut control, shared, &mut state, &workers).await;
+                        continue;
+                    }
+                    state.performs_since = None;
+                }
                 let due = prefetch.due(&shared.model.lock().expect("host model"), Instant::now());
                 tokio::select! {
+                    _ = expiry.tick() => {
+                        busy_since = Some(Instant::now());
+                        perform::expire(&mut control, shared).await?;
+                    }
                     _ = prefetch::wait(&mut pace, due.unwrap_or_else(Instant::now)), if due.is_some() => {
+                        busy_since = Some(Instant::now());
                         let next = prefetch.next(&shared.model.lock().expect("host model"), Instant::now());
                         if let Some(id) = next {
                             prefetch.start(&mut control, id).await?;
@@ -1378,6 +1414,7 @@ async fn run_host(
                         }
                     }
                     event = control.next_event() => {
+                        busy_since = Some(Instant::now());
                         handle_event(event?, &mut control, shared, &mut workers, &mut state, keymap.as_deref()).await?;
                         state.prune(&shared.model.lock().expect("host model"));
                         reconcile(&endpoint, shared, &sender, &mut workers);
@@ -1386,6 +1423,7 @@ async fn run_host(
                     }
                     error = crate::ssh::closed(&mut tunnel) => return Err(error),
                     command = commands.recv_async() => {
+                        busy_since = Some(Instant::now());
                         let Ok(command) = command else { control.close().await?; return Ok(true); };
                         if matches!(command, HostCommand::Shutdown) { control.close().await?; return Ok(true); }
                         if matches!(command, HostCommand::Reconnect) { return Ok(false); }
@@ -1434,6 +1472,7 @@ async fn run_host(
             return Ok(());
         }
         shared.update(|m| {
+            m.performs.clear();
             m.ssh_server_missing = result
                 .as_ref()
                 .err()
@@ -1462,7 +1501,7 @@ async fn run_host(
                     Ok(HostCommand::Theme(new)) => theme = new,
                     Ok(HostCommand::Keymap(new)) => keymap = Some(new),
                     Ok(HostCommand::Ticket { reply, .. }) => { let _ = reply.send(Err("Host is reconnecting".into())); }
-                    Ok(HostCommand::Claim { .. }) => {}
+                    Ok(HostCommand::Claim { .. } | HostCommand::PerformReply { .. }) => {}
                     Ok(HostCommand::Terminal { block, command: Command::Selection(input), .. }) => {
                         if let Some(worker) = workers.get(&block) { let _ = worker.commands.send(DataCommand::Selection(input)); }
                     }
@@ -1625,6 +1664,15 @@ async fn handle_command(
             generation,
             request,
         } => actions::run(control, shared, generation, *request).await?,
+        HostCommand::PerformReply {
+            epoch,
+            call_id,
+            outcome,
+        } => {
+            if shared.model.lock().expect("host model").connection_epoch == epoch {
+                perform::reply(control, &call_id, &outcome).await?;
+            }
+        }
         HostCommand::Visibility(visible) => shared.update(|m| m.visible = visible),
         // Declared to every block it is due for right after this command.
         HostCommand::Theme(new) => *theme = new,

@@ -11,6 +11,8 @@ use std::{
 pub struct Host {
     pub label: String,
     pub endpoint: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remote_control: bool,
     #[serde(default)]
     pub collapsed: bool,
     /// The shell new terminals on this host start (`zsh`, `/bin/zsh`); none uses the server
@@ -128,6 +130,8 @@ impl From<TerminalThemeChoice> for String {
 #[serde(default)]
 pub struct Settings {
     pub hosts: Vec<Host>,
+    /// None follows the current hostname rather than persisting a snapshot of it.
+    pub client_label: Option<String>,
     pub last_host: Option<String>,
     pub sessions: HashMap<String, String>,
     pub sidebar_width: f32,
@@ -164,9 +168,11 @@ impl Default for Settings {
                     .trim()
                     .to_owned(),
                 endpoint: crate::transport::local_endpoint(),
+                remote_control: false,
                 collapsed: false,
                 shell: None,
             }],
+            client_label: None,
             last_host: None,
             sessions: HashMap::new(),
             sidebar_width: 236.,
@@ -188,6 +194,15 @@ impl Default for Settings {
     }
 }
 impl Settings {
+    pub fn client_label(&self) -> String {
+        self.client_label
+            .as_deref()
+            .map(str::trim)
+            .filter(|label| !label.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(hostname)
+    }
+
     fn config_dir() -> PathBuf {
         std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
@@ -245,6 +260,19 @@ impl Settings {
         std::fs::write(&temporary, serde_json::to_vec_pretty(self)?)?;
         std::fs::rename(temporary, path)?;
         Ok(())
+    }
+}
+
+pub fn hostname() -> String {
+    hostname_label(&gethostname::gethostname().to_string_lossy())
+}
+
+fn hostname_label(name: &str) -> String {
+    let name = name.trim();
+    if name.is_empty() {
+        "Rex Linux".into()
+    } else {
+        name.to_owned()
     }
 }
 
@@ -359,11 +387,48 @@ mod tests {
     }
 
     #[test]
+    fn client_label_follows_hostname_unless_explicit_and_loads_existing_strings() {
+        for json in [r#"{}"#, r#"{"client_label":null}"#] {
+            let settings: Settings = serde_json::from_str(json).unwrap();
+            assert!(settings.client_label.is_none());
+            assert_eq!(settings.client_label(), hostname());
+            let saved = serde_json::to_value(&settings).unwrap();
+            assert!(
+                saved["client_label"].is_null(),
+                "saving must not freeze the hostname"
+            );
+        }
+        let settings: Settings = serde_json::from_str(r#"{"client_label":"My laptop"}"#).unwrap();
+        assert_eq!(settings.client_label.as_deref(), Some("My laptop"));
+        assert_eq!(settings.client_label(), "My laptop");
+        let saved = serde_json::to_value(&settings).unwrap();
+        assert_eq!(saved["client_label"], "My laptop");
+        // Old files with an empty label still load and get a usable default.
+        let empty: Settings = serde_json::from_str(r#"{"client_label":""}"#).unwrap();
+        assert_eq!(empty.client_label(), hostname());
+        assert_eq!(
+            hostname(),
+            hostname_label(&gethostname::gethostname().to_string_lossy())
+        );
+        assert_eq!(hostname_label("  workstation\n"), "workstation");
+        assert_eq!(hostname_label(""), "Rex Linux");
+        assert_eq!(hostname_label(" \n "), "Rex Linux");
+    }
+
+    #[test]
     fn older_files_load_and_the_notice_corner_round_trips() {
         let old: Settings = serde_json::from_str(
             r#"{"hosts":[{"label":"a","endpoint":"unix:///run/rex.sock"}],"font_size":14}"#,
         )
         .unwrap();
+        assert!(!old.hosts[0].remote_control);
+        assert!(old.client_label.is_none());
+        assert_eq!(old.client_label(), hostname());
+        assert!(
+            serde_json::to_value(&old).unwrap()["hosts"][0]
+                .get("remote_control")
+                .is_none()
+        );
         assert_eq!(old.notice_position, NoticePosition::TopRight);
         assert_eq!(old.notifications, NotificationsConfig::default());
         let partial: Settings =

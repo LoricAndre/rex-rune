@@ -177,6 +177,7 @@ pub fn list_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
 /// Keys a terminal's search field takes: Enter selects the next older match and Shift+Enter
 /// the next newer one; Escape closes the search.
 pub fn search_key(s: &mut Workspace, key: &(HostId, String), ev: &KeyEvent, tx: &mut Tx) -> bool {
+    s.last_keypress = Some(std::time::Instant::now());
     if global_key(s, ev, tx) {
         return true;
     }
@@ -217,6 +218,8 @@ pub fn on_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
         }
         return false;
     }
+    // The main view consumes both shortcuts (including sequence prefixes) and PTY keys.
+    s.last_keypress = Some(std::time::Instant::now());
     if dispatch(s, ev, tx, false) {
         return true;
     }
@@ -251,6 +254,7 @@ fn forward(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx, prefix: Vec<String>) -
                 prefix,
             }
         });
+        s.last_keypress = Some(std::time::Instant::now());
         s.forwarded.insert(
             Input {
                 event: ev,
@@ -299,6 +303,7 @@ pub fn on_ime(s: &mut Workspace, ime: &Ime, _: &mut Tx) -> bool {
             term.preedit.clear();
             if term.status().live && !text.is_empty() {
                 term.send(Command::Paste(text.clone()));
+                s.last_keypress = Some(std::time::Instant::now());
             }
         }
         _ => {}
