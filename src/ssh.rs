@@ -85,9 +85,9 @@ impl Target {
                 None
             }
         };
-        ensure!(!host.is_empty(), "{USAGE}");
+        ensure!(!host.is_empty() && !host.starts_with('-'), "{USAGE}");
         ensure!(
-            user.is_none_or(|u| !u.is_empty() && !u.contains(':')),
+            user.is_none_or(|u| !u.is_empty() && !u.starts_with('-') && !u.contains(':')),
             "{USAGE}"
         );
         Ok(Some(Target {
@@ -547,6 +547,10 @@ mod tests {
         for bad in [
             "ssh://",
             "ssh://@box",
+            "ssh://-box",
+            "ssh://me@-box",
+            "ssh://-user@box",
+            "ssh://[-box]",
             "ssh://box:x",
             "ssh://box:0",
             "ssh://box/",
