@@ -38,7 +38,7 @@ It is written in Rust on [Rune](https://github.com/anomalyco/rune) (wgpu/winit, 
 
 ## Install a binary release
 
-Download a package and `SHA256SUMS` from [Releases](https://github.com/shuv1337/rex-rune/releases). Choose **x86_64 / amd64** for Intel/AMD or **aarch64 / arm64** for ARM64.
+Download a package and `SHA256SUMS` from [Releases](https://github.com/shuv1337/rex-rune/releases). Choose **x86_64 / amd64** for Intel/AMD or **aarch64 / arm64** for ARM64. For signed releases, [verify the signature](#verify-a-download) before installing.
 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS
@@ -55,6 +55,35 @@ bash install.sh
 The tarball installs into `~/.local/bin` with a desktop launcher and icons, independently of any source checkout. It needs `desktop-file-utils`; uninstall with `bash scripts/install-desktop.sh --uninstall`. Uninstall a `.deb` with `sudo apt remove rex-linux`. Neither removes preferences or changes Rex servers. Avoid mixing both installation methods: a user installation can shadow `/usr/bin/rex-linux`.
 
 Prebuilt packages are built on Ubuntu 24.04 and require **glibc 2.39+**. They are dynamically linked, not self-contained AppImages. Install your distribution's graphics drivers, fontconfig (including `fc-match`), xkbcommon, Wayland/X11, EGL/OpenGL/Vulkan libraries, CA certificates and `xdg-utils`. On Debian/Ubuntu the `.deb` declares these dependencies. Rust and Zig are **not** needed to run a binary. A running Rex server with API revision 10, 11 or 12 is required.
+
+### Verify a download
+
+The signed-release pipeline adds `SHA256SUMS.minisig`, `latest.json`, and
+`latest.json.minisig`. It requires [owner key setup](docs/releases.md#owner-setup-before-the-first-signed-release)
+before its first release; v0.4.2 and earlier remain unsigned. Public keys will be
+committed as `packaging/keys/release.pub` (CI) and `packaging/keys/release-backup.pub`
+(offline recovery); **neither is supplied yet**. No client auto-update is implemented.
+
+For a signed release, obtain and retain a trusted copy of those public keys
+separately from the downloaded assets. With `minisign` installed, and the package,
+`SHA256SUMS` and `SHA256SUMS.minisig` from the **same release** in your directory:
+
+```sh
+# Stop if verification fails. For a recovery release, use release-backup.pub instead.
+minisign -Vm SHA256SUMS -p /path/to/trusted/release.pub &&
+  sha256sum --ignore-missing -c SHA256SUMS
+```
+
+Require both commands to succeed before installing. A checksum alone detects
+corruption, not a replaced download. First obtaining the public keys still relies
+on trusting the repository; retain them for later verification. The signed
+manifest is at `https://github.com/shuv1337/rex-rune/releases/latest/download/latest.json`
+with its `.minisig` beside it. Verify its exact bytes before parsing it; it has no expiry.
+
+Release builds also produce GitHub provenance attestations for both package formats:
+`gh attestation verify <downloaded-package> --repo shuv1337/rex-rune`.
+Attestations identify the build workflow; they do not replace minisign verification.
+Older releases do not gain signatures or attestations retroactively.
 
 ## Build requirements
 

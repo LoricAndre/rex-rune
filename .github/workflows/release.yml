@@ -13,7 +13,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  release-tools:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install minisign
+        run: sudo apt-get update && sudo apt-get install -y minisign
+      - name: Manifest and throwaway-key signing tests
+        run: python3 scripts/test-release.py
+
   build:
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -24,12 +35,12 @@ jobs:
             arch: aarch64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Native build and runtime dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config dpkg-dev desktop-file-utils libxkbcommon-dev libxkbcommon-x11-dev libfontconfig1-dev libwayland-dev libx11-dev libx11-xcb-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libegl1-mesa-dev libgl1-mesa-dev libvulkan-dev mesa-vulkan-drivers
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
       - name: Check release version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -65,7 +76,7 @@ jobs:
           dpkg-deb --info dist/*.deb
           sudo apt-get install -y ./dist/*.deb
           /usr/bin/rex-linux --version
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux-${{ matrix.arch }}
           path: |
@@ -73,28 +84,142 @@ jobs:
             dist/*.deb
           if-no-files-found: error
 
-  publish:
-    if: startsWith(github.ref, 'refs/tags/')
+  attest:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     needs: build
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: read
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          sparse-checkout: CHANGELOG.md
-          sparse-checkout-cone-mode: false
-      - uses: actions/download-artifact@v4
-        with:
+          pattern: linux-*
           path: dist
           merge-multiple: true
-      - name: Checksums and release
+      - name: Attest release packages
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.deb
+
+  manual-signing-test:
+    if: github.event_name == 'workflow_dispatch'
+    needs: [build, release-tools]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: linux-*
+          path: dist
+          merge-multiple: true
+      - name: Install minisign
+        run: sudo apt-get update && sudo apt-get install -y minisign
+      - name: Generate metadata
+        id: metadata
+        run: |
+          (cd dist && sha256sum -- *.tar.gz *.deb > SHA256SUMS)
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          python3 scripts/release-manifest.py --version "$version" --update-from 0.4.2
+      - name: Save unsigned metadata before signing
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unsigned-release-metadata
+          path: |
+            dist/SHA256SUMS
+            dist/latest.json
+          if-no-files-found: error
+      - name: Sign with a throwaway key
+        env:
+          RELEASE_TAG: ${{ steps.metadata.outputs.tag }}
+        run: |
+          umask 077
+          trap 'rm -f "$RUNNER_TEMP/release.key" "$RUNNER_TEMP/release.pub" "$RUNNER_TEMP/release-backup.pub"' EXIT
+          export RELEASE_MINISIGN_PASSWORD=throwaway-test-password-not-a-secret
+          printf '%s\n%s\n' "$RELEASE_MINISIGN_PASSWORD" "$RELEASE_MINISIGN_PASSWORD" |
+            minisign -G -p "$RUNNER_TEMP/release.pub" -s "$RUNNER_TEMP/release.key"
+          cp "$RUNNER_TEMP/release.pub" "$RUNNER_TEMP/release-backup.pub"
+          export RELEASE_MINISIGN_KEY
+          RELEASE_MINISIGN_KEY=$(< "$RUNNER_TEMP/release.key")
+          python3 scripts/sign-release.py --tag "$RELEASE_TAG" --keys-dir "$RUNNER_TEMP"
+          cp "$RUNNER_TEMP/release.pub" "$RUNNER_TEMP/release-backup.pub" dist/
+      - name: Save throwaway-signed metadata and test public keys
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: test-release-metadata
+          path: |
+            dist/SHA256SUMS
+            dist/SHA256SUMS.minisig
+            dist/latest.json
+            dist/latest.json.minisig
+            dist/release.pub
+            dist/release-backup.pub
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: [build, release-tools, attest]
+    runs-on: ubuntu-24.04
+    # Default for plan question 6 (key custody): one reviewed job holds the signing secrets. See docs/releases.md.
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: linux-*
+          path: dist
+          merge-multiple: true
+      - name: Install minisign
+        run: sudo apt-get update && sudo apt-get install -y minisign
+      - name: Checksums and manifest
+        id: metadata
+        run: |
+          (cd dist && sha256sum -- *.tar.gz *.deb > SHA256SUMS)
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          # Oldest compatible tarball layout; raise only for an incompatible install change.
+          python3 scripts/release-manifest.py --version "$version" --update-from 0.4.2
+      - name: Save unsigned metadata before signing
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unsigned-release-metadata
+          path: |
+            dist/SHA256SUMS
+            dist/latest.json
+          if-no-files-found: error
+      - name: Sign and verify metadata
+        env:
+          RELEASE_MINISIGN_KEY: ${{ secrets.RELEASE_MINISIGN_KEY }}
+          RELEASE_MINISIGN_PASSWORD: ${{ secrets.RELEASE_MINISIGN_PASSWORD }}
+          RELEASE_TAG: ${{ steps.metadata.outputs.tag }}
+        run: python3 scripts/sign-release.py --tag "$RELEASE_TAG"
+      - name: Save metadata for inspection or draft recovery
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-metadata
+          path: |
+            dist/SHA256SUMS
+            dist/SHA256SUMS.minisig
+            dist/latest.json
+            dist/latest.json.minisig
+          if-no-files-found: error
+      - name: Draft, upload, and publish
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           cd dist
-          sha256sum *.tar.gz *.deb > SHA256SUMS
           version="${GITHUB_REF_NAME#v}"
           # Release notes: this version's CHANGELOG section, then the standing install notes.
           awk -v v="$version" '$0 ~ "^## "v"( |$)" {found=1; next} found && /^## / {exit} found {print}' ../CHANGELOG.md > RELEASE-NOTES.md
@@ -109,12 +234,13 @@ jobs:
           **Downloads:** `x86_64` / `amd64` for Intel/AMD; `aarch64` / `arm64` for ARM64.
           - **Debian/Ubuntu:** `sudo apt install ./rex-linux_*.deb` (choose your architecture).
           - **Other Linux:** extract the matching `.tar.gz` and run `bash install.sh` inside it. No root needed; requires `desktop-file-utils`.
-          - Verify downloads with `sha256sum --ignore-missing -c SHA256SUMS`.
+          - Verify `SHA256SUMS.minisig` with a trusted release public key first, then run `sha256sum --ignore-missing -c SHA256SUMS`. See the README's **Verify a download** section.
+          - `latest.json` and `latest.json.minisig` describe this release for future update clients; metadata has no expiry.
 
           Built natively on Ubuntu 24.04; requires glibc 2.39 or newer, graphics drivers, fontconfig, xkbcommon, and Wayland/X11 libraries. These are dynamically linked builds, not self-contained AppImages. See the bundled README for dependencies and installation.
 
           Requires an existing Rex server with API revision 10, 11 or 12. Installing the client does not start, stop, or modify a Rex server.
           EOF
           gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "Rex Linux ${GITHUB_REF_NAME#v}" --notes-file RELEASE-NOTES.md
-          gh release upload "$GITHUB_REF_NAME" *.tar.gz *.deb SHA256SUMS
+          gh release upload "$GITHUB_REF_NAME" ./*.tar.gz ./*.deb SHA256SUMS SHA256SUMS.minisig latest.json latest.json.minisig
           gh release edit "$GITHUB_REF_NAME" --draft=false --latest
