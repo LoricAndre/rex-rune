@@ -229,6 +229,27 @@ pub fn parse_status(reply: &Value) -> Vec<(String, StatusRecord)> {
         .collect()
 }
 
+/// The shell's directory from a server `process` reply, even without OSC 7. Prefer the
+/// terminal's child, not an editor's foreground directory. macOS wraps the shell in login;
+/// use the process just below it only when the ancestry is available.
+pub fn shell_dir(process: &Value) -> Option<String> {
+    let mut shell = &process["child"];
+    if shell["name"] == "login" {
+        shell = match process["ancestors"].as_array().map(Vec::as_slice) {
+            Some([.., below, _login]) => below,
+            Some([_login]) => &process["foreground"],
+            _ => return None,
+        };
+        if shell["name"] == "login" {
+            return None;
+        }
+    }
+    shell["cwd"]
+        .as_str()
+        .filter(|dir| dir.starts_with('/'))
+        .map(str::to_owned)
+}
+
 /// An OSC 9 or OSC 777 notification a program sent, with where it came from.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DesktopNotice {

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- New tabs and splits start in the source pane's shell directory on its server, including shells that do not report OSC 7; a pane-menu split inherits from the pane the menu names. Missing or slow directory reads fall back to the server's default; new sessions are unchanged. (@kitten-lily)
+
 ### Fixed
 
 - Clicking a disabled control, divider or padding inside a dialog no longer dismisses it. Empty space preserves field focus; clicking outside still closes the dialog. (@kitten-lily)

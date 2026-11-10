@@ -406,12 +406,26 @@ fn tabs_and_splits_start_the_right_hosts_shell() {
     let other = capture_host(&mut ws, 1);
     ws.hosts[0].model.connected = true;
     ws.hosts[0].model.selected = Some("cur".into());
+    ws.hosts[0].model.views.insert(
+        "cur".into(),
+        serde_json::from_value(serde_json::json!({
+            "revision": 1, "session_id": "cur", "active_window_id": "w",
+            "windows": [{"window_id": "w", "focused_block_id": "block:f",
+                "layers": [{"kind": "tiled", "blocks": [{"block_id": "block:f"}]}]}]
+        }))
+        .unwrap(),
+    );
     ws.settings.hosts[0].shell = Some("zsh".into());
     ws.settings.hosts[1].shell = Some("fish".into());
     let mut tx = rune::Tx::default();
     ws.perform(Intent::NewWindow, &mut tx);
     let sent = requests(&active);
     assert_eq!(sent[0].0, "session.new_window");
+    assert_eq!(sent[0].1, "cur");
+    assert_eq!(
+        sent[0].2["cwd_from"], "block:f",
+        "new tab uses the focused pane"
+    );
     assert_eq!(
         sent[0].2["layout"]["block"]["options"],
         serde_json::json!({"shell":"zsh"}),
@@ -441,6 +455,11 @@ fn tabs_and_splits_start_the_right_hosts_shell() {
     );
     let sent = requests(&other);
     assert_eq!(sent[0].0, "session.new_split");
+    assert_eq!(sent[0].1, "b", "pane menu keeps its captured session");
+    assert_eq!(
+        sent[0].2["cwd_from"], "block:1",
+        "pane menu uses its target, not focus"
+    );
     assert_eq!(
         sent[0].2["layout"]["block"]["options"],
         serde_json::json!({"shell":"fish","theme":{"background":"#001528","scheme":"dark"}}),
@@ -626,12 +645,56 @@ fn capture_host(ws: &mut Workspace, index: usize) -> flume::Receiver<HostCommand
     receiver
 }
 
-/// Every request a host was sent, as (method, session_id, payload).
+#[test]
+fn split_uses_the_focused_pane_as_its_directory_source() {
+    let (mut ws, rx) = tabbed_workspace("split");
+    ws.perform(Intent::Split("vertical"), &mut rune::Tx::default());
+    let sent = requests(&rx);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].0, "session.new_split");
+    assert_eq!(sent[0].1, "s");
+    assert_eq!(sent[0].2["cwd_from"], sent[0].2["anchor_id"]);
+    assert_eq!(sent[0].2["cwd_from"], ws.model().focused().unwrap());
+}
+
+#[test]
+fn new_tabs_without_a_source_use_defaults_and_without_a_session_do_nothing() {
+    let mut ws = workspace();
+    let rx = capture_host(&mut ws, 0);
+    ws.term_theme = Some(rex_linux::terminal_theme::TerminalTheme::midnight());
+    ws.perform(Intent::NewWindow, &mut rune::Tx::default());
+    assert!(rx.is_empty(), "no selected session, no creation");
+    assert!(
+        !ws.settings.terminal_theme_declared,
+        "no phantom theme declaration"
+    );
+
+    ws.hosts[0].model.selected = Some("cur".into());
+    ws.perform(Intent::NewWindow, &mut rune::Tx::default());
+    let sent: Vec<_> = rx.try_iter().collect();
+    assert!(
+        matches!(&sent[..], [HostCommand::Request { method, payload }]
+        if method == "session.new_window" && payload["session_id"] == "cur"),
+        "no focused block means no process query"
+    );
+    std::fs::remove_file(&ws.settings_path).ok();
+}
+
+/// Every request as (method, session_id, payload), with a synthetic cwd_from for creation.
 fn requests(rx: &flume::Receiver<HostCommand>) -> Vec<(String, String, serde_json::Value)> {
     rx.try_iter()
         .filter_map(|c| match c {
             HostCommand::Request { method, payload } => {
                 Some((method, payload["session_id"].as_str()?.to_owned(), payload))
+            }
+            HostCommand::NewTerminal {
+                method,
+                mut payload,
+                cwd_from,
+            } => {
+                let session = payload["session_id"].as_str()?.to_owned();
+                payload["cwd_from"] = cwd_from.into();
+                Some((method, session, payload))
             }
             HostCommand::Navigate {
                 session,
@@ -1481,9 +1544,11 @@ fn follow_server_resets_only_after_a_theme_was_ever_declared() {
     std::fs::remove_file(&ws.settings_path).ok();
 
     let mut ws = workspace();
-    let _host = capture_host(&mut ws, 0);
+    let host = capture_host(&mut ws, 0);
+    ws.hosts[0].model.selected = Some("cur".into());
     ws.term_theme = Some(rex_linux::terminal_theme::TerminalTheme::midnight());
     ws.perform(Intent::NewWindow, &mut tx);
+    assert_eq!(requests(&host)[0].0, "session.new_window");
     assert!(
         ws.settings.terminal_theme_declared,
         "a theme in a new tab's layout is a declaration"
