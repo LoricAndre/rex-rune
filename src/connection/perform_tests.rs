@@ -125,6 +125,63 @@ async fn busy_host_drops_already_readable_requests() {
 }
 
 #[tokio::test]
+async fn request_buffered_during_a_short_busy_step_keeps_its_original_budget() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let (sent, arrival) = tokio::sync::oneshot::channel();
+    let (done, wait) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let mut ws = boot_remote(&listener).await;
+        let slow = recv(&mut ws).await;
+        assert_eq!(slow["method"], "test.slow");
+        let arrived = Instant::now();
+        event(&mut ws, "short-busy").await;
+        sent.send(arrived).unwrap();
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        send(
+            &mut ws,
+            json!({"type":"response","id":slow["id"],"payload":{}}),
+        )
+        .await;
+        let reply = recv(&mut ws).await;
+        assert_eq!(reply["payload"]["call_id"], "short-busy");
+        assert_eq!(reply["payload"]["error"]["code"], "internal");
+        assert!(
+            arrived.elapsed() < Duration::from_secs(7),
+            "the busy step must not be followed by another full five-second budget"
+        );
+        send(
+            &mut ws,
+            json!({"type":"response","id":reply["id"],"payload":{}}),
+        )
+        .await;
+        done.send(()).unwrap();
+        assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
+    });
+    let host = host(endpoint);
+    connected(&host).await;
+    host.commands
+        .send(HostCommand::Request {
+            method: "test.slow".into(),
+            payload: json!({}),
+        })
+        .unwrap();
+    let arrived = arrival.await.unwrap();
+    let pending = queued(&host).await;
+    assert!(
+        pending.received <= arrived,
+        "timestamp starts before the busy step, not at dequeue"
+    );
+    tokio::time::timeout(Duration::from_secs(3), wait)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(host.model.lock().unwrap().performs.is_empty());
+    drop(host);
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn reconnect_discards_old_requests_and_old_replies_even_with_reused_call_id() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());

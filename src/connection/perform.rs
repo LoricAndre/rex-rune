@@ -30,7 +30,16 @@ pub struct Requester {
 }
 impl std::fmt::Display for Requester {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let name = self.info["name"].as_str().unwrap_or(&self.client_id);
+        let name: String = self.info["name"]
+            .as_str()
+            .unwrap_or(&self.client_id)
+            .chars()
+            .filter(|c| {
+                !c.is_control()
+                    && !matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+            })
+            .take(40)
+            .collect();
         let principal = self.principal["display"]
             .as_str()
             .or_else(|| self.principal["login_name"].as_str())
@@ -88,8 +97,9 @@ pub(super) async fn receive(
     control: &mut Client,
     shared: &Shared,
     payload: Value,
-    busy: bool,
+    busy_since: Option<Instant>,
 ) -> Result<()> {
+    let received = busy_since.unwrap_or_else(Instant::now);
     let Some(call_id) = payload["call_id"].as_str().map(str::to_owned) else {
         return Ok(());
     };
@@ -104,7 +114,7 @@ pub(super) async fn receive(
             .await;
         }
     };
-    if busy {
+    if received.elapsed() >= MAX_WAIT {
         return reply(
             control,
             &call_id,
@@ -115,7 +125,7 @@ pub(super) async fn receive(
     shared.update(|m| {
         m.performs.push(Pending {
             epoch: m.connection_epoch,
-            received: Instant::now(),
+            received,
             request,
         })
     });
@@ -148,6 +158,24 @@ pub(super) async fn expire(control: &mut Client, shared: &Shared) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn requester_names_are_bounded_and_cannot_inject_controls_or_bidi() {
+        let mut requester = Requester {
+            info: serde_json::json!({"name": "re\n\r\t\u{001b}\u{0085}\u{061c}\u{200e}\u{200f}\u{202a}\u{202b}\u{202c}\u{202d}\u{202e}\u{2066}\u{2067}\u{2068}\u{2069}x"}),
+            principal: serde_json::json!({"display": "uid 1000"}),
+            ..Requester::default()
+        };
+        assert_eq!(requester.to_string(), "rex (uid 1000)");
+        requester.info = serde_json::json!({"name": "界".repeat(50)});
+        assert_eq!(
+            requester.to_string(),
+            format!("{} (uid 1000)", "界".repeat(40))
+        );
+        requester.info = Value::Null;
+        requester.client_id = "c\nli\u{202e}".into();
+        assert_eq!(requester.to_string(), "cli (uid 1000)");
+    }
+
     #[test]
     fn success_is_explicit_null_and_errors_have_no_result() {
         let success = serde_json::to_value(Outcome::Performed.reply("1")).unwrap();

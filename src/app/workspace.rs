@@ -313,7 +313,7 @@ impl Workspace {
             cli.then(|| self.options.block.clone()).flatten(),
             index == self.active,
             self.declared_theme(),
-            self.settings.client_label.clone(),
+            self.settings.client_label(),
         );
         let _ = connection
             .commands
@@ -830,7 +830,8 @@ impl Workspace {
             at: std::time::Instant::now(),
         });
         if self.notices.len() > 3 {
-            self.notices.remove(0);
+            let oldest = self.notices.iter().position(|n| !n.sticky).unwrap_or(0);
+            self.notices.remove(oldest);
         }
     }
 
@@ -1230,7 +1231,7 @@ impl Workspace {
             }
             Intent::RemoteControl(host) => self.toggle_remote_control(host),
             Intent::ClientLabel => {
-                let label = self.settings.client_label.clone();
+                let label = self.settings.client_label();
                 self.open_panel(PanelKind::Form(Form::ClientLabel), "Client label", &[("Label", "Name this computer in Rex client lists", &label)]);
             }
             Intent::HostShell(host) => {
@@ -1901,7 +1902,7 @@ impl Workspace {
                         }
                     }
                     Form::ClientLabel => {
-                        self.settings.client_label = values[0].clone();
+                        self.settings.client_label = Some(values[0].clone());
                         self.save();
                         self.inform("Client label saved. Reopen the client to use it on every host.");
                     }

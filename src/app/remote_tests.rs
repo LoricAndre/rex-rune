@@ -215,6 +215,172 @@ fn remote_scroll_is_local_and_requester_principal_is_display_only() {
 }
 
 #[test]
+fn remote_actions_cannot_take_focus_from_a_search_field() {
+    let (mut ws, rx) = tabbed_workspace("single");
+    ws.settings.hosts[0].remote_control = true;
+    let (sender, terminal) = flume::unbounded();
+    live_terminal(&mut ws, "block:a", &sender);
+    let key = ws.term_key("block:a");
+    let mut rt = runtime(ws);
+    ctrl_shift(&mut rt, 'f');
+    for c in ["a", "b", "c"] {
+        press(&mut rt, Key::Text(c.into()));
+    }
+    let focus = focused(&rt);
+    assert!(focus.as_ref().unwrap().contains("search-field:block:a"));
+    // Even after a pause, every remote action must leave the field alone.
+    rt.state.last_keypress = Some(Instant::now() - Duration::from_secs(2));
+    rx.drain();
+    for (action, args) in [
+        ("client.tab.next", Value::Null),
+        ("client.sidebar.toggle", Value::Null),
+        ("pane.scroll", json!({"lines": 1})),
+    ] {
+        rt.update(|s, tx| s.remote_perform(0, pending(action, args), tx));
+        code(reply(&rx), "refused");
+        assert_eq!(focused(&rt), focus);
+    }
+    press(&mut rt, Key::Text("d".into()));
+    assert_eq!(
+        rt.state.terminals[&key].search.as_ref().unwrap().text,
+        "abcd"
+    );
+    assert!(
+        sent_keys(&terminal).is_empty(),
+        "no field input reaches a shell"
+    );
+}
+
+#[test]
+fn search_edits_and_consumed_keys_record_activity() {
+    let (mut ws, _rx) = tabbed_workspace("single");
+    let (sender, _) = flume::unbounded();
+    live_terminal(&mut ws, "block:a", &sender);
+    let mut rt = runtime(ws);
+    ctrl_shift(&mut rt, 'f');
+    rt.state.last_keypress = None;
+    press(&mut rt, Key::Text("a".into()));
+    assert!(rt.state.last_keypress.is_some());
+    rt.state.last_keypress = None;
+    press(&mut rt, Key::Left);
+    assert!(
+        rt.state.last_keypress.is_some(),
+        "cursor movement is activity too"
+    );
+    rt.state.last_keypress = None;
+    // IME edits the TextInput directly, exercising on_change without search_key.
+    rt.ime(rune::Ime::Commit("b".into()));
+    rt.frame(1. / 60.);
+    assert!(rt.state.last_keypress.is_some());
+}
+
+#[test]
+fn remote_actions_preserve_pending_key_sequences_even_after_a_pause() {
+    let (mut ws, rx) = tabbed_workspace("single");
+    ws.settings.hosts[0].remote_control = true;
+    ws.local_keymap = actions::resolve(&rex_linux::keymap::Overrides::parse(&json!([
+        {"keys": "ctrl+b>c", "action": "client.sidebar.toggle"}
+    ])));
+    let mut rt = runtime(ws);
+    rt.key(KeyEvent {
+        key: Key::Command('b'),
+        mods: Mods {
+            ctrl: true,
+            cmd: true,
+            ..Mods::default()
+        },
+    });
+    rt.frame(1. / 60.);
+    assert_eq!(rt.state.bindings.sequence.depth, 1);
+    assert!(
+        rt.state.last_keypress.is_some(),
+        "consumed prefix counts as activity"
+    );
+    rt.state.last_keypress = Some(Instant::now() - Duration::from_secs(2));
+    rx.drain();
+    for action in ["client.tab.next", "client.sidebar.toggle"] {
+        rt.update(|s, tx| s.remote_perform(0, pending(action, Value::Null), tx));
+        code(reply(&rx), "refused");
+        assert_eq!(rt.state.bindings.sequence.depth, 1);
+    }
+    let sidebar = rt.state.sidebar.is_open();
+    rt.state.last_keypress = None;
+    press(&mut rt, Key::Text("c".into()));
+    assert_eq!(rt.state.bindings.sequence.depth, 0);
+    assert_ne!(
+        rt.state.sidebar.is_open(),
+        sidebar,
+        "the original tail still runs"
+    );
+    assert!(
+        rt.state.last_keypress.is_some(),
+        "consumed shortcut counts as activity"
+    );
+}
+
+#[test]
+fn remote_notices_evict_oldest_non_sticky_notice_before_warnings() {
+    let (mut ws, rx) = tabbed_workspace("single");
+    ws.settings.hosts[0].remote_control = true;
+    ws.notify("sticky warning");
+    ws.inform("old information");
+    ws.notify("second warning");
+    ws.remote_perform(
+        0,
+        pending("client.sidebar.toggle", Value::Null),
+        &mut rune::Tx::default(),
+    );
+    assert_eq!(reply(&rx), Outcome::Performed);
+    assert_eq!(ws.notices.len(), 3);
+    assert_eq!(ws.notices[0].text, "sticky warning");
+    assert_eq!(ws.notices[1].text, "second warning");
+    assert!(
+        ws.notices[2]
+            .text
+            .contains("performed client.sidebar.toggle")
+    );
+    ws.notify("third warning");
+    ws.inform("new information");
+    assert!(
+        ws.notices.iter().all(|n| n.sticky),
+        "information cannot displace three warnings"
+    );
+    ws.notify("fourth warning");
+    assert_eq!(ws.notices.len(), 3);
+    assert_eq!(
+        ws.notices[0].text, "second warning",
+        "all-sticky overflow evicts the oldest"
+    );
+}
+
+#[test]
+fn client_label_form_trims_and_rejects_empty_without_freezing_the_default() {
+    let mut ws = workspace();
+    assert!(ws.settings.client_label.is_none());
+    let mut tx = rune::Tx::default();
+    ws.perform(Intent::ClientLabel, &mut tx);
+    assert_eq!(
+        ws.panel.as_ref().unwrap().inputs[0].text,
+        rex_linux::settings::hostname()
+    );
+    ws.panel.as_mut().unwrap().inputs[0] = rune::TextEdit::new("  \n  ");
+    ws.submit(&mut tx);
+    assert!(ws.panel.as_ref().unwrap().error.is_some());
+    assert!(ws.settings.client_label.is_none());
+    ws.panel.as_mut().unwrap().inputs[0] = rune::TextEdit::new("  My laptop  ");
+    ws.submit(&mut tx);
+    assert_eq!(ws.settings.client_label.as_deref(), Some("My laptop"));
+    assert_eq!(
+        Settings::load(&ws.settings_path)
+            .unwrap()
+            .client_label
+            .as_deref(),
+        Some("My laptop")
+    );
+    std::fs::remove_file(&ws.settings_path).unwrap();
+}
+
+#[test]
 fn remote_control_switch_is_per_host_and_survives_save() {
     let mut ws = workspace_hosts(2);
     let rx = capture_host(&mut ws, 1);

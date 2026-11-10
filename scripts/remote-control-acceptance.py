@@ -84,7 +84,7 @@ def client_id(host):
     for client in api(host, "client.list")["clients"]:
         if client.get("info", {}).get("kind") == "app" and client["info"].get("label") == LABEL:
             cid = client.get("id", client.get("client_id"))
-            if "session.select" in {a["name"] for a in api(host, "client.inspect", client_id=cid).get("actions", [])}:
+            if "client.tab.next" in {a["name"] for a in api(host, "client.inspect", client_id=cid).get("actions", [])}:
                 return cid
     return None
 
@@ -161,7 +161,7 @@ try:
     version = subprocess.check_output([REX, "version"], text=True)
     assert "preview.14" in version, version
     (work / "version.txt").write_text(version)
-    (work / "init.lua").write_text("-- Empty disposable server config\n")
+    (work / "init.lua").write_text('rex.bind("ctrl+b>c", "client.sidebar.toggle")\n')
     for i, endpoint in enumerate(endpoints):
         process = subprocess.Popen([REX, "server", "run", "--listen", endpoint, "--restore=false",
                                     "--config", str(work / "init.lua"), "--state-dir", str(work / f"server-{i}")],
@@ -183,12 +183,13 @@ try:
     desk = accept.Desktop()
     app, window = desk.launch(sessions[0], workspace, log=(work / "client-off.log").open("w"))
     for i in range(2):
-        wait(lambda: client_id(i), f"host {i} did not register session.select")
-    declaration = next(a for a in api(1, "client.inspect", client_id=client_id(1))["actions"] if a["name"] == "session.select")
-    assert declaration["args"]["required"] == ["session_id"]
-    assert "window_id" in declaration["args"]["properties"]
+        wait(lambda: client_id(i), f"host {i} did not register actions")
+    declaration = next((a for a in api(1, "client.inspect", client_id=client_id(1))["actions"] if a["name"] == "session.select"), None)
+    if declaration:
+        assert declaration["args"]["required"] == ["session_id"]
+        assert "window_id" in declaration["args"]["properties"]
     title = desk.x("getwindowname", window)
-    perform(1, "session.select", {"session_id": sessions[1]}, error="Remote control is off")
+    perform(1, "client.tab.next", error="Remote control is off")
     assert desk.x("getwindowname", window) == title
     print("PASS schema advertised, client-label targeting and default-off refusal without navigation", flush=True)
     stop(app)
@@ -204,42 +205,52 @@ try:
     for i in range(2):
         wait(lambda: client_id(i), f"enabled host {i} did not register")
 
-    def view(host=1):
+    # Part 1 has seven actions; part 2 additionally supports cross-host selection.
+    active = 1 if declaration else 0
+
+    def view(host=active):
         return api(host, "session.view", session_id=sessions[host])
 
     windows = [w["window_id"] for w in view()["windows"]]
-    perform(1, "session.select", {"session_id": sessions[1], "window_id": windows[1]})
-    wait(lambda: "private-B" in desk.x("getwindowname", window) and "remote-1" in desk.x("getwindowname", window), "second host/session not showing")
-    assert view()["active_window_id"] == windows[1]
-    perform(1, "pane.focus", {"direction": "right"})
-    perform(1, "pane.zoom")
-    perform(1, "pane.zoom")
-    perform(1, "pane.scroll", {"lines": -10})
-    for action, args, index in [("client.tab.goto", {"index": 2}, 1), ("client.tab.goto", {"index": -1}, 2),
+    if declaration:
+        perform(1, "session.select", {"session_id": sessions[1], "window_id": windows[1]})
+        wait(lambda: "private-B" in desk.x("getwindowname", window) and "remote-1" in desk.x("getwindowname", window), "second host/session not showing")
+    else:
+        perform(active, "client.tab.goto", {"index": 2})
+    wait(lambda: view()["active_window_id"] == windows[1], "second tab not selected")
+    time.sleep(.2)  # Part 1 replies on dispatch, before the UI applies navigation acknowledgement.
+    perform(active, "pane.focus", {"direction": "right"})
+    perform(active, "pane.zoom")
+    perform(active, "pane.zoom")
+    perform(active, "pane.scroll", {"lines": -10})
+    for action, args, index in [("client.tab.goto", {"index": 2}, 1),
+                                ("client.tab.goto", {"index": -1 if declaration else 3}, 2),
                                 ("client.tab.previous", None, 1), ("client.tab.next", None, 2)]:
-        perform(1, action, args)
+        perform(active, action, args)
         wait(lambda: view()["active_window_id"] == windows[index], f"{action} did not focus expected tab")
-    perform(1, "client.sidebar.toggle")
-    perform(1, "client.sidebar.toggle")
-    print("PASS all eight view-only actions, cross-host session/tab selection and goto -1", flush=True)
-    perform(0, "client.sidebar.toggle", error="not on screen")
-    perform(1, "client.sidebar.toggle", {"extra": 1}, error="Invalid arguments", direct=True)
-    perform(1, "session.select", {"session_id": "session:missing"}, error="does not exist")
-    perform(1, "session.select", {"session_id": sessions[1], "window_id": "window:missing"}, error="does not exist")
+    perform(active, "client.sidebar.toggle")
+    perform(active, "client.sidebar.toggle")
+    print("PASS all eight view-only actions, cross-host session/tab selection and goto -1" if declaration else
+          "PASS all seven part-1 view-only actions", flush=True)
+    perform(1 - active, "client.sidebar.toggle", error="not on screen")
+    perform(active, "client.sidebar.toggle", {"extra": 1}, error="Invalid arguments", direct=True)
+    if declaration:
+        perform(1, "session.select", {"session_id": "session:missing"}, error="does not exist")
+        perform(1, "session.select", {"session_id": sessions[1], "window_id": "window:missing"}, error="does not exist")
     before = view()
     block = next(w for w in before["windows"] if w["window_id"] == before["active_window_id"])["focused_block_id"]
     def text():
-        return api(1, "com.superlogical.terminal.format", session_id=sessions[1], block_id=block,
+        return api(active, "com.superlogical.terminal.format", session_id=sessions[active], block_id=block,
                    args={"format": "text", "trim": True, "unwrap": True})["content"]
     before_text = text()
     for action, args, hint in [("client.tab.new", None, "rex window new"), ("pane.paste", None, "rex send"),
                                ("pane.send_key", {"key": "x"}, "rex send-key")]:
-        perform(1, action, args, error=hint)
+        perform(active, action, args, error=hint)
     assert len(view()["windows"]) == len(before["windows"])
     assert text() == before_text
     print("PASS malformed/unknown/cross-host targets and dangerous actions refused without terminal changes", flush=True)
     desk.key("ctrl+comma")
-    perform(1, "client.sidebar.toggle", error="dialog or popup")
+    perform(active, "client.sidebar.toggle", error="dialog or popup")
     # Settings is centered at 760x520; the fifth navigation row is Remote Hosts.
     desk.x("mousemove", "--window", window, 420, 395)
     desk.x("click", 1)
@@ -247,11 +258,49 @@ try:
     desk.capture(window, "settings-remote-hosts")
     desk.key("Escape")
     desk.type("echo REMOTE_TYPING")
-    perform(0, "session.select", {"session_id": sessions[0]}, error="typing")
+    perform(active, "client.tab.next", error="typing")
+    if declaration:
+        perform(0, "session.select", {"session_id": sessions[0]}, error="typing")
     desk.key("ctrl+u")
     time.sleep(1.6)
-    perform(0, "session.select", {"session_id": sessions[0]}, direct=True, session_id=sessions[0])
-    wait(lambda: "private-A" in desk.x("getwindowname", window), "first host not showing after acknowledged navigation")
+
+    perform(active, "client.tab.goto", {"index": 1})
+    wait(lambda: view()["active_window_id"] == windows[0], "first tab not selected")
+    block = next(w for w in view()["windows"] if w["window_id"] == windows[0])["focused_block_id"]
+
+    # Regression: search edits used not to count as typing. A remote tab change
+    # blurred the field and sent subsequent text into the other tab's shell.
+    before = view()
+    before_text = text()
+    desk.key("ctrl+shift+f")
+    desk.type("abc")
+    perform(active, "client.tab.next", error="text field")
+    time.sleep(1.6)
+    # A pause is not permission to take focus from a text field, for any action.
+    for action, args in [("client.tab.next", None), ("client.sidebar.toggle", None),
+                         ("pane.scroll", {"lines": 1})]:
+        perform(active, action, args, error="text field")
+    if declaration:
+        perform(1 - active, "session.select", {"session_id": sessions[1 - active]}, error="text field")
+    desk.type("REMOTE_SEARCH_MUST_NOT_REACH_SHELL")
+    assert view()["active_window_id"] == before["active_window_id"]
+    assert text() == before_text, "search input leaked into the shell"
+    desk.capture(window, "search-remote-refused")
+    desk.key("Escape")
+    print("PASS search-field guard: immediate and paused remote requests refused; tab unchanged; no shell input", flush=True)
+    desk.key("ctrl+b")
+    time.sleep(1.6)
+    perform(active, "client.tab.next", error="key sequence")
+    perform(active, "client.sidebar.toggle", error="key sequence")
+    desk.key("c")
+    time.sleep(1.6)
+    perform(active, "client.sidebar.toggle")
+    print("PASS pending sequence guard survives pause and accepts its original tail", flush=True)
+    if declaration:
+        perform(0, "session.select", {"session_id": sessions[0]}, direct=True, session_id=sessions[0])
+        wait(lambda: "private-A" in desk.x("getwindowname", window), "first host not showing after acknowledged navigation")
+    else:
+        perform(active, "client.tab.next", direct=True, session_id=sessions[active])
     desk.capture(window, "performed-notice")
     print("PASS panel and typing guards; direct client.perform acknowledges navigation", flush=True)
     print("PASS remote UI acceptance (SSH host B)" if ssh_endpoint.startswith("ssh:") else "PASS remote UI acceptance (two local servers; SSH skipped)", flush=True)

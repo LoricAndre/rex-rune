@@ -342,7 +342,7 @@ fn hosts(s: &Workspace) -> El {
             "Client label",
             &format!(
                 "{}\nVisible on every host; reopen the app after editing.",
-                s.settings.client_label
+                s.settings.client_label()
             ),
             pill("client-label", "Edit…", Pill::Neutral, 26., |s, tx| {
                 s.perform(Intent::ClientLabel, tx)
