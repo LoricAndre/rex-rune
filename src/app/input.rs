@@ -218,6 +218,8 @@ pub fn on_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
         }
         return false;
     }
+    // The main view consumes both shortcuts (including sequence prefixes) and PTY keys.
+    s.last_keypress = Some(std::time::Instant::now());
     if dispatch(s, ev, tx, false) {
         return true;
     }

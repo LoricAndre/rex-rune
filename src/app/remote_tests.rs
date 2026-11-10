@@ -250,6 +250,50 @@ fn search_edits_and_consumed_keys_record_activity() {
 }
 
 #[test]
+fn remote_actions_preserve_pending_key_sequences_even_after_a_pause() {
+    let (mut ws, rx) = tabbed_workspace("single");
+    ws.settings.hosts[0].remote_control = true;
+    ws.local_keymap = actions::resolve(&rex_linux::keymap::Overrides::parse(&json!([
+        {"keys": "ctrl+b>c", "action": "client.sidebar.toggle"}
+    ])));
+    let mut rt = runtime(ws);
+    rt.key(KeyEvent {
+        key: Key::Command('b'),
+        mods: Mods {
+            ctrl: true,
+            cmd: true,
+            ..Mods::default()
+        },
+    });
+    rt.frame(1. / 60.);
+    assert_eq!(rt.state.bindings.sequence.depth, 1);
+    assert!(
+        rt.state.last_keypress.is_some(),
+        "consumed prefix counts as activity"
+    );
+    rt.state.last_keypress = Some(Instant::now() - Duration::from_secs(2));
+    rx.drain();
+    for action in ["client.tab.next", "client.sidebar.toggle"] {
+        rt.update(|s, tx| s.remote_perform(0, pending(action, Value::Null), tx));
+        code(reply(&rx), "refused");
+        assert_eq!(rt.state.bindings.sequence.depth, 1);
+    }
+    let sidebar = rt.state.sidebar.is_open();
+    rt.state.last_keypress = None;
+    press(&mut rt, Key::Text("c".into()));
+    assert_eq!(rt.state.bindings.sequence.depth, 0);
+    assert_ne!(
+        rt.state.sidebar.is_open(),
+        sidebar,
+        "the original tail still runs"
+    );
+    assert!(
+        rt.state.last_keypress.is_some(),
+        "consumed shortcut counts as activity"
+    );
+}
+
+#[test]
 fn remote_control_switch_is_per_host_and_survives_save() {
     let mut ws = workspace_hosts(2);
     let rx = capture_host(&mut ws, 1);

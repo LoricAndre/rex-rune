@@ -62,6 +62,8 @@ impl Workspace {
             Some("A dialog or popup is open")
         } else if field_focused {
             Some("A text field has focus")
+        } else if self.bindings.sequence.depth > 0 {
+            Some("A key sequence is pending")
         } else if self.active != host {
             Some("This host is not on screen")
         } else if request
@@ -157,7 +159,6 @@ impl Workspace {
                 outcome
             }
             Ok(()) => {
-                self.bindings.sequence.clear();
                 if actions::run(self, &pending.request.action, &pending.request.args, tx) {
                     Outcome::Performed
                 } else {

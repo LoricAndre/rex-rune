@@ -161,7 +161,7 @@ try:
     version = subprocess.check_output([REX, "version"], text=True)
     assert "preview.14" in version, version
     (work / "version.txt").write_text(version)
-    (work / "init.lua").write_text("-- Empty disposable server config\n")
+    (work / "init.lua").write_text('rex.bind("ctrl+b>c", "client.sidebar.toggle")\n')
     for i, endpoint in enumerate(endpoints):
         process = subprocess.Popen([REX, "server", "run", "--listen", endpoint, "--restore=false",
                                     "--config", str(work / "init.lua"), "--state-dir", str(work / f"server-{i}")],
@@ -288,7 +288,14 @@ try:
     desk.capture(window, "search-remote-refused")
     desk.key("Escape")
     print("PASS search-field guard: immediate and paused remote requests refused; tab unchanged; no shell input", flush=True)
+    desk.key("ctrl+b")
     time.sleep(1.6)
+    perform(active, "client.tab.next", error="key sequence")
+    perform(active, "client.sidebar.toggle", error="key sequence")
+    desk.key("c")
+    time.sleep(1.6)
+    perform(active, "client.sidebar.toggle")
+    print("PASS pending sequence guard survives pause and accepts its original tail", flush=True)
     if declaration:
         perform(0, "session.select", {"session_id": sessions[0]}, direct=True, session_id=sessions[0])
         wait(lambda: "private-A" in desk.x("getwindowname", window), "first host not showing after acknowledged navigation")
