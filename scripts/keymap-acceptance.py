@@ -175,6 +175,16 @@ try:
         if "client.tab.new" in names and "pane.send_key" in names:
             found = True
             (work / "registry.json").write_text(json.dumps(inspected, indent=2))
+            count = tabs()
+            for _ in range(2):
+                declined = subprocess.run(["rex", "--autostart=false", "--server", endpoint,
+                    "api", "call", "client.perform", json.dumps({"client_id": cid,
+                    "action": "client.tab.new", "timeout_ms": 2000})],
+                    capture_output=True, text=True, timeout=5)
+                assert declined.returncode != 0, "remote action unexpectedly succeeded"
+                assert "Rex Linux does not support remote client actions" in declined.stderr, declined.stderr
+                assert tabs() == count, "declined action changed the workspace"
+            print("PASS remote client actions explicitly declined without timeout or execution", flush=True)
     assert found, "registered client actions not inspectable"
     desk.capture(window, "phase6-live")
     print("PASS action registry advertised; shortcut bytes preserved", flush=True)

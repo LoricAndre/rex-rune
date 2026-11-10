@@ -82,6 +82,73 @@ async fn keymap_after_connected_error_does_not_disconnect_then_event_refreshes()
 }
 
 #[tokio::test]
+async fn remote_perform_is_declined_even_without_session_and_after_caller_timeout() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let (done, wait) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let mut ws = accept(&listener, "rex.control.v1").await;
+        welcome(&mut ws, 12).await;
+        let bootstrap = recv(&mut ws).await;
+        send(
+            &mut ws,
+            json!({"type":"response","id":bootstrap["id"],"seq":10,"payload":boot()}),
+        )
+        .await;
+        // No call ID: ignore without accidentally executing or answering another request.
+        send(
+            &mut ws,
+            json!({"type":"event","seq":1,"payload":{
+            "type":"client_perform_requested","payload":{"action":"client.settings"}}}),
+        )
+        .await;
+        for (call_id, session, expired) in [
+            ("expired", Some("unattached"), true),
+            ("current", None, false),
+        ] {
+            send(
+                &mut ws,
+                json!({"type":"event","seq":1,"session_id":session,"payload":{
+                "type":"client_perform_requested","payload":{
+                    "call_id":call_id,"action":"client.settings","session_id":session}}}),
+            )
+            .await;
+            let reply = recv(&mut ws).await;
+            assert_eq!(reply["method"], "client.reply");
+            assert_eq!(reply["payload"]["call_id"], call_id);
+            assert_eq!(reply["payload"]["error"]["code"], "not_supported");
+            assert!(
+                reply["payload"]["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("does not support remote client actions")
+            );
+            assert!(reply["payload"].get("result").is_none());
+            let response = if expired {
+                json!({"type":"response","id":reply["id"],"error":{"code":"not_found","status":404,"message":"request expired"}})
+            } else {
+                json!({"type":"response","id":reply["id"],"payload":{}})
+            };
+            send(&mut ws, response).await;
+        }
+        done.send(()).unwrap();
+        assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
+    });
+    let host = HostConnection::spawn(endpoint, None, None, None, false, None);
+    tokio::time::timeout(Duration::from_secs(5), wait)
+        .await
+        .unwrap()
+        .unwrap();
+    {
+        let model = host.model.lock().unwrap();
+        assert!(model.connected);
+        assert!(model.client_actions.is_empty());
+    }
+    drop(host);
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn action_has_35_second_budget_and_queues_client_actions_without_servers() {
     assert_eq!(actions::TIMEOUT, Duration::from_secs(35));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

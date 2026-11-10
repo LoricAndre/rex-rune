@@ -218,7 +218,7 @@ async fn supported_revisions_negotiate() {
             welcome(&mut ws, revision).await;
             assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
         });
-        let mut control = transport::control(&endpoint, None).await.unwrap();
+        let control = transport::control(&endpoint, None).await.unwrap();
         assert_eq!(control.welcome().api_revision, revision);
         control.close().await.unwrap();
         server.await.unwrap();
