@@ -497,14 +497,21 @@ mod tests {
         use futures_util::{SinkExt, StreamExt};
         use serde_json::{Value, json};
         use tokio_tungstenite::tungstenite::Message;
-        for (revision, metadata) in [
-            (10, json!({})),
-            (11, json!({"listeners":null})),
+        for (revision, metadata, expected) in [
+            (10, json!({}), 0),
+            (11, json!({"listeners":null}), 0),
             (
                 12,
                 json!({"listeners":[{"endpoint":"127.0.0.1:0","addresses":["127.0.0.1:4567"],"transport":"tcp","admission":"anonymous"}]}),
+                1,
             ),
-            (12, json!({"listeners":[]})),
+            (12, json!({"listeners":[]}), 0),
+            (12, json!({"listeners":"invalid"}), 0),
+            (
+                12,
+                json!({"error":{"code":"not_supported","message":"status unavailable","status":400}}),
+                0,
+            ),
         ] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let endpoint = format!("http://{}", listener.local_addr().unwrap());
@@ -524,13 +531,14 @@ mod tests {
                     serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap())
                         .unwrap();
                 assert_eq!(request["method"], "server.status");
-                ws.send(Message::Text(
+                let reply = if metadata.get("error").is_some() {
+                    json!({"type":"response","id":request["id"],"error":metadata["error"]})
+                } else {
                     json!({"type":"response","id":request["id"],"payload":metadata})
-                        .to_string()
-                        .into(),
-                ))
-                .await
-                .unwrap();
+                };
+                ws.send(Message::Text(reply.to_string().into()))
+                    .await
+                    .unwrap();
                 assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
             });
             let Probe::Rex {
@@ -541,6 +549,7 @@ mod tests {
                 panic!("not Rex")
             };
             assert_eq!(found, endpoint);
+            assert_eq!(listeners.len(), expected);
             if let Some(listener) = listeners.first() {
                 assert!(listener.description().contains("127.0.0.1:4567"));
                 assert!(listener.description().contains("anonymous"));
