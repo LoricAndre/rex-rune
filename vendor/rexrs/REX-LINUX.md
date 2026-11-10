@@ -21,6 +21,8 @@ Local changes:
   to HELLO. The SDK default still advertises only its generated revision.
   Rex Linux advertises 10–12, validates WELCOME and gates uploads on 11.
 - A focused negotiation test accompanies the builder change.
+- Hand-written `tests/listeners.rs` covers the new optional listener metadata in
+  status and bootstrap, including omitted/null lists and unknown enum-like strings.
 - The generator preserves `attach_session_ids` as `Option<Vec<String>>`:
   omitting it selects a default session, while an explicit `[]` attaches none.
   A serialization test covers this distinction.
