@@ -341,7 +341,7 @@ fn hosts(s: &Workspace) -> El {
         .child(setting(
             "Client label",
             &format!(
-                "{} · shown to clients on every host; applies after reopening",
+                "{}\nVisible on every host; reopen the app after editing.",
                 s.settings.client_label
             ),
             pill("client-label", "Edit…", Pill::Neutral, 26., |s, tx| {
