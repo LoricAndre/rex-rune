@@ -1664,10 +1664,12 @@ impl Workspace {
             ) && previous
                 .as_ref()
                 .is_some_and(|p| matches!(p.kind, PanelKind::Settings)))
-            || (matches!(kind, PanelKind::Form(Form::AddSsh(_) | Form::AddHost))
-                && previous
-                    .as_ref()
-                    .is_some_and(|p| matches!(p.kind, PanelKind::Discover)));
+            || (matches!(
+                kind,
+                PanelKind::Form(Form::AddSsh(_) | Form::AddHost | Form::Discovered(_))
+            ) && previous
+                .as_ref()
+                .is_some_and(|p| matches!(p.kind, PanelKind::Discover)));
         let mut panel = Panel::new(kind, title, fields);
         panel.target = target;
         panel.back = if keep_back {
@@ -1818,7 +1820,7 @@ impl Workspace {
                     Some("Enter a name".to_owned())
                 } else if let Form::AddSsh(index) = form {
                     self.machine_form_error(index, &values)
-                } else if let Form::AddHost | Form::EditHost(_) = form {
+                } else if let Form::AddHost | Form::Discovered(_) | Form::EditHost(_) = form {
                     let editing = match form {
                         Form::EditHost(i) => Some(i),
                         _ => None,
@@ -1890,7 +1892,7 @@ impl Workspace {
                         ),
                         None => self.request("session.set_block_label", json!({"block_id":id,"label":values[0]})),
                     },
-                    Form::AddHost => self.add_host(
+                    Form::AddHost | Form::Discovered(_) => self.add_host(
                         Host {
                             label: values[0].clone(),
                             endpoint: values[1].clone(),

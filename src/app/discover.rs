@@ -6,7 +6,7 @@ use super::panel::{Entry, Form, Intent, PanelKind};
 use super::theme::SERVER;
 use super::workspace::Workspace;
 use rex_linux::settings::Host;
-use rex_linux::tailnet::{self, Machine, Probe};
+use rex_linux::tailnet::{self, ListenerDescription, Machine, Probe};
 use rune::Tx;
 use std::time::{Duration, Instant};
 
@@ -176,7 +176,7 @@ impl Workspace {
     /// The Rex endpoint a check found on candidate `c`, if one answered.
     fn found_rex(c: &Candidate) -> Option<&str> {
         match &c.probe {
-            Some(Probe::Rex(endpoint)) => Some(endpoint),
+            Some(Probe::Rex { endpoint, .. }) => Some(endpoint),
             _ => None,
         }
     }
@@ -219,10 +219,21 @@ impl Workspace {
             }
             let method = if m.ssh { "Tailscale SSH" } else { "SSH" };
             words.push(match (&c.probe, m.online) {
-                (Some(Probe::Rex(endpoint)), _) if endpoint.ends_with(":7297") => {
-                    "Rex on port 7297".into()
+                (
+                    Some(Probe::Rex {
+                        endpoint,
+                        listeners,
+                        reason,
+                    }),
+                    _,
+                ) => {
+                    let access = if listeners.is_empty() {
+                        "listener details unavailable"
+                    } else {
+                        "view listeners"
+                    };
+                    format!("{endpoint} · {}", reason.as_deref().unwrap_or(access))
                 }
-                (Some(Probe::Rex(_)), _) => "Rex over Tailscale".into(),
                 (_, false) => "Offline".into(),
                 (None, true) => "Checking for Rex…".into(),
                 (Some(Probe::Nothing), true) => method.into(),
@@ -283,6 +294,29 @@ impl Workspace {
             self.machine_form(index);
             return;
         };
+        if let Some(Probe::Rex { listeners, .. }) = &c.probe
+            && !listeners.is_empty()
+        {
+            let note = format!(
+                "Reachable from this device: {endpoint}\n\nServer-reported listeners (bound addresses are not reachability or permission checks):\n{}",
+                listeners
+                    .iter()
+                    .map(|l| l.description())
+                    .collect::<Vec<_>>()
+                    .join("\n\n")
+            );
+            let name = c.machine.name.clone();
+            let endpoint = endpoint.to_owned();
+            self.open_panel(
+                PanelKind::Form(Form::Discovered(note)),
+                "Connect to Rex",
+                &[
+                    ("Host name", "my-host", &name),
+                    ("Endpoint", "https://host", &endpoint),
+                ],
+            );
+            return;
+        }
         let host = Host {
             label: c.machine.name.clone(),
             endpoint: endpoint.to_owned(),
@@ -330,10 +364,26 @@ impl Workspace {
             m.address
         );
         match (&c.probe, m.online) {
-            (Some(Probe::Rex(endpoint)), _) => {
+            (
+                Some(Probe::Rex {
+                    endpoint,
+                    listeners,
+                    reason,
+                }),
+                _,
+            ) => {
                 note.push_str(&format!(
                     " Rex also answers at {endpoint}; this adds another login to it."
                 ));
+                if let Some(reason) = reason {
+                    note.push_str(&format!(" Hello failed: {reason}."));
+                }
+                if !listeners.is_empty() {
+                    note.push_str("\nServer-reported listeners: bound addresses are not reachability or permission checks.");
+                }
+                for listener in listeners {
+                    note.push_str(&format!("\n{}", listener.description()));
+                }
             }
             (Some(Probe::Nothing), _) => {
                 note.push_str(

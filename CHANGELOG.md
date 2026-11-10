@@ -4,6 +4,7 @@
 
 ### Added
 
+- Add host reads API-12 `server.status` listeners, showing the verified endpoint and a review of bound addresses and admission rules. Older servers and unavailable metadata retain attachment without guessed access rules.
 - New tabs and splits start in the source pane's shell directory on its server, including shells that do not report OSC 7; a pane-menu split inherits from the pane the menu names. Missing or slow directory reads fall back to the server's default; new sessions are unchanged. (@kitten-lily)
 
 ### Fixed

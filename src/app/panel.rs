@@ -156,6 +156,8 @@ pub enum Form {
     RenameWindow(String),
     RenamePane(String),
     AddHost,
+    /// A reachable endpoint and the server's listener facts.
+    Discovered(String),
     /// A listed machine's name and SSH user, from the Add host list.
     AddSsh(usize),
     /// A host's name, endpoint and default shell, from Settings.
