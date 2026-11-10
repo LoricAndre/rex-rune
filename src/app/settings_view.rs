@@ -304,6 +304,23 @@ fn terminal(s: &Workspace) -> El {
         ))
         .child(divider())
         .child(setting(
+            "Pane padding",
+            "0–32 pt around each terminal's content. Applies immediately to every pane.",
+            stepper(
+                "pane-padding",
+                format!("{} pt", s.settings.pane_padding),
+                |s, _| {
+                    s.settings.pane_padding = (s.settings.pane_padding - 1.).max(0.);
+                    s.save();
+                },
+                |s, _| {
+                    s.settings.pane_padding = (s.settings.pane_padding + 1.).min(32.);
+                    s.save();
+                },
+            ),
+        ))
+        .child(divider())
+        .child(setting(
             "Fallback fonts",
             "Used for missing glyphs, followed by installed system fallbacks. Changes apply when you reopen the client.",
             text(if s.settings.font_fallbacks.is_empty() { "Automatic".into() } else { s.settings.font_fallbacks.join(", ") })

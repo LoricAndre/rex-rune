@@ -2917,6 +2917,88 @@ fn a_clipboard_paste_reaches_only_the_pane_that_asked_while_it_stays_focused() {
 }
 
 #[test]
+fn pane_padding_controls_reach_zero_and_save() {
+    let mut ws = workspace();
+    ws.perform(Intent::Settings, &mut rune::Tx::default());
+    let mut rt = runtime(ws);
+    click(&mut rt, "settings-section:terminal");
+    for _ in 0..9 {
+        click(&mut rt, "pane-padding-smaller");
+    }
+    assert_eq!(rt.state.settings.pane_padding, 0.);
+    assert_eq!(
+        Settings::load(&rt.state.settings_path)
+            .unwrap()
+            .pane_padding,
+        0.
+    );
+    click(&mut rt, "pane-padding-larger");
+    assert_eq!(rt.state.settings.pane_padding, 1.);
+    assert_eq!(
+        Settings::load(&rt.state.settings_path)
+            .unwrap()
+            .pane_padding,
+        1.
+    );
+    std::fs::remove_file(&rt.state.settings_path).unwrap();
+}
+
+#[test]
+fn pane_padding_changes_every_grid_without_changing_pane_placements() {
+    use rex_linux::settings::PaneDensity;
+    for tab in ["single", "split"] {
+        for density in [PaneDensity::Compact, PaneDensity::Comfortable] {
+            let (mut ws, _rx) = tabbed_workspace(tab);
+            ws.settings.pane_density = density;
+            ws.settings.pane_padding = 0.;
+            let blocks = if tab == "single" {
+                vec!["block:a"]
+            } else {
+                vec!["block:b", "block:c"]
+            };
+            let (sender, _terminal_rx) = flume::unbounded();
+            for block in &blocks {
+                live_terminal(&mut ws, block, &sender);
+            }
+            let mut rt = runtime(ws);
+            for _ in 0..90 {
+                rt.frame(1. / 60.);
+            }
+            let rect = |rt: &Runtime<Workspace>, key: &str| {
+                rt.elements()
+                    .into_iter()
+                    .find(|e| e.key.as_deref() == Some(key))
+                    .unwrap()
+                    .rect
+            };
+            let before: Vec<_> = blocks
+                .iter()
+                .map(|block| {
+                    (
+                        rect(&rt, &format!("pane:{block}")),
+                        rect(&rt, &format!("grid:{block}")),
+                    )
+                })
+                .collect();
+            rt.update(|s, _| s.settings.pane_padding = 8.);
+            for _ in 0..4 {
+                rt.frame(1. / 60.);
+            }
+            for (block, (pane, grid)) in blocks.iter().zip(before) {
+                assert_eq!(rect(&rt, &format!("pane:{block}")), pane);
+                let padded = rect(&rt, &format!("grid:{block}"));
+                assert_eq!(
+                    padded,
+                    [grid[0] + 8., grid[1] + 8., grid[2] - 16., grid[3] - 16.]
+                );
+                assert_eq!(rt.state.terminals[&rt.state.term_key(block)].rect, padded);
+            }
+            std::fs::remove_file(&rt.state.settings_path).ok();
+        }
+    }
+}
+
+#[test]
 fn font_preferences_save_from_settings_without_server_requests() {
     let mut ws = workspace();
     let requests = capture_host(&mut ws, 0);

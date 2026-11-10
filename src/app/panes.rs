@@ -7,7 +7,7 @@ use super::{
     activity::{pane_activity, progress_bar, tab_progress, tab_word},
     input::search_key,
     panel::{Form, Intent, PanelKind},
-    term::{self, CursorLook, GridLook, Metrics, MouseGesture, PADDING},
+    term::{self, CursorLook, GridLook, Metrics, MouseGesture},
     theme::*,
     widgets::{Pill, pill},
     workspace::{DividerDrag, HostId, Workspace},
@@ -497,12 +497,12 @@ fn pane_card(
                 Some(edit) => grid.child(search_field(block, &key, edit, t)),
                 None => grid,
             };
-            let top = if bleed { PADDING } else { 0. };
+            let padding = s.settings.pane_padding;
             // The card draws a background of its own colour, edge included; any other sits
             // inside the card's border, never over it.
             let fill = t.body(&colors);
             let body = if fill == card() {
-                col().w_full().px(PADDING + 4.).pb(PADDING)
+                col().w_full().px(padding).pb(padding)
             } else {
                 let (edge, radius) = if bleed {
                     (0., 0.)
@@ -513,8 +513,8 @@ fn pane_card(
                     .self_stretch()
                     .mx(edge)
                     .mb(edge)
-                    .px(PADDING + 4. - edge)
-                    .pb(PADDING - edge)
+                    .px((padding - edge).max(0.))
+                    .pb((padding - edge).max(0.))
                     .corners([0., 0., radius, radius])
                     .continuous_corners()
                     .fill(rgb(fill))
@@ -522,7 +522,7 @@ fn pane_card(
             c.child(
                 body.grow(1.)
                     .min_h(0.)
-                    .pt(top)
+                    .pt(padding)
                     .instant_changes()
                     .motion(STILL)
                     .child(grid),

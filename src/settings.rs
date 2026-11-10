@@ -148,6 +148,7 @@ pub struct Settings {
     pub sidebar_open: bool,
     pub vertical_tabs: bool,
     pub pane_density: PaneDensity,
+    pub pane_padding: f32,
     pub font_size: f32,
     pub font_family: String,
     pub font_fallbacks: Vec<String>,
@@ -189,6 +190,7 @@ impl Default for Settings {
             sidebar_open: false,
             vertical_tabs: false,
             pane_density: PaneDensity::default(),
+            pane_padding: 8.,
             font_size: 15.,
             font_family: "JetBrainsMono Nerd Font".into(),
             font_fallbacks: Vec::new(),
@@ -250,6 +252,7 @@ impl Settings {
         (settings.font_family, settings.font_fallbacks) =
             normalize_font_preferences(&settings.font_family, &settings.font_fallbacks)?;
         settings.font_size = settings.font_size.clamp(8., 48.);
+        settings.pane_padding = settings.pane_padding.clamp(0., 32.);
         settings.sidebar_width = settings.sidebar_width.clamp(200., 360.);
         settings.ui_scale = normalize_ui_scale(settings.ui_scale);
         // Import before the first save loses nivox's unknown keybindings field.
@@ -354,6 +357,24 @@ pub fn endpoint_label(endpoint: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pane_padding_defaults_clamps_and_round_trips_zero() {
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.pane_padding, 8.);
+        let path =
+            std::env::temp_dir().join(format!("rex-padding-settings-{}.json", std::process::id()));
+        for (padding, expected) in [(-1., 0.), (0., 0.), (12., 12.), (100., 32.)] {
+            Settings {
+                pane_padding: padding,
+                ..Settings::default()
+            }
+            .save(&path)
+            .unwrap();
+            assert_eq!(Settings::load(&path).unwrap().pane_padding, expected);
+        }
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn font_preferences_survive_a_save_and_reload() {
