@@ -611,6 +611,18 @@ fn empty(s: &Workspace) -> El {
             Intent::NewSession,
         )
     };
+    let setup = if s.can_start_ssh(s.active) {
+        let host = s.active;
+        pill(
+            "offer-ssh-start",
+            "Start personal server…",
+            Pill::Neutral,
+            32.,
+            move |s, tx| s.perform(Intent::StartSsh(host), tx),
+        )
+    } else {
+        el()
+    };
     col().key("empty").w_full().h_full().center().child(
         glass(
             col().w(420.).padding(28.).gap(12.).items_center(),
@@ -640,7 +652,8 @@ fn empty(s: &Workspace) -> El {
                 },
             )
             .preserve_focus_on_press(true),
-        ),
+        )
+        .child(setup),
     )
 }
 

@@ -198,6 +198,7 @@ pub fn dialog(s: &Workspace, viewport: [f32; 2]) -> Option<El> {
                 "Remove host",
             )
         }
+        PanelKind::StartSsh { endpoint } => super::ssh_setup::dialog(s, endpoint),
         PanelKind::AgentChange { change, steps } => {
             super::integrations::confirm(s, &panel.title, change, steps)
         }

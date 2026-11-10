@@ -117,6 +117,7 @@ pub struct Workspace {
     /// Notifications headless tests would have sent.
     pub outbox: Vec<Note>,
     pub integrations: super::integrations::Integrations,
+    pub ssh_setup: super::ssh_setup::Setup,
     /// The tailnet's machines, for Add host.
     pub discovery: super::discover::Discovery,
     /// The terminal theme this client declares, from Settings; none is Follow server.
@@ -241,6 +242,7 @@ impl Workspace {
             notifier: None,
             outbox: Vec::new(),
             integrations: Default::default(),
+            ssh_setup: Default::default(),
             discovery: Default::default(),
             term_theme,
             theme_dirs,
@@ -1195,6 +1197,7 @@ impl Workspace {
             Intent::Pane(target, action) => self.pane_action(target, action, tx),
             Intent::Session(target, action) => self.session_action(target, action, tx),
             Intent::AddHost => self.open_add_host(),
+            Intent::StartSsh(host) => self.preview_ssh_start(host),
             Intent::AddMachine(index) => self.add_machine(index, tx),
             Intent::MachineForm(index) => self.machine_form(index),
             Intent::AddHostManually => self.open_panel(
@@ -1630,6 +1633,7 @@ impl Workspace {
                 PanelKind::Form(_)
                     | PanelKind::RemoveHost(_)
                     | PanelKind::AgentChange { .. }
+                    | PanelKind::StartSsh { .. }
                     | PanelKind::Themes
                     | PanelKind::Chromes
                     | PanelKind::Discover
@@ -1899,6 +1903,7 @@ impl Workspace {
                 self.remove_host(host, tx);
                 self.panel = back;
             }
+            PanelKind::StartSsh { endpoint } => self.start_ssh(endpoint),
             PanelKind::AgentChange { change, .. } => {
                 let back = self.settings_back();
                 self.apply_agents(change);

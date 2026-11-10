@@ -13,6 +13,19 @@ use std::{
 };
 use tokio::io::AsyncReadExt;
 
+pub mod setup;
+
+/// Socket discovery succeeded over SSH, but found no server. Authentication and
+/// transport failures deliberately do not carry this opt-in setup signal.
+#[derive(Debug)]
+pub struct MissingServer(pub String);
+impl std::fmt::Display for MissingServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for MissingServer {}
+
 /// Where an `ssh://` endpoint points.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Target {
@@ -110,7 +123,7 @@ impl Target {
         .endpoint()
         .replace('\'', "'\\''");
         format!(
-            "No Rex server found on {} for {user}: nothing in {user}'s runtime directory, /run/rex or /var/run/rex. Rex Linux only attaches; it never starts a server. To set up a personal server on Linux, run rex server install '{install_target}' yourself (Rex preview.14 or newer; asks before changes). If a server already runs elsewhere, name its socket in the SSH endpoint.",
+            "No Rex server found on {} for {user}: nothing in {user}'s runtime directory, /run/rex or /var/run/rex. Attachment never starts a server. Choose Start personal server… to review a one-time start, or run rex server install '{install_target}' yourself (Rex preview.14 or newer; asks before changes). If a server already runs elsewhere, name its socket in the SSH endpoint.",
             self.host
         )
     }
@@ -474,7 +487,7 @@ async fn resolve(target: &Target) -> Result<String> {
     });
     match answer {
         Some(Answer::Sock(path)) => Ok(path),
-        Some(Answer::None(user)) => bail!("{}", target.missing_server_message(&user)),
+        Some(Answer::None(user)) => Err(MissingServer(target.missing_server_message(&user)).into()),
         Some(Answer::Missing(path)) => bail!(
             "{path} on {} is not a socket. Is Rex running there?",
             target.host
@@ -557,7 +570,7 @@ mod tests {
             let target = Target::parse(endpoint).unwrap().unwrap();
             let message = target.missing_server_message("remote-user");
             assert!(message.contains(&format!("rex server install '{endpoint}'")));
-            assert!(message.contains("never starts a server"));
+            assert!(message.contains("Attachment never starts a server"));
             assert!(message.contains("asks before changes"));
         }
         let target = Target::parse("ssh://box/path/to/server.sock")

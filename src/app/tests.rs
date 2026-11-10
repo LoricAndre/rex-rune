@@ -3163,6 +3163,85 @@ fn open_add_host(rt: &mut Runtime<Workspace>) {
 }
 
 #[test]
+fn ssh_start_is_explicit_one_shot_and_defaults_to_not_now() {
+    let mut ws = workspace();
+    ws.settings.hosts[0].endpoint = "ssh://work-alias".into();
+    ws.hosts[0].model.ssh_server_missing = true;
+    let commands = capture_host(&mut ws, 0);
+    let mut rt = runtime(ws);
+    assert!(has(&rt, "offer-ssh-start"));
+    assert!(rt.state.ssh_setup.ran.is_empty());
+    click(&mut rt, "offer-ssh-start");
+    assert!(matches!(
+        rt.state.panel.as_ref().unwrap().kind,
+        PanelKind::StartSsh { .. }
+    ));
+    assert!(
+        rt.state.ssh_setup.ran.is_empty(),
+        "opening a preview cannot execute"
+    );
+    press(&mut rt, Key::Enter);
+    assert!(rt.state.panel.is_none(), "Enter defaults to Not now");
+    assert!(rt.state.ssh_setup.ran.is_empty());
+    click(&mut rt, "offer-ssh-start");
+    click(&mut rt, "confirm-ssh-start");
+    assert_eq!(rt.state.ssh_setup.ran, ["ssh://work-alias"]);
+    rt.state.submit(&mut rune::Tx::default());
+    assert_eq!(rt.state.ssh_setup.ran.len(), 1, "no duplicate while busy");
+    rt.update(|s, tx| {
+        s.ssh_start_finished("ssh://work-alias", Err("remote Rex is too old".into()), tx)
+    });
+    assert!(
+        rt.state
+            .panel
+            .as_ref()
+            .unwrap()
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("too old")
+    );
+    assert!(rt.state.ssh_setup.running.is_none());
+    assert_eq!(rt.state.ssh_setup.ran.len(), 1, "errors never retry");
+    for _ in 0..4 {
+        rt.frame(1. / 60.);
+    }
+    click(&mut rt, "confirm-ssh-start");
+    assert_eq!(rt.state.ssh_setup.ran.len(), 2);
+    rt.update(|s, tx| s.ssh_start_finished("ssh://work-alias", Ok(()), tx));
+    assert!(rt.state.panel.is_none());
+    let sent: Vec<_> = commands.try_iter().collect();
+    assert!(sent.iter().any(|c| matches!(c, HostCommand::Reconnect)));
+    assert!(
+        !sent
+            .iter()
+            .any(|c| matches!(c, HostCommand::CreateSession { .. }))
+    );
+}
+
+#[test]
+fn ssh_setup_does_not_offer_for_auth_errors_custom_sockets_or_stale_hosts() {
+    let mut ws = workspace();
+    ws.settings.hosts[0].endpoint = "ssh://box".into();
+    assert!(
+        !ws.can_start_ssh(0),
+        "a generic disconnected host is not a missing server"
+    );
+    ws.hosts[0].model.ssh_server_missing = true;
+    assert!(ws.can_start_ssh(0));
+    ws.preview_ssh_start(0);
+    ws.settings.hosts[0].endpoint = "ssh://different".into();
+    ws.submit(&mut rune::Tx::default());
+    assert!(ws.ssh_setup.ran.is_empty());
+    assert!(ws.panel.as_ref().unwrap().error.is_some());
+    ws.settings.hosts[0].endpoint = "ssh://box/custom.sock".into();
+    assert!(!ws.can_start_ssh(0));
+    ws.settings.hosts[0].endpoint = "ssh://box".into();
+    ws.hosts[0].model.connected = true;
+    assert!(!ws.can_start_ssh(0));
+}
+
+#[test]
 fn discovered_listeners_are_reviewed_before_connecting() {
     let mut ws = workspace();
     ws.apply_scan(0, Ok(tailnet()));
