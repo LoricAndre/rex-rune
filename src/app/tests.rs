@@ -3393,6 +3393,27 @@ fn ssh_start_is_explicit_one_shot_and_defaults_to_not_now() {
 }
 
 #[test]
+fn ssh_setup_completion_does_not_reconnect_removed_or_connected_hosts() {
+    for connected in [false, true] {
+        let mut ws = workspace();
+        ws.settings.hosts[0].endpoint = "ssh://box".into();
+        ws.ssh_setup.running = Some("ssh://box".into());
+        let commands = capture_host(&mut ws, 0);
+        if connected {
+            ws.hosts[0].model.connected = true;
+        } else {
+            ws.settings.hosts[0].endpoint = "ssh://different".into();
+        }
+        ws.ssh_start_finished("ssh://box", Ok(()), &mut rune::Tx::default());
+        assert!(
+            !commands
+                .try_iter()
+                .any(|c| matches!(c, HostCommand::Reconnect))
+        );
+    }
+}
+
+#[test]
 fn ssh_setup_does_not_offer_for_auth_errors_custom_sockets_or_stale_hosts() {
     let mut ws = workspace();
     ws.settings.hosts[0].endpoint = "ssh://box".into();

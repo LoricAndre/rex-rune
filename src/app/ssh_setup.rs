@@ -98,6 +98,23 @@ impl Workspace {
         }
     }
 
+    /// One read-only lookup, only while this saved host still needs a connection.
+    fn reconnect_ssh_if_needed(&self, endpoint: &str) -> &'static str {
+        let Some(host) = self
+            .settings
+            .hosts
+            .iter()
+            .position(|h| h.endpoint == endpoint)
+        else {
+            return "The host is no longer saved; no connection was requested.";
+        };
+        if self.hosts.get(host).is_none_or(|h| h.model.connected) {
+            return "No new connection was requested; the host is already connected or unavailable.";
+        }
+        self.send(host, HostCommand::Reconnect);
+        "Checking the connection through SSH without starting a server."
+    }
+
     pub fn ssh_start_finished(&mut self, endpoint: &str, result: Result<(), String>, tx: &mut Tx) {
         if self.ssh_setup.running.as_deref() != Some(endpoint) {
             return;
@@ -111,15 +128,10 @@ impl Workspace {
                 if showing {
                     self.close_panel(tx);
                 }
-                if let Some(host) = self
-                    .settings
-                    .hosts
-                    .iter()
-                    .position(|h| h.endpoint == endpoint)
-                {
-                    self.send(host, HostCommand::Reconnect);
-                }
-                self.inform(format!("Personal server answered on {endpoint}. Connecting through SSH; no session was created."));
+                let connection = self.reconnect_ssh_if_needed(endpoint);
+                self.inform(format!(
+                    "Personal server answered on {endpoint}. {connection} No session was created."
+                ));
             }
             Err(error) => {
                 let message = format!(
