@@ -3385,7 +3385,13 @@ fn ssh_start_is_explicit_one_shot_and_defaults_to_not_now() {
     }
     click(&mut rt, "confirm-ssh-start");
     assert_eq!(rt.state.ssh_setup.ran.len(), 2);
-    rt.update(|s, tx| s.ssh_start_finished("ssh://work-alias", Ok(()), tx));
+    rt.update(|s, tx| {
+        s.ssh_start_finished(
+            "ssh://work-alias",
+            Ok(rex_linux::ssh::setup::Attachment::Automatic),
+            tx,
+        )
+    });
     assert!(rt.state.panel.is_none());
     let sent: Vec<_> = commands.try_iter().collect();
     assert!(sent.iter().any(|c| matches!(c, HostCommand::Reconnect)));
@@ -3394,6 +3400,35 @@ fn ssh_start_is_explicit_one_shot_and_defaults_to_not_now() {
             .iter()
             .any(|c| matches!(c, HostCommand::CreateSession { .. }))
     );
+}
+
+#[test]
+fn ssh_setup_offers_explicit_socket_without_reconnecting_or_starting_again() {
+    let mut ws = workspace();
+    ws.settings.hosts[0].endpoint = "ssh://box".into();
+    ws.hosts[0].model.ssh_server_missing = true;
+    ws.preview_ssh_start(0);
+    ws.ssh_setup.running = Some("ssh://box".into());
+    let commands = capture_host(&mut ws, 0);
+    ws.ssh_start_finished(
+        "ssh://box",
+        Ok(rex_linux::ssh::setup::Attachment::Review {
+            reason: "Automatic lookup cannot find this socket".into(),
+            endpoint: Some("ssh://box/custom/socket".into()),
+        }),
+        &mut rune::Tx::default(),
+    );
+    assert!(
+        !commands
+            .try_iter()
+            .any(|c| matches!(c, HostCommand::Reconnect))
+    );
+    assert_eq!(ws.settings.hosts[0].endpoint, "ssh://box");
+    ws.start_ssh("ssh://box".into());
+    assert!(ws.ssh_setup.ran.is_empty());
+    ws.save_ssh_socket("ssh://box", &mut rune::Tx::default());
+    assert_eq!(ws.settings.hosts[0].endpoint, "ssh://box/custom/socket");
+    assert!(ws.panel.is_none());
 }
 
 #[test]
@@ -3434,7 +3469,11 @@ fn ssh_setup_completion_does_not_reconnect_removed_or_connected_hosts() {
         } else {
             ws.settings.hosts[0].endpoint = "ssh://different".into();
         }
-        ws.ssh_start_finished("ssh://box", Ok(()), &mut rune::Tx::default());
+        ws.ssh_start_finished(
+            "ssh://box",
+            Ok(rex_linux::ssh::setup::Attachment::Automatic),
+            &mut rune::Tx::default(),
+        );
         assert!(
             !commands
                 .try_iter()

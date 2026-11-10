@@ -38,6 +38,60 @@ impl std::fmt::Display for Failure {
 
 impl std::error::Error for Failure {}
 
+/// How the reported server can be attached to without another setup attempt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Attachment {
+    Automatic,
+    Review {
+        reason: String,
+        endpoint: Option<String>,
+    },
+}
+
+fn attachment(target: &Target, status: &rexrs::api::server::StatusResponse) -> Attachment {
+    let primary = status
+        .listeners
+        .iter()
+        .find(|l| l.primary == Some(true))
+        .or_else(|| status.listeners.first());
+    let unix = primary
+        .filter(|l| l.transport == "unix")
+        .or_else(|| status.listeners.iter().find(|l| l.transport == "unix"));
+    let path = unix
+        .and_then(|l| {
+            l.addresses
+                .first()
+                .map(String::as_str)
+                .or_else(|| l.endpoint.strip_prefix("unix://"))
+        })
+        .map(|p| p.strip_prefix("unix://").unwrap_or(p));
+    if let Some(path) = path {
+        let explicit = Target {
+            socket: Some(path.into()),
+            ..target.clone()
+        }
+        .endpoint();
+        // The ordinary lookup extracts a .sock path from the primary Unix endpoint.
+        if primary.is_some_and(|l| l.transport == "unix")
+            && path.ends_with(".sock")
+            && !path.contains(char::is_whitespace)
+        {
+            return Attachment::Automatic;
+        }
+        let reason = "The server answered, but automatic SSH socket lookup cannot find this listener. Save its reported Unix socket endpoint to connect without starting it again.".into();
+        if path.starts_with('/') && Target::parse(&explicit).is_ok() {
+            return Attachment::Review {
+                reason,
+                endpoint: Some(explicit),
+            };
+        }
+    }
+    Attachment::Review {
+        reason: "The server answered, but it reported no Unix socket this client can forward. Automatic SSH socket lookup cannot use a TCP primary. Edit the host to use a reachable network endpoint, or ask the server owner for a Unix socket; do not start it again.".into(),
+        endpoint: None,
+    }
+}
+
 /// The exact invocation the confirmation previews. No shell and no session creation.
 pub fn start_args(target: &Target) -> Result<Vec<String>> {
     ensure!(
@@ -136,12 +190,12 @@ fn require_api12(version: &str, location: &str) -> Result<()> {
 
 /// Call only after the person confirms. Every invocation authorizes one attempt, never a
 /// persistent auto-start setting. SSH config/aliases remain OpenSSH's responsibility.
-pub async fn start_personal(endpoint: &str) -> Result<(), Failure> {
+pub async fn start_personal(endpoint: &str) -> Result<Attachment, Failure> {
     let target = Target::parse(endpoint)?.context("Setup requires an ssh:// host")?;
     start_with(&target, local_rex().as_os_str(), OsStr::new("ssh")).await
 }
 
-async fn start_with(target: &Target, rex: &OsStr, ssh: &OsStr) -> Result<(), Failure> {
+async fn start_with(target: &Target, rex: &OsStr, ssh: &OsStr) -> Result<Attachment, Failure> {
     let args = start_args(target)?;
     let local = output(rex, &["version".into(), "--json".into()]).await?;
     require_api12(&local, "Local")?;
@@ -156,9 +210,9 @@ async fn start_with(target: &Target, rex: &OsStr, ssh: &OsStr) -> Result<(), Fai
     let reply = output(rex, &args)
         .await
         .map_err(|error| Failure::after_start(format!("{error:#}")))?;
-    let _: rexrs::api::server::StatusResponse =
+    let status: rexrs::api::server::StatusResponse =
         serde_json::from_str(&reply).map_err(Failure::after_start)?;
-    Ok(())
+    Ok(attachment(target, &status))
 }
 
 #[cfg(test)]
@@ -224,6 +278,59 @@ mod tests {
         );
         assert!(!log.exists());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn attachment_uses_reported_unix_addresses_and_handles_tcp_primaries() {
+        use rexrs::api::server::{Listener, StatusResponse};
+        let target = Target::parse("ssh://ops@box:2222").unwrap().unwrap();
+        let unix = Listener {
+            endpoint: "unix:///configured".into(),
+            addresses: vec!["/actual/socket".into()],
+            transport: "unix".into(),
+            primary: Some(true),
+            ..Default::default()
+        };
+        let mut status = StatusResponse {
+            listeners: vec![unix],
+            ..Default::default()
+        };
+        let Attachment::Review { endpoint, .. } = attachment(&target, &status) else {
+            panic!("explicit path")
+        };
+        assert_eq!(
+            endpoint.as_deref(),
+            Some("ssh://ops@box:2222/actual/socket")
+        );
+        status.listeners[0].addresses = vec!["/actual/server.sock".into()];
+        assert_eq!(attachment(&target, &status), Attachment::Automatic);
+        status.listeners[0].primary = None;
+        status.listeners.insert(
+            0,
+            Listener {
+                endpoint: "127.0.0.1:7297".into(),
+                transport: "tcp".into(),
+                primary: Some(true),
+                ..Default::default()
+            },
+        );
+        let Attachment::Review { endpoint, .. } = attachment(&target, &status) else {
+            panic!("TCP primary")
+        };
+        assert_eq!(
+            endpoint.as_deref(),
+            Some("ssh://ops@box:2222/actual/server.sock")
+        );
+        status.listeners.pop();
+        assert!(matches!(
+            attachment(&target, &status),
+            Attachment::Review { endpoint: None, .. }
+        ));
+        status.listeners.clear();
+        assert!(matches!(
+            attachment(&target, &status),
+            Attachment::Review { endpoint: None, .. }
+        ));
     }
 
     #[test]
