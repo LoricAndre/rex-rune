@@ -152,7 +152,9 @@ pub fn dialog(s: &Workspace, endpoint: &str) -> rune::El {
         .child(text(panel.title.clone()).font(strong(17.)).color(rgb(ink())).wrap())
         .child(text(format!("{endpoint}\n\nUses your SSH configuration and the Rex executable already installed on both machines (preview.14 or newer). Starts a personal server as the SSH login user only if none is running. No packages, system services or sessions are created. The server may create its own user config/state files and keeps running when this app closes.\n\nThis is one attempt, not permission to auto-start on reconnect. SSH must already work without a password prompt."))
             .font(ui(12.)).color(rgb(muted())).wrap())
-        .child(text(command).font(ui(12.)).color(rgb(ink())).wrap());
+        .child(text(format!("On this machine: {command}")).font(ui(12.).mono()).color(rgb(ink())).wrap())
+        .child(text("On host, via your SSH: rex version --json, then rex server start --json (chosen by Rex)")
+            .font(ui(12.).mono()).color(rgb(ink())).wrap());
     if let Some(running) = &s.ssh_setup.running {
         body = body.child(
             text(format!(

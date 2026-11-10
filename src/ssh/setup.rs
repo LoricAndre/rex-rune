@@ -30,10 +30,22 @@ pub fn command_preview(target: &Target) -> Result<String> {
         "rex {}",
         start_args(target)?
             .iter()
-            .map(|arg| format!("'{}'", arg.replace('\'', "'\\''")))
+            .map(|arg| quote_arg(arg))
             .collect::<Vec<_>>()
             .join(" ")
     ))
+}
+
+fn quote_arg(arg: &str) -> String {
+    if !arg.is_empty()
+        && arg
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"_./:@%+=,-{}".contains(&c))
+    {
+        arg.to_owned()
+    } else {
+        format!("'{}'", arg.replace('\'', "'\\''"))
+    }
 }
 
 fn local_rex() -> PathBuf {
@@ -175,6 +187,18 @@ mod tests {
         );
         assert!(!log.exists());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn command_preview_quotes_only_shell_sensitive_arguments() {
+        let target = Target::parse("ssh://ops@box:2222").unwrap().unwrap();
+        assert_eq!(
+            command_preview(&target).unwrap(),
+            "rex --autostart=true --server ssh://ops@box:2222 --timeout 20s api call server.status {}"
+        );
+        assert_eq!(quote_arg("ssh://me@[fd7a::1]"), "'ssh://me@[fd7a::1]'");
+        assert_eq!(quote_arg("a'b"), "'a'\\''b'");
+        assert_eq!(quote_arg("two words"), "'two words'");
     }
 
     #[test]
