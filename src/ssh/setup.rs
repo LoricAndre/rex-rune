@@ -87,7 +87,7 @@ fn attachment(target: &Target, status: &rexrs::api::server::StatusResponse) -> A
         }
     }
     Attachment::Review {
-        reason: "The server answered, but it reported no Unix socket this client can forward. Automatic SSH socket lookup cannot use a TCP primary. Edit the host to use a reachable network endpoint, or ask the server owner for a Unix socket; do not start it again.".into(),
+        reason: "The server answered, but it reported no Unix socket this client can forward. Automatic SSH socket lookup needs a Unix listener, not a TCP endpoint. Edit the host to use a reachable network endpoint, or ask the server owner for a Unix socket; do not start it again.".into(),
         endpoint: None,
     }
 }
