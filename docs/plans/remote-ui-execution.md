@@ -15,12 +15,14 @@ Today Rex Linux answers every `client.perform` request with `not_supported`. The
 
 ## Implementation verification
 
+Stack: [PR 1 — consent, guards, existing actions and label](https://github.com/shuv1337/rex-rune/pull/26), then [PR 2 — session.select](https://github.com/shuv1337/rex-rune/pull/27). Both remain unmerged; ship together in 0.5.0.
+
 - `cargo test --locked --all-features`: protocol mocks and headless UI tests pass, including expiry/busy-loop/reconnect, exhaustive remote classes, hazards, consent, arguments, target/panel/typing guards, navigation acknowledgement/failure/timeout and local binding independence.
 - `cargo clippy --locked --all-targets --all-features -- -D warnings`, `cargo fmt --all -- --check`, and vendored rexrs tests pass.
 - `scripts/keymap-acceptance.py`, `scripts/x11-smoke.py`, and the new `scripts/remote-control-acceptance.py` pass on isolated preview.14 servers. The remote script drives `rex do` and `rex api call client.perform`, including all eight allowed actions, both consent states, non-supported hazards, malformed arguments and target failures.
 - Real `ssh://` attachment to the second private server was exercised with an unprivileged private sshd and disposable keys. No user servers, installed packages or units were changed; owned processes were stopped by PID.
 - Rendered Settings → Remote Hosts and performed-request notices were inspected at 1440×900 in Xvfb.
-- Implementation detail: label edits apply after reopening (stated in Settings), and unknown tabs in uncached sessions are resolved by the server during navigation rather than refusing an unpopulated cache. No vendored SDK changes or API gate were needed.
+- Implementation details: requests also refuse while another navigation is pending, label edits apply after reopening (stated in Settings), and unknown tabs in uncached sessions are resolved by the server during navigation rather than refusing an unpopulated cache. No vendored SDK changes or API gate were needed.
 
 ## 1. The problem
 
