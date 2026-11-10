@@ -110,6 +110,38 @@ async fn new_terminals_start_in_the_source_shells_directory() {
 }
 
 #[tokio::test]
+async fn a_session_ending_after_terminal_creation_is_removed() {
+    let (host, server) = split_server(|mut socket| async move {
+        let ws = &mut socket;
+        let lookup = directory_lookup(ws).await;
+        reply(ws, &lookup, 2, json!({})).await;
+        let split = next(ws).await;
+        assert_eq!(split["method"], "session.new_split");
+        reply(ws, &split, 3, json!({"block_ids":["block:b"]})).await;
+        let refresh = next(ws).await;
+        assert_eq!(refresh["method"], "session.view");
+        send(
+            ws,
+            json!({"type":"response","id":refresh["id"],
+                "error":{"code":"session_not_found","message":"session ended","status":404}}),
+        )
+        .await;
+        socket
+    })
+    .await;
+    until(&host, |m| !m.views.contains_key(SESSION)).await;
+    {
+        let model = host.model.lock().unwrap();
+        assert!(model.sessions.iter().all(|s| s.session_id != SESSION));
+        assert!(model.selected.is_none());
+        assert!(model.notice.is_none());
+        assert!(model.connected);
+    }
+    drop(host);
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn a_failed_directory_lookup_still_opens_the_terminal() {
     let (host, server) = split_server(|mut socket| async move {
         let ws = &mut socket;

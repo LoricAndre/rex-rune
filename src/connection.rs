@@ -1577,6 +1577,32 @@ async fn upload(
     Ok(())
 }
 
+/// Clear a successful request's notice and reconcile its session, which may have ended.
+async fn after_request(
+    control: &mut Client,
+    shared: &Shared,
+    workers: &mut HashMap<String, PaneWorker>,
+    state: &mut ControlState,
+    session: Option<&str>,
+) -> Result<()> {
+    shared.update(|m| m.notice = None);
+    if let Some(id) = session {
+        // Destroying a session, or closing its last tab, ends it: nothing to re-read.
+        match refresh(control, shared, state, id).await {
+            Err(error)
+                if matches!(
+                    error.downcast_ref::<rexrs::Error>(),
+                    Some(rexrs::Error::Api(rexrs::ApiError::SessionNotFound { .. }))
+                ) =>
+            {
+                remove_session(shared, workers, id)
+            }
+            result => result?,
+        }
+    }
+    Ok(())
+}
+
 async fn handle_command(
     command: HostCommand,
     control: &mut Client,
@@ -1664,21 +1690,7 @@ async fn handle_command(
         HostCommand::Request { method, payload } => {
             let session_id = payload["session_id"].as_str().map(str::to_owned);
             request(control, &method, payload).await?;
-            shared.update(|m| m.notice = None);
-            if let Some(id) = session_id {
-                // Destroying a session, or closing its last tab, ends it: nothing to re-read.
-                match refresh(control, shared, state, &id).await {
-                    Err(error)
-                        if matches!(
-                            error.downcast_ref::<rexrs::Error>(),
-                            Some(rexrs::Error::Api(rexrs::ApiError::SessionNotFound { .. }))
-                        ) =>
-                    {
-                        remove_session(shared, workers, &id)
-                    }
-                    result => result?,
-                }
-            }
+            after_request(control, shared, workers, state, session_id.as_deref()).await?;
         }
         HostCommand::NewTerminal {
             method,
@@ -1694,8 +1706,7 @@ async fn handle_command(
             }
             // Creation is sent once. A failure follows the ordinary request path; never replay.
             request(control, &method, payload).await?;
-            shared.update(|m| m.notice = None);
-            refresh(control, shared, state, &session).await?;
+            after_request(control, shared, workers, state, Some(&session)).await?;
         }
         HostCommand::Ticket {
             session,
