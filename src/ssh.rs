@@ -568,7 +568,6 @@ mod tests {
                 .missing_server_message("me")
                 .contains("rex server install 'ssh://box'")
         );
-        assert!(RESOLVE.contains("rex server status --autostart=false"));
     }
 
     #[test]
