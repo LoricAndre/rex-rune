@@ -1246,6 +1246,113 @@ fn invalid_shortcuts_start_with_one_notice_and_a_persistent_settings_problem() {
 }
 
 #[test]
+fn a_notification_switch_flips_and_settings_stay_open() {
+    let mut ws = workspace();
+    let mut tx = rune::Tx::default();
+    ws.perform(Intent::Settings, &mut tx);
+    let mut rt = runtime(ws);
+    click(&mut rt, "settings-section:notifications");
+    assert!(rt.state.settings.notifications.show_in_tabs);
+    click(&mut rt, "notify-tabs");
+    assert!(
+        matches!(
+            rt.state.panel.as_ref().map(|p| &p.kind),
+            Some(PanelKind::Settings)
+        ),
+        "Settings stays open"
+    );
+    assert!(
+        !rt.state.settings.notifications.show_in_tabs,
+        "the switch flipped"
+    );
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn a_disabled_notification_switch_leaves_settings_open() {
+    let mut ws = workspace();
+    ws.settings.notifications.system_notifications = false;
+    let blocked = ws.settings.notifications.blocked;
+    let mut tx = rune::Tx::default();
+    ws.perform(Intent::Settings, &mut tx);
+    let mut rt = runtime(ws);
+    click(&mut rt, "settings-section:notifications");
+    click(&mut rt, "notify-blocked");
+    assert!(
+        matches!(
+            rt.state.panel.as_ref().map(|p| &p.kind),
+            Some(PanelKind::Settings)
+        ),
+        "a press on a disabled switch must not reach the dismiss layer"
+    );
+    assert_eq!(rt.state.settings.notifications.blocked, blocked, "disabled");
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn a_press_on_a_dialogs_padding_leaves_it_open() {
+    let mut ws = workspace();
+    let mut tx = rune::Tx::default();
+    ws.perform(Intent::Settings, &mut tx);
+    let mut rt = runtime(ws);
+    let r = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("dialog"))
+        .expect("the Settings dialog")
+        .rect;
+    rt.pointer_down(r[0] + 6., r[1] + 6.);
+    rt.pointer_up(r[0] + 6., r[1] + 6.);
+    for _ in 0..4 {
+        rt.frame(1. / 60.);
+    }
+    assert!(
+        matches!(
+            rt.state.panel.as_ref().map(|p| &p.kind),
+            Some(PanelKind::Settings)
+        ),
+        "only a press outside the dialog closes it"
+    );
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn dialog_padding_preserves_field_focus_but_the_scrim_dismisses() {
+    let mut ws = workspace();
+    ws.open_panel(
+        PanelKind::Form(Form::AddHost),
+        "Add host",
+        &[
+            ("Name", "", "work"),
+            ("Endpoint", "", "unix:///tmp/rex.sock"),
+        ],
+    );
+    let mut rt = runtime(ws);
+    press(&mut rt, Key::Tab);
+    let before = focused(&rt).expect("the second field is focused");
+    assert!(before.contains("/field:1/"), "Tab reached {before}");
+    let r = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("dialog"))
+        .unwrap()
+        .rect;
+    rt.pointer_down(r[0] + 6., r[1] + 6.);
+    rt.pointer_up(r[0] + 6., r[1] + 6.);
+    rt.frame(1. / 60.);
+    assert!(rt.state.panel.is_some(), "padding is not the scrim");
+    assert_eq!(focused(&rt), Some(before), "typing stays in the field");
+
+    // Stay off the window's resize edges, which own their presses even with a panel open.
+    rt.pointer_down(40., 200.);
+    rt.pointer_up(40., 200.);
+    rt.frame(1. / 60.);
+    assert!(rt.state.panel.is_none(), "outside presses still dismiss");
+    assert_eq!(focused(&rt), None, "focus returns to the terminal");
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
 fn settings_sections_and_their_forms_return_to_settings() {
     let mut ws = workspace_hosts(2);
     let mut tx = rune::Tx::default();
