@@ -4,7 +4,7 @@
 
 ## Release sequence
 
-Complete the [owner setup](#owner-setup-before-the-first-signed-release) before the first signed tag. The choice in plan question 6 (key custody) is still an owner decision; the implemented default is signing in `publish`, inside the reviewed `release` environment. The isolated signing step can be replaced with [manual signing](#manual-or-offline-signing).
+Complete the [owner setup](#owner-setup-before-the-first-signed-release) before the first signed tag. The owner approved CI custody: signing runs in `publish`, inside the protected `release` environment with shuv1337 as required reviewer. The isolated signing step can be replaced with [manual signing](#manual-or-offline-signing).
 
 1. Update the version in `Cargo.toml`, the `rex-linux` entry in `Cargo.lock`, and `nix/package.nix`; update `CHANGELOG.md` and installation examples as needed.
 2. Commit and push to `master`. Run **Binary release** manually in GitHub Actions to test without publishing. The `release-tools` job tests the manifest and signs/verifies fixture metadata using encrypted throwaway keys, deleted at test exit. The separate `manual-signing-test` job gathers real build artifacts, generates metadata, and signs/verifies it with an encrypted throwaway minisign key pair in `$RUNNER_TEMP`, then deletes the key pair. It has only `contents: read`, no environment, and no production secrets. **`publish` never runs on `workflow_dispatch`, even when run on a tag**. Manual runs do not create attestations or request environment approval.
@@ -24,9 +24,29 @@ Its schema is `1`, product is `rex-linux`, and both `x86_64-linux-gnu` and `aarc
 
 ## Owner setup before the first signed release
 
-**No production keys or secrets are supplied by this change. Only the owner creates them.** Do not paste a private key or password into chat, a PR, the repository, or a command-line argument. The backup private key must never reach GitHub. The decision in plan question 1 (APT address), OpenPGP keys, Pages, and `APT_SIGNING_KEY` belong to the later APT PR and are not needed here.
+**CI custody is configured; the offline backup public key is still required.** The owner approved agent generation of the encrypted CI key and random passphrase, uploaded only as `RELEASE_MINISIGN_KEY` and `RELEASE_MINISIGN_PASSWORD` environment secrets in `release`. Private setup files were shredded after upload. The environment requires shuv1337's approval, disables administrator bypass, allows self-review for the single maintainer, and permits only `v*` tags. Active tag rulesets allow admin-only creation and prohibit updates/deletion without bypass; immutable releases are enabled.
 
-Exactly what to create/configure:
+The committed CI key is `packaging/keys/release.pub`:
+
+- Minisign key ID: `A1FD78C27652816E`.
+- SHA-256 fingerprint (decoded 42-byte minisign public-key record):
+  `9e779605311a46a5287d6c9b25eb2083fb17447454239c7d66f1ecebe336d0c6`.
+- **Offline backup public key: PENDING OWNER INPUT.** Destination:
+  `packaging/keys/release-backup.pub`; key ID, fingerprint and complete public value
+  are **PENDING** in the [public-key registry](../packaging/keys/README.md).
+  Generate it on your offline machine using the backup command below. Send only
+  the complete two-line `.pub` content in chat or attach that `.pub` file; keep
+  the private key and passphrase offline. A reviewed PR must add the public file
+  and fill the pending fields before any release tag is created.
+
+**Tag publication currently fails closed because `release-backup.pub` is absent.**
+A passing manual test uses throwaway keys, never enters `release`, and does not
+validate the stored production secrets. Do not regenerate the configured CI key
+just to finish setup; only the offline backup remains outstanding.
+
+Do not paste a private key or password into chat, a PR, the repository, or a command-line argument. The backup private key must never reach GitHub. The decision in plan question 1 (APT address), OpenPGP keys, Pages, and `APT_SIGNING_KEY` belong to the later APT PR and are not needed here.
+
+Setup reference for a fresh repository or deliberate rotation (do not overwrite the existing CI key):
 
 1. **Two password-protected minisign key pairs.** On a trusted machine, outside any checkout, run the following yourself. Minisign prompts for passwords. Create the backup pair on your offline machine instead; bring back only its public half. Keep the backup secret and its password offline in two secure places.
 
@@ -38,7 +58,7 @@ Exactly what to create/configure:
    minisign -G -p release-backup.pub -s rex-linux-release-backup.key
    ```
 
-2. **Commit only the two public files**, as `packaging/keys/release.pub` and `packaging/keys/release-backup.pub`, in a reviewed change. Print both public-key values in the README in that change, replacing the pending-setup wording. Never commit a throwaway test key as a trust root. The signing helper requires both public files and accepts signatures from either; the later client PR will embed both.
+2. **Commit only the two public files**, as `packaging/keys/release.pub` and `packaging/keys/release-backup.pub`, in a reviewed change. Record both public-key values, minisign key IDs and SHA-256 fingerprints of the decoded 42-byte minisign public-key records in the public-key README, replacing the pending-setup wording; keep the README and this document's key IDs and fingerprints in sync. Never commit a throwaway test key as a trust root. The signing helper requires both public files and accepts signatures from either; the later client PR will embed both.
 
    ```sh
    # From the checkout, after copying only public files from the machines above:
