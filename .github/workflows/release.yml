@@ -76,7 +76,7 @@ jobs:
           dpkg-deb --info dist/*.deb
           sudo apt-get install -y ./dist/*.deb
           /usr/bin/rex-linux --version
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-${{ matrix.arch }}
           path: |
@@ -128,7 +128,7 @@ jobs:
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           python3 scripts/release-manifest.py --version "$version" --update-from 0.4.2
       - name: Save unsigned metadata before signing
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unsigned-release-metadata
           path: |
@@ -150,7 +150,7 @@ jobs:
           python3 scripts/sign-release.py --tag "$RELEASE_TAG" --keys-dir "$RUNNER_TEMP"
           cp "$RUNNER_TEMP/release.pub" "$RUNNER_TEMP/release-backup.pub" dist/
       - name: Save throwaway-signed metadata and test public keys
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-release-metadata
           path: |
@@ -190,7 +190,7 @@ jobs:
           # Oldest compatible tarball layout; raise only for an incompatible install change.
           python3 scripts/release-manifest.py --version "$version" --update-from 0.4.2
       - name: Save unsigned metadata before signing
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unsigned-release-metadata
           path: |
@@ -204,7 +204,7 @@ jobs:
           RELEASE_TAG: ${{ steps.metadata.outputs.tag }}
         run: python3 scripts/sign-release.py --tag "$RELEASE_TAG"
       - name: Save metadata for inspection or draft recovery
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-metadata
           path: |
