@@ -74,9 +74,10 @@ The CLI's `rex server status --json` also includes this list.
   revision and reject 9 and 13. SDK status/bootstrap responses decode listeners.
 - Answer `client_perform_requested` on its originating connection with
   `client.reply`, the original `call_id`, and `not_supported` plus a useful
-  explanation. No interface action is executed. Directed requests bypass session
-  snapshot sequence filtering; a reply to an expired call (`not_found`) does not
-  disconnect the host or get retried.
+  explanation naming the requested action. No interface action is executed.
+  Directed requests bypass session snapshot sequence filtering. API errors
+  (including an expired call's `not_found`) and reply timeouts are logged at debug
+  without disconnecting the host; replies are never retried.
 - Preserve `ssh -L` forwarding and make socket lookup explicitly
   `rex server status --autostart=false`. When no server is found, explain that
   Rex Linux only attaches and suggest manually running
@@ -89,7 +90,9 @@ The shipped `rex skill show` guide says to inspect an app's actions before using
 Control on their behalf. Rex Linux has no Remote Control toggle: remote interface
 execution is unimplemented, hence `not_supported`, not a pretend configurable
 `refused` state. Local shortcuts and queued actions returned by `client.action`
-continue to work normally.
+continue to work normally. The app’s actions listed by `client.inspect` are
+**local-only**; advertising them does not make them remotely callable. Requests
+from other clients via `client.perform` are refused with `not_supported`.
 
 ## Deferred deliberately
 

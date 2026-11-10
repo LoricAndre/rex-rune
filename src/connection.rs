@@ -1063,10 +1063,11 @@ async fn handle_event(
     // sequence below bootstrap's cutoff needs an answer on this same connection.
     if event.name == "client_perform_requested" {
         if let Some(call_id) = event.payload["call_id"].as_str() {
+            let action = event.payload["action"].as_str().unwrap_or("unknown");
             let reply = rexrs::api::client::Reply::new(call_id).error(
                 rexrs::api::client::ReplyError::new(
                     "not_supported",
-                    "Rex Linux does not support remote client actions. Use Rex session, window and block commands to manage server state; use the app for interface actions.",
+                    format!("Rex Linux does not support remote client actions: {action}. Use Rex session, window and block commands to manage server state; use the app for interface actions."),
                 ),
             );
             match tokio::time::timeout(Duration::from_secs(8), control.call(reply)).await {

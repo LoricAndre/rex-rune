@@ -121,7 +121,7 @@ async fn remote_perform_is_declined_even_without_session_and_after_caller_timeou
                 reply["payload"]["error"]["message"]
                     .as_str()
                     .unwrap()
-                    .contains("does not support remote client actions")
+                    .contains("does not support remote client actions: client.settings.")
             );
             assert!(reply["payload"].get("result").is_none());
             let response = if expired {

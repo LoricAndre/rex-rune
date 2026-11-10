@@ -223,6 +223,11 @@ defaults plus overrides work instead. A keymap error never disconnects the host;
 Settings → Shortcuts retains its explanation. Config changes refresh by hash and
 server instance, and every reconnect registers again.
 
+The app’s actions listed by `client.inspect` are **local-only**: they serve local
+shortcuts and queued actions returned by `client.action`. Requests from other
+clients via `client.perform` are refused with `not_supported`; the refusal names
+the requested action. Advertising the registry does not enable remote control.
+
 Later entries win; `null` frees those exact keys for the terminal. Hand edits reload
 when the window regains focus or Settings opens, gated by file mtime and length.
 `cmd`/`super` means Super, not Ctrl. Physical keys use W3C names such as
