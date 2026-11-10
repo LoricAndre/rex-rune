@@ -18,22 +18,26 @@ The encrypted CI private key and random passphrase are environment secrets in
 GitHub's protected `release` environment, not repository-wide secrets. Each tag
 release requires approval by shuv1337; administrator bypass is disabled.
 
-## Offline backup public key — PENDING OWNER INPUT
+## Offline recovery key — `release-backup.pub`
 
-- Destination: `packaging/keys/release-backup.pub` (intentionally absent).
-- Minisign key ID: **PENDING**.
-- SHA-256 fingerprint: **PENDING**.
-- Complete public-key text: **PENDING**.
+- Minisign key ID: `368EA1A12E2721F3`
+- SHA-256 fingerprint (decoded 42-byte minisign public-key record):
+  `d9fe424ca8b20725e11d6039c39445d38a33023a8d366c69e0612a1c3528de76`
 
-Generate the backup on your own offline machine, keep its private key and
-passphrase offline, and send only the complete two-line `release-backup.pub`
-content as a chat message or `.pub` attachment. Commit it through a reviewed PR,
-then replace these pending fields with its actual public value, ID and fingerprint.
-Do not substitute the CI key, a test key, or a placeholder file.
+```text
+untrusted comment: minisign public key 368EA1A12E2721F3
+RWTzIScuoaGONtqf+4m48HAGuwNgUxvd/AFZareIgMwCGCKVjbTjcmJe
+```
 
-**Tag publication currently fails closed because the backup public key is missing.**
-Manual workflow tests use throwaway keys and do not enter the `release` environment;
-they cannot prove production-secret availability. The future updater will embed
-both public keys; no client verification is added by this change.
+Only this public half was supplied for the setup PR. Its private key and passphrase
+remain on the owner's separate backup machine, never in this checkout or GitHub.
+Keep recoverable offline copies; never send the backup secret or its passphrase.
+
+**Both required public-key files are present.** A tag release no longer fails
+for a missing public key, but still fails closed on missing secrets or invalid
+signatures. Manual workflow tests use throwaway keys and do not enter the
+`release` environment; they cannot prove production-secret availability. The
+future updater will embed both public keys; no client verification is added
+by this change.
 
 See [release setup](../../docs/releases.md) for verification and recovery.

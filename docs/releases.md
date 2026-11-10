@@ -24,25 +24,30 @@ Its schema is `1`, product is `rex-linux`, and both `x86_64-linux-gnu` and `aarc
 
 ## Owner setup before the first signed release
 
-**CI custody is configured; the offline backup public key is still required.** The owner approved agent generation of the encrypted CI key and random passphrase, uploaded only as `RELEASE_MINISIGN_KEY` and `RELEASE_MINISIGN_PASSWORD` environment secrets in `release`. Private setup files were shredded after upload. The environment requires shuv1337's approval, disables administrator bypass, allows self-review for the single maintainer, and permits only `v*` tags. Active tag rulesets allow admin-only creation and prohibit updates/deletion without bypass; immutable releases are enabled.
+**CI custody and both public trust roots are configured.** The owner approved agent generation of the encrypted CI key and random passphrase, uploaded only as `RELEASE_MINISIGN_KEY` and `RELEASE_MINISIGN_PASSWORD` environment secrets in `release`. Private setup files were shredded after upload. The environment requires shuv1337's approval, disables administrator bypass, allows self-review for the single maintainer, and permits only `v*` tags. Active tag rulesets allow admin-only creation and prohibit updates/deletion without bypass; immutable releases are enabled.
 
 The committed CI key is `packaging/keys/release.pub`:
 
 - Minisign key ID: `A1FD78C27652816E`.
 - SHA-256 fingerprint (decoded 42-byte minisign public-key record):
   `9e779605311a46a5287d6c9b25eb2083fb17447454239c7d66f1ecebe336d0c6`.
-- **Offline backup public key: PENDING OWNER INPUT.** Destination:
-  `packaging/keys/release-backup.pub`; key ID, fingerprint and complete public value
-  are **PENDING** in the [public-key registry](../packaging/keys/README.md).
-  Generate it on your offline machine using the backup command below. Send only
-  the complete two-line `.pub` content in chat or attach that `.pub` file; keep
-  the private key and passphrase offline. A reviewed PR must add the public file
-  and fill the pending fields before any release tag is created.
 
-**Tag publication currently fails closed because `release-backup.pub` is absent.**
-A passing manual test uses throwaway keys, never enters `release`, and does not
-validate the stored production secrets. Do not regenerate the configured CI key
-just to finish setup; only the offline backup remains outstanding.
+The committed offline recovery key is `packaging/keys/release-backup.pub`:
+
+- Minisign key ID: `368EA1A12E2721F3`.
+- SHA-256 fingerprint (decoded 42-byte minisign public-key record):
+  `d9fe424ca8b20725e11d6039c39445d38a33023a8d366c69e0612a1c3528de76`.
+
+Both complete public values are in the [public-key registry](../packaging/keys/README.md).
+Only the backup public half was supplied; its private key and passphrase remain
+on the owner's separate backup machine and must never be uploaded to CI.
+Keep recoverable offline copies of the backup secret and passphrase.
+
+**Both required public-key files are present; a tag release no longer fails
+for a missing public key.** It still fails closed on missing secrets or invalid
+signatures. A passing manual test uses throwaway keys, never enters `release`,
+and does not validate the stored production secrets. Do not regenerate either
+configured key just to repeat setup.
 
 Do not paste a private key or password into chat, a PR, the repository, or a command-line argument. The backup private key must never reach GitHub. The decision in plan question 1 (APT address), OpenPGP keys, Pages, and `APT_SIGNING_KEY` belong to the later APT PR and are not needed here.
 

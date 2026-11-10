@@ -66,12 +66,17 @@ committed as [`packaging/keys/release.pub`](packaging/keys/release.pub):
 - Minisign key ID: `A1FD78C27652816E`.
 - SHA-256 fingerprint (decoded 42-byte minisign public-key record):
   `9e779605311a46a5287d6c9b25eb2083fb17447454239c7d66f1ecebe336d0c6`.
-- **Offline backup public key: PENDING OWNER INPUT**, including its ID and fingerprint.
-  Its destination is `packaging/keys/release-backup.pub`; send only the complete
-  two-line `.pub` content or file, never the private key or passphrase.
 
-See the [public-key registry](packaging/keys/README.md). Tag publication fails
-closed until the offline public key is committed. No client auto-update is implemented.
+The offline recovery public key is committed as
+[`packaging/keys/release-backup.pub`](packaging/keys/release-backup.pub):
+
+- Minisign key ID: `368EA1A12E2721F3`.
+- SHA-256 fingerprint (decoded 42-byte minisign public-key record):
+  `d9fe424ca8b20725e11d6039c39445d38a33023a8d366c69e0612a1c3528de76`.
+
+See the [public-key registry](packaging/keys/README.md). Both public trust roots
+are present; tag publication still fails closed on missing secrets or invalid
+signatures. No client auto-update is implemented.
 
 For a signed release, obtain and retain a trusted copy of those public keys
 separately from the downloaded assets. With `minisign` installed, and the package,
