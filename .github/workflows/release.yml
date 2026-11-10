@@ -166,7 +166,7 @@ jobs:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     needs: [build, release-tools, attest]
     runs-on: ubuntu-24.04
-    # U6 default: one reviewed job holds the signing secrets. See docs/releases.md.
+    # Default for plan question 6 (key custody): one reviewed job holds the signing secrets. See docs/releases.md.
     environment: release
     permissions:
       contents: write

@@ -4,7 +4,7 @@
 
 ## Release sequence
 
-Complete the [owner setup](#owner-setup-before-the-first-signed-release) before the first signed tag. Key custody (U6) is still an owner decision; the implemented default is signing in `publish`, inside the reviewed `release` environment. The isolated signing step can be replaced with [manual signing](#manual-or-offline-signing).
+Complete the [owner setup](#owner-setup-before-the-first-signed-release) before the first signed tag. The choice in plan question 6 (key custody) is still an owner decision; the implemented default is signing in `publish`, inside the reviewed `release` environment. The isolated signing step can be replaced with [manual signing](#manual-or-offline-signing).
 
 1. Update the version in `Cargo.toml`, the `rex-linux` entry in `Cargo.lock`, and `nix/package.nix`; update `CHANGELOG.md` and installation examples as needed.
 2. Commit and push to `master`. Run **Binary release** manually in GitHub Actions to test without publishing. The `release-tools` job tests the manifest and signs/verifies fixture metadata using encrypted throwaway keys, deleted at test exit. The separate `manual-signing-test` job gathers real build artifacts, generates metadata, and signs/verifies it with an encrypted throwaway minisign key pair in `$RUNNER_TEMP`, then deletes the key pair. It has only `contents: read`, no environment, and no production secrets. **`publish` never runs on `workflow_dispatch`, even when run on a tag**. Manual runs do not create attestations or request environment approval.
@@ -24,7 +24,7 @@ Its schema is `1`, product is `rex-linux`, and both `x86_64-linux-gnu` and `aarc
 
 ## Owner setup before the first signed release
 
-**No production keys or secrets are supplied by this change. Only the owner creates them.** Do not paste a private key or password into chat, a PR, the repository, or a command-line argument. The backup private key must never reach GitHub. U1 (the APT address), OpenPGP keys, Pages, and `APT_SIGNING_KEY` belong to the later APT PR and are not needed here.
+**No production keys or secrets are supplied by this change. Only the owner creates them.** Do not paste a private key or password into chat, a PR, the repository, or a command-line argument. The backup private key must never reach GitHub. The decision in plan question 1 (APT address), OpenPGP keys, Pages, and `APT_SIGNING_KEY` belong to the later APT PR and are not needed here.
 
 Exactly what to create/configure:
 
@@ -79,7 +79,7 @@ The compatibility baseline is the build distribution, not just CPU architecture:
 
 ## Manual or offline signing
 
-For U6's alternative, keep building, attesting and generating metadata in CI, but sign offline and publish manually as below. This PR does not automate an offline handoff. With CI signing secrets absent, a tag run saves `unsigned-release-metadata` and then fails closed at signing. Never publish unsigned files while waiting for signatures, and never use a manual test run's throwaway signatures for a release.
+For the offline alternative in plan question 6 (key custody), keep building, attesting and generating metadata in CI, but sign offline and publish manually as below. This PR does not automate an offline handoff. With CI signing secrets absent, a tag run saves `unsigned-release-metadata` and then fails closed at signing. Never publish unsigned files while waiting for signatures, and never use a manual test run's throwaway signatures for a release.
 
 1. Select the **tag-push** run for the exact candidate tag/commit. Check that both builds, `release-tools`, and `attest` succeeded, and that `publish` saved unsigned metadata. Ensure the run has finished or been cancelled before taking over so it cannot publish independently. In a clean checkout of that reviewed tag, download its artifacts into an empty `dist/` (replace `RUN_ID`):
 
