@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.1 - 2026-11-09
 
 ### Changed
 
@@ -11,7 +11,7 @@
 
 - Answer remote `client_perform_requested` actions with `not_supported` and an explanation instead of leaving agents waiting for a timeout. Remote interface control remains unimplemented; local shortcuts and their queued actions are unchanged.
 
-See [preview.14 compatibility notes](docs/server-preview14.md) for the exact protocol diff, test results and deferred features. Intended for the next patch release (0.4.1).
+See [preview.14 compatibility notes](docs/server-preview14.md) for the exact protocol diff, test results and deferred features.
 
 ## 0.4.0 — 2026-11-09
 
