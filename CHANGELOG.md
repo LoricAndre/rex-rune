@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Clicking a disabled control, divider or padding inside a dialog no longer dismisses it. Empty space preserves field focus; clicking outside still closes the dialog. Adapted from @kitten-lily.
+- Clicking a disabled control, divider or padding inside a dialog no longer dismisses it. Empty space preserves field focus; clicking outside still closes the dialog. (@kitten-lily)
 
 ## 0.4.1 - 2026-11-09
 
