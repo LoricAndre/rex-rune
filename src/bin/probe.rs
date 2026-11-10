@@ -68,10 +68,7 @@ async fn run() -> Result<()> {
         );
     }
     if let Ok(directory) = std::env::var("REX_KEYMAP_CAPTURE") {
-        ensure!(
-            revision >= 11,
-            "keymap fixtures require API revision 11 or newer"
-        );
+        ensure!(revision == 11, "keymap fixtures require API revision 11");
         ensure!(
             std::env::var("REX_SERVER").as_deref() == Ok(endpoint.as_str()),
             "keymap capture requires REX_SERVER to equal the explicit disposable endpoint"
