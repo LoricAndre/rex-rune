@@ -47,7 +47,7 @@ Exactly what to create/configure:
    git add packaging/keys/release.pub packaging/keys/release-backup.pub
    ```
 
-3. **Create the GitHub environment `release`** at <https://github.com/shuv1337/rex-rune/settings/environments>. Add **shuv1337 as required reviewer**, disable administrator bypass of protection rules, and allow only `v*` tags under **Selected branches and tags** (no branches). Leave “Prevent self-review” off for the single-maintainer workflow, or designate a second human reviewer if enabling it. Verify the protections before supplying secrets; a workflow's `environment:` declaration alone does not configure them.
+3. **Create and protect the GitHub environment `release` before adding secrets** at <https://github.com/shuv1337/rex-rune/settings/environments>. **GitHub automatically creates an unprotected `release` environment the first time a run references it if it does not already exist.** Do not rely on that automatic creation: explicitly create it, configure its protections, and verify them before adding any secrets. Add **shuv1337 as required reviewer**, disable administrator bypass of protection rules, and allow only `v*` tags under **Selected branches and tags** (no branches). Leave “Prevent self-review” off for the single-maintainer workflow, or designate a second human reviewer if enabling it. Verify the protections before supplying secrets; a workflow's `environment:` declaration alone does not configure them.
 
 4. **Create these two environment secrets**, not repository-wide secrets. The key secret is the complete password-encrypted minisign secret-key file, not base64 wrapped. Supply the password interactively when `gh` prompts; never put it into shell history. Do not upload the offline key.
 
