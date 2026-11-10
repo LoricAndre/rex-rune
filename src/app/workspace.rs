@@ -78,6 +78,7 @@ pub struct Workspace {
     pub navigation: super::navigation::History,
     pub last_keypress: Option<std::time::Instant>,
     pub remote_off_notices: HashSet<HostId>,
+    pub remote_navigation: Option<super::remote::Navigation>,
     /// Panes this window has taken size ownership of since it last came forward.
     pub claimed: HashSet<(HostId, String)>,
     pub handle: AppHandle<Workspace>,
@@ -218,6 +219,7 @@ impl Workspace {
             navigation: Default::default(),
             last_keypress: None,
             remote_off_notices: HashSet::new(),
+            remote_navigation: None,
             claimed: HashSet::new(),
             handle,
             window_focused: true,
@@ -488,6 +490,7 @@ impl Workspace {
         }
         self.hosts[index].model = model;
         self.announce_keymap_problems(index);
+        self.poll_remote_navigation(std::time::Instant::now());
         for pending in performs {
             self.remote_perform(index, pending, tx);
         }

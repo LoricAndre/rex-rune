@@ -4,13 +4,13 @@ use rex_linux::connection::perform::{Outcome, Pending, Request};
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
-fn pending(action: &str, args: Value) -> Pending {
+pub(super) fn pending(action: &str, args: Value) -> Pending {
     Pending { epoch: 0, received: Instant::now(), request: serde_json::from_value::<Request>(json!({
         "call_id":"1", "action":action, "args":args,
         "requester":{"client_id":"cli", "info":{"name":"rex"}, "principal":{"display":"uid 1000"}}
     })).unwrap() }
 }
-fn reply(rx: &flume::Receiver<HostCommand>) -> Outcome {
+pub(super) fn reply(rx: &flume::Receiver<HostCommand>) -> Outcome {
     let replies: Vec<_> = rx
         .try_iter()
         .filter_map(|c| match c {
@@ -21,7 +21,7 @@ fn reply(rx: &flume::Receiver<HostCommand>) -> Outcome {
     assert_eq!(replies.len(), 1);
     replies.into_iter().next().unwrap()
 }
-fn code(outcome: Outcome, expected: &str) {
+pub(super) fn code(outcome: Outcome, expected: &str) {
     assert!(
         matches!(outcome, Outcome::Error { code, .. } if code == expected),
         "{outcome:?}"
@@ -45,7 +45,8 @@ fn remote_set_is_exact_and_every_denial_is_described() {
             "client.tab.previous",
             "pane.focus",
             "pane.scroll",
-            "pane.zoom"
+            "pane.zoom",
+            "session.select"
         ]
     );
     for action in actions::declarations() {
@@ -186,6 +187,30 @@ fn remote_view_actions_use_the_local_handlers_and_announce_requester() {
                 .contains(&format!("test-0: rex (uid 1000) performed {name}"))
         );
         assert!(!ws.notices[0].sticky);
+    }
+}
+
+#[test]
+fn remote_scroll_is_local_and_requester_principal_is_display_only() {
+    let (mut ws, rx) = tabbed_workspace("single");
+    ws.settings.hosts[0].remote_control = true;
+    let sender = ws.hosts[0].connection.commands.clone();
+    live_terminal(&mut ws, "block:a", &sender);
+    for principal in [
+        json!({"kind":"anonymous"}),
+        json!({"kind":"tailscale","login_name":"agent@example.test"}),
+    ] {
+        let mut p = pending("pane.scroll", json!({"lines":-10}));
+        p.request.requester.principal = principal;
+        ws.remote_perform(0, p, &mut rune::Tx::default());
+        assert!(matches!(
+            rx.recv().unwrap(),
+            HostCommand::Terminal {
+                command: rex_linux::connection::Command::Scroll(-10),
+                ..
+            }
+        ));
+        assert_eq!(reply(&rx), Outcome::Performed);
     }
 }
 

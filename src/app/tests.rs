@@ -4,6 +4,8 @@
 mod bindings_integration_tests;
 #[path = "navigation_tests.rs"]
 mod navigation_tests;
+#[path = "remote_session_tests.rs"]
+mod remote_session_tests;
 #[path = "remote_tests.rs"]
 mod remote_tests;
 use super::{

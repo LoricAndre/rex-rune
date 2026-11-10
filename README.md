@@ -269,14 +269,18 @@ server instance, and every reconnect registers again.
 Settings → Remote Hosts has a **Remote control** switch for each saved host,
 **off by default, including local hosts**. Changing an endpoint turns it off again.
 Commands can turn it on or off for the host on screen. With it on, `rex do` and
-`client.perform` can run `client.tab.goto`, `client.tab.next`, `client.tab.previous`,
-`pane.focus`, `pane.zoom`, `pane.scroll`, and `client.sidebar.toggle` on that host.
+`client.perform` can run exactly eight actions: `session.select`, `client.tab.goto`,
+`client.tab.next`, `client.tab.previous`, `pane.focus`, `pane.zoom`, `pane.scroll`,
+and `client.sidebar.toggle` on that host.
 These requests cannot create or close terminals, type, access the clipboard, open
-dialogs, change interface zoom, or navigate to another host. Refusals name the
+dialogs, change interface zoom, or affect any host other than the requesting host. Refusals name the
 server command to use instead where one exists (`rex window new`, `rex send-key`,
 `rex capture`, etc.). Actions remain listed even with the switch off.
 
-A request must match the host, session and pane on screen. Navigation runs only
+`session.select` shows a session on the requesting host, switching to that host if
+needed; an optional `window_id` selects a tab. It replies only after navigation is
+acknowledged, or fails after five seconds. Unknown sessions/tabs return `not_found`.
+All other requests must match the host, session and pane on screen. Navigation runs only
 after a pause in typing, and never while a text field has focus. The pause must
 last at least 1.5 seconds. All remote actions are refused while a text field has
 focus, a panel is open or a key sequence is pending. Requests not acted on within
@@ -293,6 +297,23 @@ It is visible to clients on every connected server and can be edited (reopen the
 app to apply it). Use `rex -C LABEL actions` to list actions, then, for example,
 `rex -C LABEL do client.sidebar.toggle`. Local shortcuts and queued actions from
 this client's own `client.action` are independent of Remote control.
+
+```sh
+rex -C LABEL do session.select session_id="$REX_SESSION"
+rex -C LABEL do session.select session_id=SESSION window_id=WINDOW
+rex -C LABEL do client.tab.goto index=2
+rex -C LABEL do client.tab.goto index=-1  # last tab
+```
+
+`session.select` can also be bound with fixed arguments in `shortcuts.json` or
+queued by Lua; it does not add an argument-free Commands entry. Cross-host remote
+control was checked against two private preview.14 servers, with the second
+reached through a real `ssh://` socket forward and disposable SSH keys. Run
+`scripts/remote-control-acceptance.py` with `REX_BIN` pointing to a built client
+and preview.14's `rex` on `PATH`; it owns its servers, sockets, HOME/XDG state and
+Xvfb display under `~/.cache/agent-ws/`, and stops all its processes by PID. It also
+captures Settings → Remote Hosts and the performed-request notice. If a private
+`sshd` cannot run, it reports that and checks two local sockets instead.
 
 Later entries win; `null` frees those exact keys for the terminal. Hand edits reload
 when the window regains focus or Settings opens, gated by file mtime and length.
