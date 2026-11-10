@@ -1,6 +1,7 @@
 //! The pane area: server-placed terminals as floating cards in 8pt gutters, each with a header
 //! (status, label, size, exception pill), drag handles in the gutters, and empty states. A tab
-//! with a single pane draws it edge to edge instead.
+//! with a single pane draws it edge to edge instead. Compact density removes card decorations
+//! and gaps from every placement.
 //! Cards spring when the layout changes; the terminal grid inside never animates.
 use super::{
     activity::{pane_activity, progress_bar, tab_progress, tab_word},
@@ -11,7 +12,10 @@ use super::{
     widgets::{Pill, pill},
     workspace::{DividerDrag, HostId, Workspace},
 };
-use rex_linux::{connection::Command, layout, terminal::selection::Phase as SelectionPhase};
+use rex_linux::{
+    connection::Command, layout, settings::PaneDensity,
+    terminal::selection::Phase as SelectionPhase,
+};
 use rexrs::api::session::Window;
 use rune::{
     Cursor, El, KeyEvent, Phase, PointerButton, PointerEvent, TextEdit, Tx, WheelEvent, col, el,
@@ -22,6 +26,9 @@ use rune_kit::TextInput;
 /// The area cards are laid out in, in the pane area's own points.
 fn inner(s: &Workspace) -> [f32; 4] {
     let [_, _, aw, ah] = s.area;
+    if s.settings.pane_density == PaneDensity::Compact {
+        return [0., 0., aw, ah];
+    }
     [
         MARGIN,
         0.,
@@ -35,7 +42,11 @@ fn inner(s: &Workspace) -> [f32; 4] {
 pub fn card_rect(s: &Workspace, rect: [f64; 4]) -> [f32; 4] {
     let [ix, iy, iw, ih] = inner(s);
     let [x, y, w, h] = rect;
-    let half = GUTTER / 2.;
+    let half = if s.settings.pane_density == PaneDensity::Compact {
+        0.
+    } else {
+        GUTTER / 2.
+    };
     let (l, t) = (x > 1e-6, y > 1e-6);
     let (r, b) = (x + w < 1. - 1e-6, y + h < 1. - 1e-6);
     let mut c = [
@@ -715,7 +726,7 @@ pub fn area(s: &Workspace, px: f32) -> El {
             &m,
             state,
             is_focus && s.panel.is_none(),
-            bleed,
+            bleed || s.settings.pane_density == PaneDensity::Compact,
         ));
     }
     let [ix, iy, iw, ih] = inner(s);
@@ -747,6 +758,7 @@ pub fn area(s: &Workspace, px: f32) -> El {
                 handle.key(format!("divider:{}", divider.key())),
                 horizontal,
                 dragging,
+                s.settings.pane_density == PaneDensity::Compact,
             )
             .on_drag(move |s: &mut Workspace, g, tx| {
                 let Some(session) = s.model().selected.clone() else {
@@ -786,20 +798,28 @@ pub fn area(s: &Workspace, px: f32) -> El {
     area
 }
 
-/// An invisible drag target in a gutter with a 2pt line: faint under the pointer, accent while
-/// dragging.
-pub fn divider_handle(e: El, vertical_line: bool, dragging: bool) -> El {
+/// A drag target with a permanent straight separator in Compact density, otherwise a hover line.
+pub fn divider_handle(e: El, vertical_line: bool, dragging: bool, compact: bool) -> El {
+    let (offset, inset, thickness) = if compact { (5., 0., 1.) } else { (4., 8., 2.) };
     let line = if vertical_line {
-        el().pin(Some(4.), Some(8.), None, Some(8.)).w(2.)
+        el().pin(Some(offset), Some(inset), None, Some(inset))
+            .w(thickness)
     } else {
-        el().pin(Some(8.), Some(4.), Some(8.), None).h(2.)
+        el().pin(Some(inset), Some(offset), Some(inset), None)
+            .h(thickness)
     };
-    let line = line.radius(1.);
-    let line = if dragging {
-        line.fill(rgb(accent()))
-            .box_shadow(shadow(0., 0., 10., rgb(accent()).alpha(0.5)))
+    let line = line.key("divider-line");
+    let line = if compact {
+        line.fill(if dragging { rgb(accent()) } else { white(0.18) })
+    } else if dragging {
+        line.radius(1.).fill(rgb(accent())).box_shadow(shadow(
+            0.,
+            0.,
+            10.,
+            rgb(accent()).alpha(0.5),
+        ))
     } else {
-        line.fill(white(0.18)).group_opacity(0., 1.)
+        line.radius(1.).fill(white(0.18)).group_opacity(0., 1.)
     };
     e.cursor(if vertical_line {
         Cursor::ResizeColumn

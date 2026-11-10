@@ -6,7 +6,7 @@ use super::{
     widgets::{Pill, glyph, pill},
     workspace::Workspace,
 };
-use rex_linux::settings::{NoticePosition, NotificationsConfig};
+use rex_linux::settings::{NoticePosition, NotificationsConfig, PaneDensity};
 use rune::{Cursor, El, ScrollSpec, Tx, col, el, row, text};
 use rune_kit::{IconButton, Keybind, SegmentedControl, Switch};
 
@@ -128,6 +128,27 @@ fn interface(s: &Workspace) -> El {
                 .child(pill("zoom-reset", "Reset", Pill::Neutral, 26., |s, tx| {
                     s.change_ui_scale(0, tx)
                 })),
+        ))
+        .child(divider())
+        .child(setting(
+            "Pane density",
+            "Compact uses straight separators, without pane headers or gaps.",
+            SegmentedControl::new(
+                &["Compact", "Comfortable"],
+                Some(usize::from(s.settings.pane_density == PaneDensity::Comfortable)),
+            )
+            .fit()
+            .on_pick(|s: &mut Workspace, i, tx| {
+                s.settings.pane_density = if i == 0 {
+                    PaneDensity::Compact
+                } else {
+                    PaneDensity::Comfortable
+                };
+                s.save();
+                tx.instant();
+            })
+            .build(k)
+            .key("pane-density"),
         ))
         .child(divider())
         .child(setting(

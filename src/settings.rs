@@ -30,6 +30,15 @@ pub enum NoticePosition {
     BottomRight,
 }
 
+/// The space and decorations around terminal panes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneDensity {
+    Compact,
+    #[default]
+    Comfortable,
+}
+
 /// What program activity shows in tabs and which changes become desktop notifications.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -138,6 +147,7 @@ pub struct Settings {
     /// The sidebar was open when the app last saved, so it opens again at launch.
     pub sidebar_open: bool,
     pub vertical_tabs: bool,
+    pub pane_density: PaneDensity,
     pub font_size: f32,
     pub font_family: String,
     pub font_fallbacks: Vec<String>,
@@ -178,6 +188,7 @@ impl Default for Settings {
             sidebar_width: 236.,
             sidebar_open: false,
             vertical_tabs: false,
+            pane_density: PaneDensity::default(),
             font_size: 15.,
             font_family: "JetBrainsMono Nerd Font".into(),
             font_fallbacks: Vec::new(),
@@ -477,6 +488,25 @@ mod tests {
                 TerminalThemeChoice::FollowServer,
                 "{unknown}"
             );
+        }
+    }
+
+    #[test]
+    fn pane_density_defaults_to_comfortable_and_round_trips() {
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.pane_density, PaneDensity::Comfortable);
+        for (density, saved) in [
+            (PaneDensity::Compact, "compact"),
+            (PaneDensity::Comfortable, "comfortable"),
+        ] {
+            let settings = Settings {
+                pane_density: density,
+                ..Settings::default()
+            };
+            let json = serde_json::to_value(&settings).unwrap();
+            assert_eq!(json["pane_density"], saved);
+            let back: Settings = serde_json::from_value(json).unwrap();
+            assert_eq!(back.pane_density, density);
         }
     }
 

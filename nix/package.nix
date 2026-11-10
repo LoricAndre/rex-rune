@@ -84,6 +84,7 @@ rustPlatform.buildRustPackage {
     libxkbcommon
     wayland
   ];
+  passthru = { inherit runtimeLibraries; };
   cargoBuildFlags = [ "--bins" ];
   cargoTestFlags = [ "--all-features" ];
   nativeCheckInputs = [
