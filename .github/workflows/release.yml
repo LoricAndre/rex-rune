@@ -16,7 +16,7 @@ jobs:
   release-tools:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install minisign
         run: sudo apt-get update && sudo apt-get install -y minisign
       - name: Manifest and throwaway-key signing tests
@@ -37,12 +37,12 @@ jobs:
             arch: aarch64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Native build and runtime dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config dpkg-dev desktop-file-utils libxkbcommon-dev libxkbcommon-x11-dev libfontconfig1-dev libwayland-dev libx11-dev libx11-xcb-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libegl1-mesa-dev libgl1-mesa-dev libvulkan-dev mesa-vulkan-drivers
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
       - name: Check release version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -80,12 +80,12 @@ jobs:
           /usr/bin/rex-linux --version
       - name: Attest release packages
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             dist/*.tar.gz
             dist/*.deb
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux-${{ matrix.arch }}
           path: |
@@ -100,8 +100,8 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: linux-*
           path: dist
@@ -124,7 +124,7 @@ jobs:
           python3 scripts/sign-release.py --tag "v$version" --keys-dir "$RUNNER_TEMP"
           cp "$RUNNER_TEMP/release.pub" "$RUNNER_TEMP/release-backup.pub" dist/
       - name: Save throwaway-signed metadata and test public keys
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: test-release-metadata
           path: |
@@ -145,8 +145,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: linux-*
           path: dist
@@ -168,7 +168,7 @@ jobs:
           RELEASE_TAG: ${{ steps.metadata.outputs.tag }}
         run: python3 scripts/sign-release.py --tag "$RELEASE_TAG"
       - name: Save metadata for inspection or draft recovery
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-metadata
           path: |
