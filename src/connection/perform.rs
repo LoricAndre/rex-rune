@@ -88,8 +88,9 @@ pub(super) async fn receive(
     control: &mut Client,
     shared: &Shared,
     payload: Value,
-    busy: bool,
+    busy_since: Option<Instant>,
 ) -> Result<()> {
+    let received = busy_since.unwrap_or_else(Instant::now);
     let Some(call_id) = payload["call_id"].as_str().map(str::to_owned) else {
         return Ok(());
     };
@@ -104,7 +105,7 @@ pub(super) async fn receive(
             .await;
         }
     };
-    if busy {
+    if received.elapsed() >= MAX_WAIT {
         return reply(
             control,
             &call_id,
@@ -115,7 +116,7 @@ pub(super) async fn receive(
     shared.update(|m| {
         m.performs.push(Pending {
             epoch: m.connection_epoch,
-            received: Instant::now(),
+            received,
             request,
         })
     });

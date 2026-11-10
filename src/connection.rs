@@ -442,7 +442,8 @@ struct PendingTicket {
 
 #[derive(Default)]
 struct ControlState {
-    reject_performs: bool,
+    // Earliest possible arrival of events buffered during the preceding busy step.
+    performs_since: Option<Instant>,
     bootstrap_seq: u64,
     list_seq: u64,
     view_seq: HashMap<String, u64>,
@@ -1110,7 +1111,7 @@ async fn handle_event(
     // This is a directed request, not a session update: even an unattached session or a
     // sequence below bootstrap's cutoff needs an answer on this same connection.
     if event.name == "client_perform_requested" {
-        return perform::receive(control, shared, event.payload, state.reject_performs).await;
+        return perform::receive(control, shared, event.payload, state.performs_since).await;
     }
     // Config-wide events have no session sequence. Do not broaden includes().
     if event.name == "keymap_changed" {
@@ -1351,7 +1352,7 @@ async fn run_host(
                 request(&mut control, "session.focus_block", json!({"session_id":id,"block_id":block})).await?;
                 refresh(&mut control, shared, &mut state, id).await?;
             }
-            state.reject_performs = busy_since.is_some_and(|at| at.elapsed() > perform::MAX_WAIT);
+            state.performs_since = busy_since;
             let queued: Vec<_> = control.drain_events().collect();
             for event in queued { handle_event(event, &mut control, shared, &mut workers, &mut state, keymap.as_deref()).await?; }
             state.prune(&shared.model.lock().expect("host model"));
@@ -1372,17 +1373,20 @@ async fn run_host(
             pace.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             let mut expiry = tokio::time::interval(Duration::from_millis(100));
             loop {
-                if busy_since.take().is_some_and(|at| at.elapsed() > perform::MAX_WAIT) {
-                    state.reject_performs = true;
-                }
-                if state.reject_performs {
-                    // Drain all already-readable events after a slow call, then accept fresh ones.
+                state.performs_since = state.performs_since.or(busy_since.take());
+                if state.performs_since.is_some() {
+                    // Buffered requests share the busy step's start, even when it took less
+                    // than MAX_WAIT. They must not gain another five seconds in the UI queue.
                     use futures_util::FutureExt;
                     if let Some(event) = control.next_event().now_or_never() {
                         handle_event(event?, &mut control, shared, &mut workers, &mut state, keymap.as_deref()).await?;
+                        state.prune(&shared.model.lock().expect("host model"));
+                        reconcile(&endpoint, shared, &sender, &mut workers);
+                        declare_themes(&mut control, shared, &mut state, &workers, theme.as_ref()).await;
+                        query_activity(&mut control, shared, &mut state, &workers).await;
                         continue;
                     }
-                    state.reject_performs = false;
+                    state.performs_since = None;
                 }
                 let due = prefetch.due(&shared.model.lock().expect("host model"), Instant::now());
                 tokio::select! {
