@@ -233,7 +233,7 @@ impl Listener {
         let access = match self.admission.as_deref() {
             Some("peer_credentials") => "local users allowed by socket permissions",
             Some("anonymous") => "anyone who can reach it (anonymous)",
-            Some("tailscale_owner") => "the tailnet owner",
+            Some("tailscale_owner") => "only the Tailscale user who signed this device in",
             Some("tailscale_identified") => "identified tailnet users",
             Some("login_server") => "users authenticated by the login server",
             Some(other) => other,
@@ -577,7 +577,10 @@ mod tests {
         );
         for (admission, words) in [
             ("peer_credentials", "socket permissions"),
-            ("tailscale_owner", "tailnet owner"),
+            (
+                "tailscale_owner",
+                "only the Tailscale user who signed this device in",
+            ),
             ("tailscale_identified", "identified tailnet users"),
             ("login_server", "login server"),
         ] {
