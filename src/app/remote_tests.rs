@@ -190,6 +190,66 @@ fn remote_view_actions_use_the_local_handlers_and_announce_requester() {
 }
 
 #[test]
+fn remote_actions_cannot_take_focus_from_a_search_field() {
+    let (mut ws, rx) = tabbed_workspace("single");
+    ws.settings.hosts[0].remote_control = true;
+    let (sender, terminal) = flume::unbounded();
+    live_terminal(&mut ws, "block:a", &sender);
+    let key = ws.term_key("block:a");
+    let mut rt = runtime(ws);
+    ctrl_shift(&mut rt, 'f');
+    for c in ["a", "b", "c"] {
+        press(&mut rt, Key::Text(c.into()));
+    }
+    let focus = focused(&rt);
+    assert!(focus.as_ref().unwrap().contains("search-field:block:a"));
+    // Even after a pause, every remote action must leave the field alone.
+    rt.state.last_keypress = Some(Instant::now() - Duration::from_secs(2));
+    rx.drain();
+    for (action, args) in [
+        ("client.tab.next", Value::Null),
+        ("client.sidebar.toggle", Value::Null),
+        ("pane.scroll", json!({"lines": 1})),
+    ] {
+        rt.update(|s, tx| s.remote_perform(0, pending(action, args), tx));
+        code(reply(&rx), "refused");
+        assert_eq!(focused(&rt), focus);
+    }
+    press(&mut rt, Key::Text("d".into()));
+    assert_eq!(
+        rt.state.terminals[&key].search.as_ref().unwrap().text,
+        "abcd"
+    );
+    assert!(
+        sent_keys(&terminal).is_empty(),
+        "no field input reaches a shell"
+    );
+}
+
+#[test]
+fn search_edits_and_consumed_keys_record_activity() {
+    let (mut ws, _rx) = tabbed_workspace("single");
+    let (sender, _) = flume::unbounded();
+    live_terminal(&mut ws, "block:a", &sender);
+    let mut rt = runtime(ws);
+    ctrl_shift(&mut rt, 'f');
+    rt.state.last_keypress = None;
+    press(&mut rt, Key::Text("a".into()));
+    assert!(rt.state.last_keypress.is_some());
+    rt.state.last_keypress = None;
+    press(&mut rt, Key::Left);
+    assert!(
+        rt.state.last_keypress.is_some(),
+        "cursor movement is activity too"
+    );
+    rt.state.last_keypress = None;
+    // IME edits the TextInput directly, exercising on_change without search_key.
+    rt.ime(rune::Ime::Commit("b".into()));
+    rt.frame(1. / 60.);
+    assert!(rt.state.last_keypress.is_some());
+}
+
+#[test]
 fn remote_control_switch_is_per_host_and_survives_save() {
     let mut ws = workspace_hosts(2);
     let rx = capture_host(&mut ws, 1);

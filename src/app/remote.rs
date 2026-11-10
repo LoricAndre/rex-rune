@@ -18,7 +18,12 @@ impl Workspace {
         self.save();
     }
 
-    fn remote_policy(&self, host: usize, pending: &Pending) -> Result<(), Outcome> {
+    fn remote_policy(
+        &self,
+        host: usize,
+        pending: &Pending,
+        field_focused: bool,
+    ) -> Result<(), Outcome> {
         let request = &pending.request;
         let Some(spec) = actions::find(&request.action) else {
             return Err(Outcome::error(
@@ -55,6 +60,8 @@ impl Workspace {
         }
         let refused = if self.panel.is_some() {
             Some("A dialog or popup is open")
+        } else if field_focused {
+            Some("A text field has focus")
         } else if self.active != host {
             Some("This host is not on screen")
         } else if request
@@ -117,7 +124,21 @@ impl Workspace {
         if pending.epoch != self.hosts[host].model.connection_epoch {
             return;
         }
-        let outcome = match self.remote_policy(host, &pending) {
+        // Rune supplies Tx focus for input handlers, but not AppHandle::update.
+        // Remote requests arrive through the latter, so inspect mounted search editors too.
+        let field_focused = tx.focused().is_some()
+            || self.model().window().is_some_and(|window| {
+                rex_linux::layout::placements(window, None)
+                    .0
+                    .iter()
+                    .any(|p| {
+                        self.terminals
+                            .get(&self.term_key(&p.block))
+                            .and_then(|t| t.search.as_ref())
+                            .is_some_and(|edit| edit.focused)
+                    })
+            });
+        let outcome = match self.remote_policy(host, &pending, field_focused) {
             Err(outcome) => {
                 if !self.settings.hosts[host].remote_control
                     && matches!(
