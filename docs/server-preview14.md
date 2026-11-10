@@ -96,10 +96,12 @@ from other clients via `client.perform` are refused with `not_supported`.
 
 ## Deferred deliberately
 
-- Native `rex -S ssh://…` transport and auto-start, remote installation,
-  service management and an in-app start/install button. Auto-start conflicts
-  with the client's attachment-only contract. SSH still requires only OpenSSH,
-  not a local Rex CLI or Tailscale.
+- Native SSH auto-start was deferred in 0.4.1. For 0.4.2, a separate, explicitly
+  confirmed Start personal server action invokes native `rex -S ssh://…` once,
+  only after successful SSH socket discovery reports no default server. It checks
+  local/remote API-12 support first, creates no session, and reconnects using the
+  unchanged `ssh -L` transport. Attachment still needs only OpenSSH. Installation
+  and service management remain manual. See [0.4.2 verification](0.4.2-verification.md).
 - Listener-driven Add host discovery was deferred in 0.4.1 and is now implemented
   for 0.4.2: bounded, read-only control hello and `server.status` requests enrich
   the existing endpoint checks. Add host shows the endpoint that answered and

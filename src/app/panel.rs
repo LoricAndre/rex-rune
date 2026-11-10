@@ -19,6 +19,8 @@ pub enum Intent {
     CreateOn(usize, Option<String>),
     ChooseHost(String),
     RetryHost(usize),
+    /// Review an opt-in, one-time personal server start.
+    StartSsh(usize),
     /// The default shell form for a host.
     HostShell(usize),
     Pane(PaneTarget, PaneAction),
@@ -89,6 +91,7 @@ impl Intent {
                 | Intent::ClientAction("client.settings" | "session.switch", _)
                 | Intent::ChooseHost(_)
                 | Intent::HostShell(_)
+                | Intent::StartSsh(_)
                 | Intent::RenameSession
                 | Intent::RenameWindow(_)
                 | Intent::CloseWindow(_)
@@ -231,6 +234,10 @@ pub enum PanelKind {
         method: String,
         payload: Value,
         description: String,
+    },
+    /// Captures the endpoint, not a mutable host index.
+    StartSsh {
+        endpoint: String,
     },
     /// The preview of a `rex skill` change, waiting for Keep or Apply.
     AgentChange {
@@ -410,6 +417,14 @@ impl Workspace {
                 "",
                 "",
                 Intent::RetryHost(host),
+            ));
+        }
+        if self.can_start_ssh(host) {
+            entries.push(Entry::new(
+                "Start personal server…",
+                "Review first",
+                "",
+                Intent::StartSsh(host),
             ));
         }
         entries.push(Entry::new("Edit host…", "", "", Intent::EditHost(host)));
@@ -622,6 +637,14 @@ impl Workspace {
                     entry.action = Intent::ClientAction(name, args);
                 }
                 entries.push(entry);
+            }
+            if self.can_start_ssh(self.active) {
+                entries.push(Entry::new(
+                    "Start personal server…",
+                    host_name,
+                    "Workspace",
+                    Intent::StartSsh(self.active),
+                ));
             }
             if let Some(id) = model.window().and_then(|w| w.window_id.clone()) {
                 entries.push(Entry::new(

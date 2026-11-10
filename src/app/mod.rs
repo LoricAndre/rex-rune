@@ -16,6 +16,7 @@ mod popups;
 mod settings_view;
 mod sidebar;
 mod sprites;
+mod ssh_setup;
 mod stats;
 mod term;
 mod theme;

@@ -176,6 +176,8 @@ pub struct ProtocolStats {
 
 #[derive(Clone, Default)]
 pub struct HostModel {
+    /// A successful SSH lookup found no default server; setup may be offered, never run.
+    pub ssh_server_missing: bool,
     pub visible: bool,
     pub connected: bool,
     pub status: String,
@@ -1339,6 +1341,7 @@ async fn run_host(
             let queued: Vec<_> = control.drain_events().collect();
             for event in queued { handle_event(event, &mut control, shared, &mut workers, &mut state, keymap.as_deref()).await?; }
             state.prune(&shared.model.lock().expect("host model"));
+            shared.update(|m| m.ssh_server_missing = false);
             shared.status("Connected", true);
             reconcile(&endpoint, shared, &sender, &mut workers);
             for (block, worker) in &workers {
@@ -1430,6 +1433,12 @@ async fn run_host(
         if matches!(result, Ok(true)) {
             return Ok(());
         }
+        shared.update(|m| {
+            m.ssh_server_missing = result
+                .as_ref()
+                .err()
+                .is_some_and(|e| e.downcast_ref::<crate::ssh::MissingServer>().is_some())
+        });
         shared.status(
             match result {
                 Err(e) => format!("Disconnected · {e:#}"),

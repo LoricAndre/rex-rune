@@ -10,7 +10,7 @@ Native Linux desktop (Wayland and X11). Rust, [Rune](https://github.com/anomalyc
 
 ## Principles
 
-- **Attachment only.** The client never starts, stops or reconfigures a server, and never creates or destroys a session unless asked explicitly.
+- **Attachment-only by default.** Attaching and reconnecting never start, stop or reconfigure a server. A missing default server on an SSH host may be started once only after a separate preview and explicit confirmation; this never enables future auto-starts. Sessions are never created or destroyed unless asked explicitly.
 - **The server owns the terminal.** Terminal content, colours and split geometry come from the server; the client draws chrome around them and never recolours output. The client may declare a terminal theme to the server, as it declares a size: Rex applies it at once when this client owns the terminal or no client does, and otherwise when this client becomes the owner. Rex keeps each client's last declaration for each terminal, and the terminal shows its owner's; an owner that declared nothing leaves the colours as they were. So while this client owns a terminal (or nobody does), other clients viewing it see the declared theme, just as they see its size, and when another client that declared a theme takes it over, everyone sees that one. Because Rex keeps a declaration across launches, following the server's colours is not silence once this client has declared any theme: from then on it declares Rex's own colours (an empty theme) once per terminal per connection to each terminal it owns or nobody owns, so an old theme never comes back unasked. A client that has never declared a theme declares nothing.
 - **Hosts → sessions → tabs.** Saved hosts contain sessions; a session's Rex windows are tabs and its splits are the server's. Navigation must stay useful with a dozen or more sessions across several hosts.
 - **Compact and calm.** One toolbar, rounded pane cards on a flat dark ground. Popups and highlights animate; terminal content never does.
@@ -23,7 +23,7 @@ Saved hosts, sessions, tabs, authoritative splits, snapshot restoration, live ou
 
 Shortcuts use Linux defaults, each host’s Rex config and separate client overrides, in that order. Settings explains effective sources and problems without writing the override file. Sequences show their pending prefix and never leak consumed prefixes to programs; only explicit `pane.send_key` bypasses Lua key bindings. Server-side actions execute on their host, and queued known client actions run once on the UI thread. Requests from another client to control this app (`client.perform`) receive an explicit `not_supported` reply; remote interface control is not implemented.
 
-SSH attachment uses OpenSSH socket forwarding, not Rex CLI auto-start. If no server is found, the client suggests the manual `rex server install ssh://host` setup for Linux; it never runs installation or starts a server itself.
+SSH attachment uses OpenSSH socket forwarding. If SSH succeeds but finds no default server, a separate Start personal server dialog names the target and command, explains the changes and defaults to Not now. Explicit confirmation invokes native Rex SSH auto-start once, then resumes socket forwarding. Setup requires preview.14/API 12 locally and remotely; failures never retry. Installation remains the manual `rex server install ssh://host` alternative: the app never answers installer prompts or installs packages/services.
 
 ## Out of scope for now
 
