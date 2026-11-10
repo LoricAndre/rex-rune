@@ -152,7 +152,15 @@ fn local_rex() -> PathBuf {
 }
 
 async fn output(program: &OsStr, args: &[String]) -> Result<String> {
-    let output = tokio::time::timeout(Duration::from_secs(45), tokio::process::Command::new(program)
+    output_with_timeout(program, args, Duration::from_secs(45)).await
+}
+
+async fn output_with_timeout(
+    program: &OsStr,
+    args: &[String],
+    timeout: Duration,
+) -> Result<String> {
+    let output = tokio::time::timeout(timeout, tokio::process::Command::new(program)
         .args(args).stdin(Stdio::null()).kill_on_drop(true).output()).await
         .context("Command timed out")?
         .with_context(|| format!("Couldn't run {}. Install Rex preview.14 or newer locally and on the SSH host, then try again", program.to_string_lossy()))?;
@@ -207,7 +215,16 @@ async fn start_with(target: &Target, rex: &OsStr, ssh: &OsStr) -> Result<Attachm
     ]);
     let version = output(ssh, &remote).await.context("Couldn't check remote Rex. Install preview.14 or newer there, or check the SSH login; nothing was started")?;
     require_api12(&version, "Remote")?;
-    let reply = output(rex, &args)
+    start_after_preflight(target, rex, &args, Duration::from_secs(45)).await
+}
+
+async fn start_after_preflight(
+    target: &Target,
+    rex: &OsStr,
+    args: &[String],
+    timeout: Duration,
+) -> Result<Attachment, Failure> {
+    let reply = output_with_timeout(rex, args, timeout)
         .await
         .map_err(|error| Failure::after_start(format!("{error:#}")))?;
     let status: rexrs::api::server::StatusResponse =
@@ -278,6 +295,40 @@ mod tests {
         );
         assert!(!log.exists());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn every_post_preflight_failure_is_uncertain_including_timeouts() {
+        let target = Target::parse("ssh://box").unwrap().unwrap();
+        for command in [
+            "echo invalid-json",
+            "echo refusal >&2; exit 1",
+            "exec sleep 60",
+        ] {
+            let args = ["-c".into(), command.into()];
+            let error = start_after_preflight(
+                &target,
+                OsStr::new("/bin/sh"),
+                &args,
+                Duration::from_millis(100),
+            )
+            .await
+            .unwrap_err();
+            assert!(error.may_have_started, "{command}");
+            assert!(error.message.contains("may have started"));
+            if command.contains("sleep") {
+                assert!(error.message.contains("timed out"));
+            }
+        }
+        let error = start_after_preflight(
+            &target,
+            OsStr::new("/nonexistent/rex"),
+            &[],
+            Duration::from_millis(100),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.may_have_started);
     }
 
     #[test]
