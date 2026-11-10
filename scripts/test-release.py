@@ -191,6 +191,40 @@ class SigningTests(unittest.TestCase):
             self.assertNotEqual(self.run_sign("--verify-only").returncode, 0)
             path.write_bytes(original)
 
+    def test_wrong_trusted_comment_fails(self):
+        for name in ("latest.json", "SHA256SUMS"):
+            with self.subTest(name=name):
+                self.assertEqual(self.run_sign().returncode, 0)
+                # A cryptographically valid signature must still bind the exact tag/file.
+                subprocess.run(
+                    ["minisign", "-S", "-s", str(self.root / "release.key"),
+                     "-m", str(self.dist / name), "-t", f"rex-linux v0.4.2 {name}", "-q"],
+                    input=self.password + "\n", text=True, check=True, capture_output=True,
+                )
+                result = self.run_sign("--verify-only")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("trusted comment must be exactly", result.stderr)
+
+    def test_package_changed_after_signing_fails(self):
+        self.assertEqual(self.run_sign().returncode, 0)
+        package = next(self.dist.glob("*.tar.gz"))
+        package.write_bytes(package.read_bytes() + b"changed after signing")
+        result = self.run_sign("--verify-only")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("SHA256SUMS mismatch", result.stderr)
+
+    def test_signed_manifest_inconsistent_with_packages_fails(self):
+        path = self.dist / "latest.json"
+        value = json.loads(path.read_text())
+        value["targets"]["x86_64-linux-gnu"]["tarball"]["size"] += 1
+        path.write_text(json.dumps(value))
+        # Signatures are valid, but neither signing nor verify-only may accept this.
+        for args in ((), ("--verify-only",)):
+            with self.subTest(args=args):
+                result = self.run_sign(*args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("latest.json does not match", result.stderr)
+
     def test_wrong_key_fails(self):
         # Signing key is valid but neither trusted public key matches it.
         with tempfile.TemporaryDirectory(dir=self.root) as temp:

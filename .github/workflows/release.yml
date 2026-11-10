@@ -120,11 +120,25 @@ jobs:
           merge-multiple: true
       - name: Install minisign
         run: sudo apt-get update && sudo apt-get install -y minisign
-      - name: Generate metadata and sign with a throwaway key
+      - name: Generate metadata
+        id: metadata
         run: |
           (cd dist && sha256sum -- *.tar.gz *.deb > SHA256SUMS)
           version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
           python3 scripts/release-manifest.py --version "$version" --update-from 0.4.2
+      - name: Save unsigned metadata before signing
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unsigned-release-metadata
+          path: |
+            dist/SHA256SUMS
+            dist/latest.json
+          if-no-files-found: error
+      - name: Sign with a throwaway key
+        env:
+          RELEASE_TAG: ${{ steps.metadata.outputs.tag }}
+        run: |
           umask 077
           trap 'rm -f "$RUNNER_TEMP/release.key" "$RUNNER_TEMP/release.pub" "$RUNNER_TEMP/release-backup.pub"' EXIT
           export RELEASE_MINISIGN_PASSWORD=throwaway-test-password-not-a-secret
@@ -133,7 +147,7 @@ jobs:
           cp "$RUNNER_TEMP/release.pub" "$RUNNER_TEMP/release-backup.pub"
           export RELEASE_MINISIGN_KEY
           RELEASE_MINISIGN_KEY=$(< "$RUNNER_TEMP/release.key")
-          python3 scripts/sign-release.py --tag "v$version" --keys-dir "$RUNNER_TEMP"
+          python3 scripts/sign-release.py --tag "$RELEASE_TAG" --keys-dir "$RUNNER_TEMP"
           cp "$RUNNER_TEMP/release.pub" "$RUNNER_TEMP/release-backup.pub" dist/
       - name: Save throwaway-signed metadata and test public keys
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -173,6 +187,14 @@ jobs:
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           # Oldest compatible tarball layout; raise only for an incompatible install change.
           python3 scripts/release-manifest.py --version "$version" --update-from 0.4.2
+      - name: Save unsigned metadata before signing
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unsigned-release-metadata
+          path: |
+            dist/SHA256SUMS
+            dist/latest.json
+          if-no-files-found: error
       - name: Sign and verify metadata
         env:
           RELEASE_MINISIGN_KEY: ${{ secrets.RELEASE_MINISIGN_KEY }}

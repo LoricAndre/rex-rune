@@ -10,7 +10,7 @@ Complete the [owner setup](#owner-setup-before-the-first-signed-release) before 
 2. Commit and push to `master`. Run **Binary release** manually in GitHub Actions to test without publishing. The `release-tools` job tests the manifest and signs/verifies fixture metadata using encrypted throwaway keys, deleted at test exit. The separate `manual-signing-test` job gathers real build artifacts, generates metadata, and signs/verifies it with an encrypted throwaway minisign key pair in `$RUNNER_TEMP`, then deletes the key pair. It has only `contents: read`, no environment, and no production secrets. **`publish` never runs on `workflow_dispatch`, even when run on a tag**. Manual runs do not create attestations or request environment approval.
 3. After checking the results, create and push an annotated tag matching the package version, for example `git tag -a v0.5.0 -m 'Rex Linux 0.5.0'` and `git push origin v0.5.0`. Only stable `vX.Y.Z` versions are supported by the manifest generator.
 4. The tag workflow rebuilds all four packages, then the separate `attest` job downloads and attests them using `actions/attest-build-provenance`. `publish` requires successful attestation. Inspect the triggering commit and workflow, then approve the `release` environment as its required reviewer. Builds have no signing secrets; `publish` alone receives them.
-5. `publish` gathers both architectures, writes `SHA256SUMS`, generates `latest.json`, signs both metadata files, and verifies each signature against the repository's public keys. **A tag run fails closed** if either secret, either public-key file, or a valid signature is missing. Nothing is published on failure.
+5. `publish` gathers both architectures, writes `SHA256SUMS`, generates `latest.json`, and uploads both as the separate `unsigned-release-metadata` artifact **before signing**, so they remain available if signing fails. It then signs both metadata files, verifies each signature and exact trusted comment against the repository's public keys and candidate tag, and rechecks packages ↔ `SHA256SUMS` ↔ `latest.json` consistency. **A tag run fails closed** if either secret, either public-key file, or a valid signature is missing. Nothing is published on failure.
 6. Only after verification does the job create a draft, upload **all eight assets** (two tarballs, two `.deb`s, `SHA256SUMS`, `SHA256SUMS.minisig`, `latest.json`, `latest.json.minisig`), then publish and mark latest. Check the assets and attestations. Never move published tags, replace assets, or retrofit signatures onto old releases.
 
 The manifest is a release asset at:
@@ -79,20 +79,59 @@ The compatibility baseline is the build distribution, not just CPU architecture:
 
 ## Manual or offline signing
 
-For U6's alternative, keep building and generating metadata in CI but replace only **Sign and verify metadata** with importing the manually signed files and running `--verify-only`; keep that gate before draft publication. This PR does not automate an offline handoff. Never publish unsigned files while waiting for signatures. On the signing machine, with the exact `latest.json` and `SHA256SUMS` from the same build run in `dist/`:
+For U6's alternative, keep building, attesting and generating metadata in CI, but sign offline and publish manually as below. This PR does not automate an offline handoff. With CI signing secrets absent, a tag run saves `unsigned-release-metadata` and then fails closed at signing. Never publish unsigned files while waiting for signatures, and never use a manual test run's throwaway signatures for a release.
 
-```sh
-# Set this to the exact candidate tag; minisign prompts for the key password.
-tag=v0.5.0
-for file in latest.json SHA256SUMS; do
-  minisign -S -s /secure/path/rex-linux-release.key -m "dist/$file" \
-    -t "rex-linux $tag $file"
-done
-# Same verification gate as CI; uses no private key or environment secrets.
-python3 scripts/sign-release.py --tag "$tag" --verify-only
-```
+1. Select the **tag-push** run for the exact candidate tag/commit. Check that both builds, `release-tools`, and `attest` succeeded, and that `publish` saved unsigned metadata. Ensure the run has finished or been cancelled before taking over so it cannot publish independently. In a clean checkout of that reviewed tag, download its artifacts into an empty `dist/` (replace `RUN_ID`):
 
-Transfer only the two `.minisig` files back. Do not regenerate/reformat the signed metadata. Verify the signatures, package hashes and candidate tag/commit before uploading. [README verification instructions](../README.md#verify-a-download) cover manual downloads and `gh attestation verify`.
+   ```sh
+   repo=shuv1337/rex-rune
+   tag=v0.5.0
+   run_id=RUN_ID
+   gh run view "$run_id" --repo "$repo" --json event,headSha,headBranch,status,jobs
+   # Match headSha to this checked-out tag and confirm event is push.
+   git rev-parse "$tag^{commit}"
+   mkdir dist
+   gh run download "$run_id" --repo "$repo" --name linux-x86_64 --dir dist
+   gh run download "$run_id" --repo "$repo" --name linux-aarch64 --dir dist
+   gh run download "$run_id" --repo "$repo" --name unsigned-release-metadata --dir dist
+   (cd dist && sha256sum -c SHA256SUMS)
+   for file in dist/*.tar.gz dist/*.deb; do
+     gh attestation verify "$file" --repo "$repo"
+   done
+   ```
+
+2. Transfer all four packages plus `latest.json` and `SHA256SUMS` to `dist/` in a trusted offline checkout containing the reviewed signing/manifest scripts and both committed public keys. Confirm the tag/commit and trusted public keys independently. On that offline signing machine, minisign prompts for the key password; use the active or offline backup private key, never a throwaway key:
+
+   ```sh
+   tag=v0.5.0
+   for file in latest.json SHA256SUMS; do
+     minisign -S -s /secure/path/rex-linux-release-backup.key -m "dist/$file" \
+       -t "rex-linux $tag $file"
+   done
+   # Same verification gate as CI; requires all four packages but no secrets.
+   python3 scripts/sign-release.py --tag "$tag" --verify-only
+   ```
+
+3. Transfer **only the two `.minisig` files** back to the online checkout's `dist/`. Do not regenerate or reformat signed metadata. Rerun the gate there; it checks both signatures, exact tag/file trusted comments, and the complete packages ↔ `SHA256SUMS` ↔ `latest.json` relationship:
+
+   ```sh
+   python3 scripts/sign-release.py --tag "$tag" --verify-only
+   ```
+
+4. Prepare and review `RELEASE-NOTES.md` from this version's changelog and the workflow's standing installation notes. Create a draft against the existing remote tag, upload **all eight assets**, inspect the draft, then publish:
+
+   ```sh
+   gh release create "$tag" --repo "$repo" --draft --verify-tag \
+     --title "Rex Linux ${tag#v}" --notes-file RELEASE-NOTES.md
+   gh release upload "$tag" --repo "$repo" \
+     dist/*.tar.gz dist/*.deb dist/SHA256SUMS dist/SHA256SUMS.minisig \
+     dist/latest.json dist/latest.json.minisig
+   gh release view "$tag" --repo "$repo" --json isDraft,assets
+   # Only after confirming exactly the eight verified assets:
+   gh release edit "$tag" --repo "$repo" --draft=false --latest
+   ```
+
+Do not use `--clobber`; if a draft already exists, follow recovery below rather than creating another. [README verification instructions](../README.md#verify-a-download) cover manual downloads and `gh attestation verify`.
 
 ## Recovery and rotation
 

@@ -6,6 +6,8 @@ Secrets come only from RELEASE_MINISIGN_KEY and RELEASE_MINISIGN_PASSWORD.
 """
 
 import argparse
+import importlib.util
+import json
 import os
 from pathlib import Path
 import re
@@ -14,9 +16,12 @@ import tempfile
 
 
 FILES = ("latest.json", "SHA256SUMS")
+spec = importlib.util.spec_from_file_location("manifest", Path(__file__).with_name("release-manifest.py"))
+manifest = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(manifest)
 
 
-def verify(dist, keys):
+def verify(dist, keys, tag):
     for name in FILES:
         for key in keys:
             result = subprocess.run(
@@ -27,6 +32,21 @@ def verify(dist, keys):
                 break
         else:
             raise ValueError(f"{name}: signature did not verify against either repository public key")
+        # Minisign has authenticated the comment; also bind it to this tag and file.
+        lines = (dist / f"{name}.minisig").read_text().splitlines()
+        if len(lines) != 4 or lines[2] != f"trusted comment: rex-linux {tag} {name}":
+            raise ValueError(f"{name}: trusted comment must be exactly 'rex-linux {tag} {name}'")
+
+    value = json.loads((dist / "latest.json").read_text())
+    try:
+        expected = manifest.generate(
+            dist, tag[1:], value["update_from"], value["published"],
+            value["targets"]["x86_64-linux-gnu"]["min_glibc"],
+        )
+    except (KeyError, TypeError) as error:
+        raise ValueError("latest.json: invalid manifest schema") from error
+    if value != expected:
+        raise ValueError("latest.json does not match the tag, packages and SHA256SUMS")
 
 
 def main():
@@ -63,8 +83,8 @@ def main():
                     )
                     if result.returncode != 0:
                         raise ValueError(f"minisign failed to sign {name}; check the release key and password")
-        verify(args.dist, keys)
-        print("Verified latest.json and SHA256SUMS against repository public keys")
+        verify(args.dist, keys, args.tag)
+        print("Verified signatures, trusted comments, and package/metadata consistency")
     except (OSError, ValueError) as error:
         parser.exit(1, f"release signing: {error}\n")
 
