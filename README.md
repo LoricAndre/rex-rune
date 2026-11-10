@@ -264,10 +264,35 @@ defaults plus overrides work instead. A keymap error never disconnects the host;
 Settings → Shortcuts retains its explanation. Config changes refresh by hash and
 server instance, and every reconnect registers again.
 
-The app’s actions listed by `client.inspect` are **local-only**: they serve local
-shortcuts and queued actions returned by `client.action`. Requests from other
-clients via `client.perform` are refused with `not_supported`; the refusal names
-the requested action. Advertising the registry does not enable remote control.
+### Remote control
+
+Settings → Remote Hosts has a **Remote control** switch for each saved host,
+**off by default, including local hosts**. Changing an endpoint turns it off again.
+Commands can turn it on or off for the host on screen. With it on, `rex do` and
+`client.perform` can run `client.tab.goto`, `client.tab.next`, `client.tab.previous`,
+`pane.focus`, `pane.zoom`, `pane.scroll`, and `client.sidebar.toggle` on that host.
+These requests cannot create or close terminals, type, access the clipboard, open
+dialogs, change interface zoom, or navigate to another host. Refusals name the
+server command to use instead where one exists (`rex window new`, `rex send-key`,
+`rex capture`, etc.). Actions remain listed even with the switch off.
+
+A request must match the host, session and pane on screen. Navigation runs only
+after a pause in typing, and never while a text field has focus. The pause must
+last at least 1.5 seconds. All remote actions are refused while a text field has
+focus, a panel is open or a key sequence is pending. Requests not acted on within
+five seconds are discarded, including time buffered during a busy connection
+step (counted conservatively from that step's start). Replies never cross a reconnect.
+Every performed request gets a six-second in-app notice naming host, requester
+and action; nothing raises the window or sends a desktop notification. The first
+request refused because control is off shows one explanatory notice per host per
+launch. Requester identity is displayed, not used as a second permission filter.
+
+The **Client label**, also in Remote Hosts, defaults to this computer's current
+hostname (or “Rex Linux” if empty), without saving that default as an override.
+It is visible to clients on every connected server and can be edited (reopen the
+app to apply it). Use `rex -C LABEL actions` to list actions, then, for example,
+`rex -C LABEL do client.sidebar.toggle`. Local shortcuts and queued actions from
+this client's own `client.action` are independent of Remote control.
 
 Later entries win; `null` frees those exact keys for the terminal. Hand edits reload
 when the window regains focus or Settings opens, gated by file mtime and length.
@@ -318,13 +343,10 @@ server’s original prefix spellings. Action arguments are checked before dispat
 Keys accept modifier aliases, named keys, F1–F12, W3C physical codes and `>` sequences.
 Letters follow the keyboard layout, with physical US-position fallbacks on
 non-Latin layouts; Shift stays a modifier instead of being folded into the key.
-Key modes, a recording editor, server actions in Commands, pane-resize bindings
-and executing remote client actions are not implemented. `client_perform_requested`
-is answered with `client.reply` / `not_supported`, explaining that remote interface
-control is unavailable, rather than leaving the caller to time out. This is distinct
-from queued actions returned by a local shortcut's `client.action`, which still run.
-There is no Remote Control setting to enable in this client; agents should use Rex's
-session, window and block commands for server state, and show the refusal message.
+Key modes, a recording editor, server actions in Commands and pane-resize bindings
+are not implemented. Cross-server `client_call_requested` relaying is also not
+implemented ([#20](https://github.com/shuv1337/rex-rune/issues/20)). Agents should use
+Rex's session, window and block commands for server state, and show refusal messages.
 
 The parser, sequence machine, action-registry structure and repeat suppression
 adapt Andrea Zito ([nivox](https://github.com/nivox))’s `8037d78` work. Importing a

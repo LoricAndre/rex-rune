@@ -4,6 +4,8 @@
 mod bindings_integration_tests;
 #[path = "navigation_tests.rs"]
 mod navigation_tests;
+#[path = "remote_tests.rs"]
+mod remote_tests;
 use super::{
     panel::{Form, Intent, PanelKind, SessionAction},
     placeholder, view,
@@ -33,6 +35,7 @@ fn workspace_hosts(count: usize) -> Workspace {
                 } else {
                     format!("unix:///nonexistent/rex-test-{i}.sock")
                 },
+                remote_control: false,
                 collapsed: false,
                 shell: None,
             })

@@ -35,6 +35,8 @@ pub enum Intent {
     Sidebar,
     Settings,
     Fonts,
+    ClientLabel,
+    RemoteControl(usize),
     /// The Add host list: the tailnet's machines, or an endpoint by hand.
     AddHost,
     /// Attach to the Rex server with built-in Tailscale on a listed machine at once.
@@ -97,6 +99,7 @@ impl Intent {
                 | Intent::CloseWindow(_)
                 | Intent::Settings
                 | Intent::Fonts
+                | Intent::ClientLabel
                 | Intent::ChooseTheme
                 | Intent::ChooseChrome
                 | Intent::AddHost
@@ -152,6 +155,7 @@ pub enum PaneAction {
 #[derive(Clone, Debug)]
 pub enum Form {
     Fonts,
+    ClientLabel,
     /// A host's default shell for new terminals.
     HostShell(usize),
     /// `None`: the selected session (Commands); `Some`: a sidebar row's session.
@@ -604,6 +608,7 @@ impl Workspace {
                     "",
                     Intent::Sidebar,
                 ),
+                ("Remote control", "", Intent::RemoteControl(self.active)),
                 ("Default shell…", "", Intent::HostShell(self.active)),
                 ("Settings…", "", Intent::Settings),
                 ("Add host…", "", Intent::AddHost),
@@ -617,6 +622,17 @@ impl Workspace {
                 }
                 if matches!(entry.action, Intent::EditHost(_)) {
                     entry.label = format!("Edit host {host_name}…");
+                }
+                if matches!(entry.action, Intent::RemoteControl(_)) {
+                    entry.label = format!(
+                        "Turn {} remote control for {}",
+                        if self.settings.hosts[self.active].remote_control {
+                            "off"
+                        } else {
+                            "on"
+                        },
+                        self.settings.hosts[self.active].label
+                    );
                 }
                 if matches!(entry.action, Intent::HostShell(_)) {
                     entry.label = format!("Default shell for {host_name}…");

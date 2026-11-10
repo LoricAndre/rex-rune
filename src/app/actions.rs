@@ -95,7 +95,45 @@ pub fn find(name: &str) -> Option<&'static Spec> {
     SPECS.iter().find(|spec| spec.name == name)
 }
 
+/// Exhaustive by handler: new actions require an explicit remote decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Remote {
+    View { navigation: bool },
+    Never(&'static str),
+}
+
 impl Spec {
+    pub fn remote(&self) -> Remote {
+        use Handler::*;
+        match self.handler {
+            NextTab | PreviousTab | GotoTab | FocusPane => Remote::View { navigation: true },
+            Sidebar | ZoomPane | Scroll => Remote::View { navigation: false },
+            Paste => Remote::Never(
+                "Use rex send instead; remote actions cannot read this computer's clipboard.",
+            ),
+            Copy => Remote::Never(
+                "Use rex capture instead; remote actions cannot change this computer's clipboard.",
+            ),
+            SendKey => Remote::Never("Use rex send-key instead."),
+            NewSession => Remote::Never("Use rex new instead."),
+            NewTab => Remote::Never("Use rex window new instead."),
+            Split => Remote::Never("Use rex split instead."),
+            Close | ClosePane => Remote::Never("Use rex block close instead."),
+            CloseTab => Remote::Never("Use rex window close instead."),
+            RenameTab => Remote::Never("Use rex window rename instead."),
+            RenameSession => Remote::Never("Use rex session rename instead."),
+            Palette | Settings | Search | SwitchSession | PaneActions => {
+                Remote::Never("Only the person at this computer can open dialogs and popups.")
+            }
+            ZoomIn | ZoomOut | ZoomReset => Remote::Never(
+                "Only the person at this computer can change saved interface preferences.",
+            ),
+            NextGlobal | PreviousGlobal | Back | Forward => {
+                Remote::Never("Use rex do session.select on the target host instead.")
+            }
+            Reconnect => Remote::Never("Only the person at this computer can reconnect terminals."),
+        }
+    }
     pub fn global(&self) -> bool {
         matches!(
             self.handler,
@@ -443,6 +481,9 @@ pub fn declarations() -> Vec<rexrs::api::client::InspectResponseAction> {
                 .keywords(s.title())
                 .repeats(s.repeats());
             action.args = s.schema();
+            if let Remote::Never(message) = s.remote() {
+                action.description = Some(format!("Not available remotely. {message}"));
+            }
             action
         })
         .collect()

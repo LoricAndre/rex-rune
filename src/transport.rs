@@ -187,10 +187,18 @@ pub type Client = AsyncRexClient<Transport>;
 pub const MIN_API_REVISION: u32 = 10;
 pub const API_REVISION: u32 = 12;
 pub async fn control(endpoint: &str, reconnect: Option<&str>) -> Result<Client> {
+    control_with_label(endpoint, reconnect, &crate::settings::hostname()).await
+}
+
+pub async fn control_with_label(
+    endpoint: &str,
+    reconnect: Option<&str>,
+    label: &str,
+) -> Result<Client> {
     // This is an attachment-only client. Server lifetime and listener configuration
     // belong to the existing upstream Rex server, including its Tailscale identity.
     let socket = socket(endpoint, "/api/control", "rex.control.v1").await?;
-    control_from_socket(socket, reconnect, "Rex Linux").await
+    connect(socket, reconnect, "Rex Linux", label).await
 }
 
 pub(crate) async fn control_from_socket(
@@ -198,7 +206,17 @@ pub(crate) async fn control_from_socket(
     reconnect: Option<&str>,
     name: &str,
 ) -> Result<Client> {
+    connect(socket, reconnect, name, &crate::settings::hostname()).await
+}
+
+async fn connect(
+    socket: Socket,
+    reconnect: Option<&str>,
+    name: &str,
+    label: &str,
+) -> Result<Client> {
     let mut builder = AsyncRexClient::builder()
+        .label(label)
         .name(name)
         .version(env!("CARGO_PKG_VERSION"))
         .api_revisions(MIN_API_REVISION..=API_REVISION)
