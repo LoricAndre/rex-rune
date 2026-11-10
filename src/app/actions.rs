@@ -6,6 +6,7 @@ use rune::Tx;
 use serde_json::{Value, json};
 
 pub const SEARCH: &str = "client.search";
+pub const SELECT_SESSION: &str = "session.select";
 pub const NEXT_GLOBAL: &str = "client.tab.next_global";
 pub const PREVIOUS_GLOBAL: &str = "client.tab.previous_global";
 pub const HISTORY_BACK: &str = "client.history.back";
@@ -29,6 +30,7 @@ enum Handler {
     ZoomOut,
     ZoomReset,
     SwitchSession,
+    SelectSession,
     NewSession,
     Split,
     ZoomPane,
@@ -74,6 +76,7 @@ specs! {
     "client.zoom.out" => ZoomOut,
     "client.zoom.reset" => ZoomReset,
     "session.switch" => SwitchSession,
+    SELECT_SESSION => SelectSession,
     "session.new" => NewSession,
     "pane.split" => Split,
     "pane.zoom" => ZoomPane,
@@ -95,7 +98,47 @@ pub fn find(name: &str) -> Option<&'static Spec> {
     SPECS.iter().find(|spec| spec.name == name)
 }
 
+/// Exhaustive by handler: new actions require an explicit remote decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Remote {
+    View { navigation: bool },
+    Never(&'static str),
+}
+
 impl Spec {
+    pub fn remote(&self) -> Remote {
+        use Handler::*;
+        match self.handler {
+            NextTab | PreviousTab | GotoTab | FocusPane | SelectSession => {
+                Remote::View { navigation: true }
+            }
+            Sidebar | ZoomPane | Scroll => Remote::View { navigation: false },
+            Paste => Remote::Never(
+                "Use rex send instead; remote actions cannot read this computer's clipboard.",
+            ),
+            Copy => Remote::Never(
+                "Use rex capture instead; remote actions cannot change this computer's clipboard.",
+            ),
+            SendKey => Remote::Never("Use rex send-key instead."),
+            NewSession => Remote::Never("Use rex new instead."),
+            NewTab => Remote::Never("Use rex window new instead."),
+            Split => Remote::Never("Use rex split instead."),
+            Close | ClosePane => Remote::Never("Use rex block close instead."),
+            CloseTab => Remote::Never("Use rex window close instead."),
+            RenameTab => Remote::Never("Use rex window rename instead."),
+            RenameSession => Remote::Never("Use rex session rename instead."),
+            Palette | Settings | Search | SwitchSession | PaneActions => {
+                Remote::Never("Only the person at this computer can open dialogs and popups.")
+            }
+            ZoomIn | ZoomOut | ZoomReset => Remote::Never(
+                "Only the person at this computer can change saved interface preferences.",
+            ),
+            NextGlobal | PreviousGlobal | Back | Forward => {
+                Remote::Never("Use rex do session.select on the target host instead.")
+            }
+            Reconnect => Remote::Never("Only the person at this computer can reconnect terminals."),
+        }
+    }
     pub fn global(&self) -> bool {
         matches!(
             self.handler,
@@ -133,6 +176,7 @@ impl Spec {
             Handler::ZoomOut => "Shrink interface",
             Handler::ZoomReset => "Reset interface size",
             Handler::SwitchSession => "Switch session",
+            Handler::SelectSession => "Show session",
             Handler::NewSession => "New session",
             Handler::Split => "Split pane",
             Handler::ZoomPane => "Zoom pane",
@@ -165,6 +209,7 @@ impl Spec {
             | Handler::Back
             | Handler::Forward
             | Handler::SwitchSession
+            | Handler::SelectSession
             | Handler::GotoTab => "Navigate",
             Handler::NewTab
             | Handler::NewSession
@@ -186,6 +231,11 @@ impl Spec {
         }
     }
     fn schema(&self) -> Option<Value> {
+        if matches!(self.handler, Handler::SelectSession) {
+            return Some(
+                json!({"type":"object","properties":{"session_id":{"type":"string","minLength":1},"window_id":{"type":"string","minLength":1}},"required":["session_id"],"additionalProperties":false}),
+            );
+        }
         let (key, schema) = match self.handler {
             Handler::Split => (
                 "direction",
@@ -199,7 +249,7 @@ impl Spec {
                 "lines",
                 json!({"type":"integer","minimum":i32::MIN,"maximum":i32::MAX}),
             ),
-            Handler::GotoTab => ("index", json!({"type":"integer","minimum":1})),
+            Handler::GotoTab => ("index", json!({"type":"integer","minimum":-1})),
             Handler::SendKey => ("key", json!({"type":"string"})),
             _ => return None,
         };
@@ -214,7 +264,8 @@ impl Spec {
             return args.is_null()
                 && !matches!(
                     self.handler,
-                    Handler::Split
+                    Handler::SelectSession
+                        | Handler::Split
                         | Handler::FocusPane
                         | Handler::Scroll
                         | Handler::GotoTab
@@ -222,6 +273,13 @@ impl Spec {
                 );
         };
         match self.handler {
+            Handler::SelectSession => {
+                object.keys().all(|k| k == "session_id" || k == "window_id")
+                    && args["session_id"].as_str().is_some_and(|id| !id.is_empty())
+                    && object
+                        .get("window_id")
+                        .is_none_or(|id| id.as_str().is_some_and(|id| !id.is_empty()))
+            }
             Handler::Split => {
                 object.len() == 1 && matches!(args["direction"].as_str(), Some("right" | "down"))
             }
@@ -241,8 +299,8 @@ impl Spec {
             Handler::GotoTab => {
                 object.len() == 1
                     && args["index"]
-                        .as_u64()
-                        .is_some_and(|n| n > 0 && usize::try_from(n).is_ok())
+                        .as_i64()
+                        .is_some_and(|n| n == -1 || n > 0 && usize::try_from(n).is_ok())
             }
             Handler::SendKey => {
                 object.len() == 1
@@ -277,6 +335,13 @@ pub fn run(s: &mut Workspace, name: &str, args: &Value, tx: &mut Tx) -> bool {
         Handler::ZoomOut => s.change_ui_scale(-1, tx),
         Handler::ZoomReset => s.change_ui_scale(0, tx),
         Handler::SwitchSession => s.picker(true),
+        Handler::SelectSession => {
+            let visit = s.session_visit(s.active, args);
+            match visit {
+                Ok(visit) => s.navigate_to(visit, tx),
+                Err(error) => s.inform(format!("Session selection failed: {error:?}")),
+            }
+        }
         Handler::NewSession => s.perform(Intent::NewSession, tx),
         Handler::Split => s.perform(
             Intent::Split(if args["direction"] == "right" {
@@ -310,11 +375,11 @@ pub fn run(s: &mut Workspace, name: &str, args: &Value, tx: &mut Tx) -> bool {
             }
         }
         Handler::GotoTab => {
-            let index = args["index"].as_u64().unwrap() as usize - 1;
+            let index = tab_index(args, s.model().view().map_or(0, |v| v.windows.len()));
             if let Some(id) = s
                 .model()
                 .view()
-                .and_then(|v| v.windows.get(index))
+                .and_then(|v| v.windows.get(index?))
                 .and_then(|w| w.window_id.clone())
             {
                 s.perform(Intent::Tab(id), tx);
@@ -349,6 +414,14 @@ pub fn run(s: &mut Workspace, name: &str, args: &Value, tx: &mut Tx) -> bool {
         }
     }
     true
+}
+
+pub fn tab_index(args: &Value, count: usize) -> Option<usize> {
+    match args["index"].as_i64()? {
+        -1 => count.checked_sub(1),
+        n if n > 0 => usize::try_from(n - 1).ok().filter(|n| *n < count),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -443,6 +516,9 @@ pub fn declarations() -> Vec<rexrs::api::client::InspectResponseAction> {
                 .keywords(s.title())
                 .repeats(s.repeats());
             action.args = s.schema();
+            if let Remote::Never(message) = s.remote() {
+                action.description = Some(format!("Not available remotely. {message}"));
+            }
             action
         })
         .collect()

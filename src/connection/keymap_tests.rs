@@ -2,6 +2,29 @@ use super::*;
 use crate::keymap::Overrides;
 use rexrs::api::client::{Binding, Keymap, KeymapResponse};
 
+async fn take_perform(host: &HostConnection) -> perform::Pending {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(pending) = host.model.lock().unwrap().performs.pop() {
+                return pending;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap()
+}
+
+fn answer(host: &HostConnection, pending: perform::Pending, outcome: perform::Outcome) {
+    host.commands
+        .send(HostCommand::PerformReply {
+            epoch: pending.epoch,
+            call_id: pending.request.call_id,
+            outcome,
+        })
+        .unwrap();
+}
+
 fn declaration(generation: u64) -> Box<keymap::Declaration> {
     Box::new(keymap::Declaration {
         generation,
@@ -82,7 +105,7 @@ async fn keymap_after_connected_error_does_not_disconnect_then_event_refreshes()
 }
 
 #[tokio::test]
-async fn remote_perform_is_declined_even_without_session_and_after_caller_timeout() {
+async fn remote_perform_is_queued_even_without_session_and_after_caller_timeout() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let (done, wait) = tokio::sync::oneshot::channel();
@@ -121,7 +144,7 @@ async fn remote_perform_is_declined_even_without_session_and_after_caller_timeou
                 reply["payload"]["error"]["message"]
                     .as_str()
                     .unwrap()
-                    .contains("does not support remote client actions: client.settings.")
+                    .contains("test refusal")
             );
             assert!(reply["payload"].get("result").is_none());
             let response = if expired {
@@ -135,6 +158,14 @@ async fn remote_perform_is_declined_even_without_session_and_after_caller_timeou
         assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
     });
     let host = HostConnection::spawn(endpoint, None, None, None, false, None);
+    for _ in 0..2 {
+        let pending = take_perform(&host).await;
+        answer(
+            &host,
+            pending,
+            perform::Outcome::error("not_supported", "test refusal"),
+        );
+    }
     tokio::time::timeout(Duration::from_secs(5), wait)
         .await
         .unwrap()
@@ -199,6 +230,12 @@ async fn refusal_failure_is_nonfatal(error: Option<(&str, u16)>) {
         assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
     });
     let host = HostConnection::spawn(endpoint, None, None, None, false, None);
+    let pending = take_perform(&host).await;
+    answer(
+        &host,
+        pending,
+        perform::Outcome::error("not_supported", "test refusal"),
+    );
     tokio::time::timeout(Duration::from_secs(5), wait)
         .await
         .unwrap()
@@ -221,7 +258,7 @@ async fn refusal_failure_is_nonfatal(error: Option<(&str, u16)>) {
 
 #[tokio::test]
 async fn remote_perform_reply_api_errors_are_nonfatal() {
-    for error in [("bad_request", 400), ("internal", 500)] {
+    for error in [("not_found", 404), ("bad_request", 400), ("internal", 500)] {
         refusal_failure_is_nonfatal(Some(error)).await;
     }
 }

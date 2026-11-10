@@ -569,7 +569,10 @@ fn search_field(block: &str, key: &(HostId, String), edit: &TextEdit, t: &term::
                 .plain()
                 .trailing(text(status).font(medium(10.5)).color(rgb(muted())))
                 .on_edit(move |s: &mut Workspace| s.search_input(&k1))
-                .on_change(move |s: &mut Workspace, _: &mut Tx| s.search_changed(&k2))
+                .on_change(move |s: &mut Workspace, _: &mut Tx| {
+                    s.last_keypress = Some(std::time::Instant::now());
+                    s.search_changed(&k2);
+                })
                 .on_key(move |s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx| {
                     search_key(s, &k3, ev, tx)
                 })

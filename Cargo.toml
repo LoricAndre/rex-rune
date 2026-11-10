@@ -17,6 +17,7 @@ clap = { version = "4", features = ["derive"] }
 flume = "0.11"
 futures-util = { version = "0.3", features = ["sink"] }
 ghostty-vt = { version = "=0.8.0", features = ["png"] }
+gethostname = "1"
 log = "0.4"
 rexrs = { git = "https://github.com/a10y/rexrs", rev = "780be3f9f0455c758273e57199af30bdaa145cf1", default-features = false, features = ["tokio"] }
 # Rune is pre-1.0 and pinned to a `dev` revision.

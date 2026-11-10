@@ -5,6 +5,8 @@ mod cwd_tests;
 mod keymap_tests;
 #[path = "navigation_tests.rs"]
 mod navigation_tests;
+#[path = "perform_tests.rs"]
+mod perform_tests;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
