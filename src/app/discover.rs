@@ -320,6 +320,7 @@ impl Workspace {
         let host = Host {
             label: c.machine.name.clone(),
             endpoint: endpoint.to_owned(),
+            remote_control: false,
             collapsed: false,
             shell: None,
         };

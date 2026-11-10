@@ -2661,6 +2661,7 @@ dependencies = [
  "clap",
  "flume",
  "futures-util",
+ "gethostname",
  "ghostty-vt",
  "log",
  "rexrs",

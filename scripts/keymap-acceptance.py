@@ -182,7 +182,7 @@ try:
                     "action": "client.tab.new", "timeout_ms": 2000})],
                     capture_output=True, text=True, timeout=5)
                 assert declined.returncode != 0, "remote action unexpectedly succeeded"
-                assert "Rex Linux does not support remote client actions" in declined.stderr, declined.stderr
+                assert "Use rex window new instead" in declined.stderr, declined.stderr
                 assert "client.tab.new" in declined.stderr, declined.stderr
                 time.sleep(.5)
                 assert tabs() == count, "declined action changed the workspace"

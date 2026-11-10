@@ -76,6 +76,9 @@ pub struct Workspace {
     pub local_keymap: rex_linux::keymap::Resolved,
     pub keymap_generation: u64,
     pub navigation: super::navigation::History,
+    pub last_keypress: Option<std::time::Instant>,
+    pub remote_off_notices: HashSet<HostId>,
+    pub remote_navigation: Option<super::remote::Navigation>,
     /// Panes this window has taken size ownership of since it last came forward.
     pub claimed: HashSet<(HostId, String)>,
     pub handle: AppHandle<Workspace>,
@@ -160,6 +163,7 @@ impl Workspace {
             settings.hosts.push(Host {
                 label: rex_linux::settings::endpoint_label(&options.endpoint),
                 endpoint: options.endpoint.clone(),
+                remote_control: false,
                 collapsed: false,
                 shell: None,
             });
@@ -213,6 +217,9 @@ impl Workspace {
             local_keymap,
             keymap_generation: 0,
             navigation: Default::default(),
+            last_keypress: None,
+            remote_off_notices: HashSet::new(),
+            remote_navigation: None,
             claimed: HashSet::new(),
             handle,
             window_focused: true,
@@ -297,7 +304,7 @@ impl Workspace {
         } else {
             self.settings.sessions.get(&host.endpoint).cloned()
         };
-        let connection = HostConnection::spawn(
+        let connection = HostConnection::spawn_labeled(
             host.endpoint.clone(),
             preferred,
             cli.then(|| self.options.new.clone())
@@ -306,6 +313,7 @@ impl Workspace {
             cli.then(|| self.options.block.clone()).flatten(),
             index == self.active,
             self.declared_theme(),
+            self.settings.client_label(),
         );
         let _ = connection
             .commands
@@ -384,6 +392,7 @@ impl Workspace {
         host.label = label;
         host.shell = shell;
         if host.endpoint != endpoint {
+            host.remote_control = false;
             let old = std::mem::replace(&mut host.endpoint, endpoint);
             self.settings.sessions.remove(&old);
             let state = self.spawn_host(index, false);
@@ -416,7 +425,7 @@ impl Workspace {
     pub fn sync(&mut self, index: usize, tx: &mut Tx) {
         let id = self.hosts[index].id;
         let old_session = self.hosts[index].model.selected.clone();
-        let (model, notices, clipboard, bells, client_actions) = {
+        let (model, notices, clipboard, bells, client_actions, performs) = {
             let mut shared = self.hosts[index]
                 .connection
                 .model
@@ -426,7 +435,15 @@ impl Workspace {
             let clipboard = shared.clipboard.take();
             let bells = std::mem::take(&mut shared.bells);
             let client_actions = std::mem::take(&mut shared.client_actions);
-            (shared.clone(), notices, clipboard, bells, client_actions)
+            let performs = std::mem::take(&mut shared.performs);
+            (
+                shared.clone(),
+                notices,
+                clipboard,
+                bells,
+                client_actions,
+                performs,
+            )
         };
         for (block, connection) in &model.terminals {
             let key = (id, block.clone());
@@ -473,6 +490,10 @@ impl Workspace {
         }
         self.hosts[index].model = model;
         self.announce_keymap_problems(index);
+        self.poll_remote_navigation(std::time::Instant::now());
+        for pending in performs {
+            self.remote_perform(index, pending, tx);
+        }
         let action_context = (
             self.active,
             self.model().selected.clone(),
@@ -809,7 +830,8 @@ impl Workspace {
             at: std::time::Instant::now(),
         });
         if self.notices.len() > 3 {
-            self.notices.remove(0);
+            let oldest = self.notices.iter().position(|n| !n.sticky).unwrap_or(0);
+            self.notices.remove(oldest);
         }
     }
 
@@ -1206,6 +1228,11 @@ impl Workspace {
                         ("Fallback families (comma-separated)", "Automatic system fallbacks when empty", &fallbacks),
                     ],
                 );
+            }
+            Intent::RemoteControl(host) => self.toggle_remote_control(host),
+            Intent::ClientLabel => {
+                let label = self.settings.client_label();
+                self.open_panel(PanelKind::Form(Form::ClientLabel), "Client label", &[("Label", "Name this computer in Rex client lists", &label)]);
             }
             Intent::HostShell(host) => {
                 let title = format!("Default shell on {}", self.settings.hosts[host].label);
@@ -1874,6 +1901,11 @@ impl Workspace {
                             self.inform("Fonts saved. Reopen the client to use them.");
                         }
                     }
+                    Form::ClientLabel => {
+                        self.settings.client_label = Some(values[0].clone());
+                        self.save();
+                        self.inform("Client label saved. Reopen the client to use it on every host.");
+                    }
                     Form::HostShell(host) => {
                         self.settings.hosts[host].shell =
                             (!values[0].is_empty()).then(|| values[0].clone());
@@ -1900,6 +1932,7 @@ impl Workspace {
                         Host {
                             label: values[0].clone(),
                             endpoint: values[1].clone(),
+                            remote_control: false,
                             collapsed: false,
                             shell: None,
                         },
@@ -1912,6 +1945,7 @@ impl Workspace {
                             Host {
                                 label: values[0].clone(),
                                 endpoint,
+                                remote_control: false,
                                 collapsed: false,
                                 shell: None,
                             },
