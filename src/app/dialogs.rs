@@ -83,6 +83,16 @@ fn form(s: &Workspace, form: &Form) -> El {
                 .wrap(),
         );
     }
+    if let Form::Discovered(note) = form {
+        body = body.child(
+            col()
+                .max_h(240.)
+                .scroll(rune::ScrollSpec {
+                    stick_bottom: false,
+                })
+                .child(text(note.clone()).font(ui(12.)).color(rgb(muted())).wrap()),
+        );
+    }
     if let Form::AddHost = form {
         body = body.child(
             text("https:// reaches a Rex server over the network (a bare host name is tried on port 443, then 7297); ssh://user@host[/socket] forwards a server's socket over SSH; unix:// is a socket on this machine.")
@@ -107,7 +117,7 @@ fn form(s: &Workspace, form: &Form) -> El {
                 .wrap(),
         );
     }
-    let primary = if matches!(form, Form::AddHost | Form::AddSsh(_)) {
+    let primary = if matches!(form, Form::AddHost | Form::Discovered(_) | Form::AddSsh(_)) {
         "Connect"
     } else {
         "Save"

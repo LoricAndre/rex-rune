@@ -100,11 +100,13 @@ from other clients via `client.perform` are refused with `not_supported`.
   service management and an in-app start/install button. Auto-start conflicts
   with the client's attachment-only contract. SSH still requires only OpenSSH,
   not a local Rex CLI or Tailscale.
-- Listener-driven Add host discovery. `server.status` requires an already working
-  control connection; its listeners cannot discover an unreachable server or
-  establish that a bound address is reachable or admits this user. Keep existing
-  subprotocol probes and explicit endpoint entry, without adding authenticated
-  discovery requests or guessing alternate endpoints.
+- Listener-driven Add host discovery was deferred in 0.4.1 and is now implemented
+  for 0.4.2: bounded, read-only control hello and `server.status` requests enrich
+  the existing endpoint checks. Add host shows the endpoint that answered and
+  reviews actual bindings and admission rules before Connect. Missing/null/empty
+  metadata (including API 10/11), status failures and unknown rule strings are
+  handled without inventing access or reachability. No session is attached by
+  discovery. Listener addresses never redirect probes to unverified hosts.
 - Executing remote UI actions or cross-server `client_call_requested` work.
   The client advertises no cross-server `servers` list. Remote control needs a
   separate product/permission design, not a patch-sized implicit enablement.

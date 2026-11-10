@@ -3119,7 +3119,10 @@ fn tailnet() -> Vec<rex_linux::tailnet::Machine> {
 }
 
 fn rex_at(address: &str) -> rex_linux::tailnet::Probe {
-    rex_linux::tailnet::Probe::Rex(format!("https://{address}"))
+    rex_linux::tailnet::Probe::Rex {
+        endpoint: format!("https://{address}"),
+        listeners: vec![],
+    }
 }
 
 fn open_add_host(rt: &mut Runtime<Workspace>) {
@@ -3157,6 +3160,41 @@ fn open_add_host(rt: &mut Runtime<Workspace>) {
     for _ in 0..4 {
         rt.frame(1. / 60.);
     }
+}
+
+#[test]
+fn discovered_listeners_are_reviewed_before_connecting() {
+    let mut ws = workspace();
+    ws.apply_scan(0, Ok(tailnet()));
+    ws.apply_probe(
+        0,
+        "box.tail1234.ts.net",
+        rex_linux::tailnet::Probe::Rex {
+            endpoint: "https://box.tail1234.ts.net".into(),
+            listeners: vec![rex_linux::tailnet::Listener {
+                endpoint: "0.0.0.0:7297".into(),
+                addresses: vec!["[::]:7297".into()],
+                transport: "tcp".into(),
+                admission: Some("anonymous".into()),
+            }],
+        },
+    );
+    let before = ws.settings.hosts.len();
+    ws.add_machine(2, &mut rune::Tx::default());
+    assert_eq!(ws.settings.hosts.len(), before);
+    let panel = ws.panel.as_ref().unwrap();
+    let PanelKind::Form(Form::Discovered(note)) = &panel.kind else {
+        panic!("listener review")
+    };
+    assert!(note.contains("Reachable from this device: https://box"));
+    assert!(note.contains("[::]:7297"));
+    assert!(note.contains("anonymous"));
+    assert!(note.contains("not reachability or permission checks"));
+    ws.submit(&mut rune::Tx::default());
+    assert_eq!(
+        ws.settings.hosts.last().unwrap().endpoint,
+        "https://box.tail1234.ts.net"
+    );
 }
 
 #[test]
@@ -3216,7 +3254,7 @@ fn add_host_lists_the_tailnet_by_kind_and_hides_iphones_and_this_machine() {
             (
                 "Rex servers".into(),
                 "studio-rex".into(),
-                "Rex over Tailscale · macOS".into()
+                "https://studio-rex.tail1234.ts.net · listener details unavailable · macOS".into()
             ),
             (
                 "Tailnet".into(),
@@ -3257,12 +3295,19 @@ fn add_host_lists_the_tailnet_by_kind_and_hides_iphones_and_this_machine() {
     rt.state.apply_probe(
         generation,
         "box.tail1234.ts.net",
-        rex_linux::tailnet::Probe::Rex("https://box.tail1234.ts.net:7297".into()),
+        rex_linux::tailnet::Probe::Rex {
+            endpoint: "https://box.tail1234.ts.net:7297".into(),
+            listeners: vec![],
+        },
     );
     let entries = rt.state.entries();
     assert_eq!(entries[1].label, "box");
     assert_eq!(entries[1].group, "Rex servers");
-    assert!(entries[1].detail.starts_with("Rex on port 7297"));
+    assert!(
+        entries[1]
+            .detail
+            .starts_with("https://box.tail1234.ts.net:7297")
+    );
     assert!(matches!(entries[1].action, Intent::AddMachine(2)));
 
     rt.state.panel.as_mut().unwrap().inputs[0] = rune::TextEdit::new("bo");
@@ -3319,7 +3364,7 @@ fn a_rex_server_on_the_tailnet_is_added_with_one_press() {
     assert!(
         entries[0]
             .detail
-            .starts_with("Added as studio-rex · Rex over Tailscale")
+            .starts_with("Added as studio-rex · https://studio-rex.tail1234.ts.net")
     );
     assert!(matches!(entries[0].action, Intent::MachineForm(1)));
     press(&mut rt, Key::Enter);

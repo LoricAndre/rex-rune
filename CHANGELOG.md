@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Add host reads API-12 `server.status` listeners, showing the verified endpoint and a review of bound addresses and admission rules. Older servers and unavailable metadata retain attachment without guessed access rules.
+
 ## 0.4.1 - 2026-11-09
 
 ### Changed

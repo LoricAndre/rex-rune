@@ -206,9 +206,11 @@ pub fn status() -> std::result::Result<Vec<Machine>, String> {
 /// What checking a machine for a Rex server found.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Probe {
-    /// A Rex server answers at this endpoint: its control WebSocket negotiated Rex's
-    /// subprotocol. Nothing was sent on it.
-    Rex(String),
+    /// A control connection answered. Only hello and read-only server.status were sent.
+    Rex {
+        endpoint: String,
+        listeners: Vec<Listener>,
+    },
     /// Every listener this client would try refused the connection: nothing listens there.
     Nothing,
     /// The check could not tell, with why (a timeout, a TLS or protocol failure): a server may
@@ -216,35 +218,99 @@ pub enum Probe {
     Unknown(String),
 }
 
+/// Listener facts, not a promise that a bound address is reachable from this device.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct Listener {
+    pub endpoint: String,
+    #[serde(default, deserialize_with = "nullable")]
+    pub addresses: Vec<String>,
+    pub transport: String,
+    pub admission: Option<String>,
+}
+
+impl Listener {
+    pub fn description(&self) -> String {
+        let access = match self.admission.as_deref() {
+            Some("peer_credentials") => "local users allowed by socket permissions",
+            Some("anonymous") => "anyone who can reach it (anonymous)",
+            Some("tailscale_owner") => "the tailnet owner",
+            Some("tailscale_identified") => "identified tailnet users",
+            Some("login_server") => "users authenticated by the login server",
+            Some(other) => other,
+            None => "access rules not reported",
+        };
+        let bound = if self.addresses.is_empty() {
+            "bound addresses not reported".to_owned()
+        } else {
+            format!("bound: {}", self.addresses.join(", "))
+        };
+        format!("{} ({}, {bound}) — {access}", self.endpoint, self.transport)
+    }
+}
+
+#[derive(Default, Deserialize)]
+struct ListenerStatus {
+    #[serde(default, deserialize_with = "nullable")]
+    listeners: Vec<Listener>,
+}
+
+fn nullable<'de, D: serde::Deserializer<'de>, T: Deserialize<'de> + Default>(
+    d: D,
+) -> std::result::Result<T, D::Error> {
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
+/// Read metadata only; failure never hides an otherwise reachable server.
+async fn listeners(control: &mut crate::transport::Client) -> Vec<Listener> {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        control.call_raw("server.status", serde_json::json!({})),
+    )
+    .await
+    {
+        Ok(Ok(value)) => {
+            serde_json::from_value::<ListenerStatus>(value)
+                .unwrap_or_default()
+                .listeners
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Probe a single address without attaching to sessions or changing the server.
+pub async fn probe_endpoint(endpoint: &str) -> Result<Probe> {
+    let mut control = tokio::time::timeout(
+        std::time::Duration::from_secs(6),
+        crate::transport::control(endpoint, None),
+    )
+    .await
+    .context("Rex discovery timed out")??;
+    let listeners = listeners(&mut control).await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(1), control.close()).await;
+    Ok(Probe::Rex {
+        endpoint: endpoint.into(),
+        listeners,
+    })
+}
+
 /// Check `machine` for a Rex server reachable over the tailnet, at each of its
 /// [`Machine::rex_endpoints`] at once; the first in that order that answers wins.
 pub async fn probe(machine: &Machine) -> Probe {
     let endpoints = machine.rex_endpoints();
     let checks = endpoints.iter().map(|endpoint| async move {
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(6),
-            crate::transport::socket(endpoint, "/api/control", "rex.control.v1"),
-        )
-        .await
-        {
-            Ok(Ok(mut socket)) => {
-                let _ = tokio::time::timeout(std::time::Duration::from_secs(1), socket.close(None))
-                    .await;
-                Ok(())
-            }
-            Ok(Err(error)) => Err(if refused(&error) {
+        probe_endpoint(endpoint).await.map_err(|error| {
+            if refused(&error) {
                 None
             } else {
                 Some(format!("{}: {}", endpoint_port(endpoint), reason(&error)))
-            }),
-            Err(_) => Err(Some(format!("{}: timed out", endpoint_port(endpoint)))),
-        }
+            }
+        })
     });
     let results = futures_util::future::join_all(checks).await;
     let mut unknown = Vec::new();
-    for (endpoint, result) in endpoints.iter().zip(results) {
+    for result in results {
         match result {
-            Ok(()) => return Probe::Rex(endpoint.clone()),
+            Ok(found) => return found,
             Err(Some(why)) => unknown.push(why),
             Err(None) => {}
         }
@@ -423,6 +489,95 @@ mod tests {
             probe(&machine).await,
             Probe::Nothing | Probe::Unknown(_)
         ));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::result_large_err)] // tungstenite's handshake callback type
+    async fn discovery_reads_only_status_on_revisions_10_11_and_12() {
+        use futures_util::{SinkExt, StreamExt};
+        use serde_json::{Value, json};
+        use tokio_tungstenite::tungstenite::Message;
+        for (revision, metadata) in [
+            (10, json!({})),
+            (11, json!({"listeners":null})),
+            (
+                12,
+                json!({"listeners":[{"endpoint":"127.0.0.1:0","addresses":["127.0.0.1:4567"],"transport":"tcp","admission":"anonymous"}]}),
+            ),
+            (12, json!({"listeners":[]})),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (tcp, _) = listener.accept().await.unwrap();
+                let mut ws = tokio_tungstenite::accept_hdr_async(tcp, |_: &_, mut response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                    response.headers_mut().insert("Sec-WebSocket-Protocol", "rex.control.v1".parse().unwrap());
+                    Ok(response)
+                }).await.unwrap();
+                let hello: Value =
+                    serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap())
+                        .unwrap();
+                assert_eq!(hello["type"], "hello");
+                ws.send(Message::Text(json!({"type":"welcome","protocol":"rex.control.v1","api_revision":revision,
+                    "limits":{"max_message_bytes":65536},"client":{"id":"client:probe","reconnect_token":"probe"}}).to_string().into())).await.unwrap();
+                let request: Value =
+                    serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap())
+                        .unwrap();
+                assert_eq!(request["method"], "server.status");
+                ws.send(Message::Text(
+                    json!({"type":"response","id":request["id"],"payload":metadata})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+                assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
+            });
+            let Probe::Rex {
+                endpoint: found,
+                listeners,
+            } = probe_endpoint(&endpoint).await.unwrap()
+            else {
+                panic!("not Rex")
+            };
+            assert_eq!(found, endpoint);
+            if let Some(listener) = listeners.first() {
+                assert!(listener.description().contains("127.0.0.1:4567"));
+                assert!(listener.description().contains("anonymous"));
+            } else {
+                assert!(listeners.is_empty());
+            }
+            server.await.unwrap();
+        }
+    }
+
+    #[test]
+    fn listener_descriptions_preserve_unknowns_and_do_not_guess() {
+        let status: ListenerStatus = serde_json::from_value(serde_json::json!({"listeners":[
+            {"endpoint":"future://thing","transport":"future","admission":"new_policy","addresses":null},
+            {"endpoint":"unix:///rex.sock","transport":"unix"}
+        ]})).unwrap();
+        assert_eq!(
+            status.listeners[0].description(),
+            "future://thing (future, bound addresses not reported) — new_policy"
+        );
+        assert!(
+            status.listeners[1]
+                .description()
+                .contains("access rules not reported")
+        );
+        for (admission, words) in [
+            ("peer_credentials", "socket permissions"),
+            ("tailscale_owner", "tailnet owner"),
+            ("tailscale_identified", "identified tailnet users"),
+            ("login_server", "login server"),
+        ] {
+            let listener = Listener {
+                admission: Some(admission.into()),
+                ..status.listeners[1].clone()
+            };
+            assert!(listener.description().contains(words));
+        }
     }
 
     #[test]
