@@ -85,9 +85,8 @@ impl Workspace {
                 let result = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
-                    .map_err(anyhow::Error::from)
-                    .and_then(|runtime| runtime.block_on(setup::start_personal(&task_endpoint)))
-                    .map_err(|e| format!("{e:#}"));
+                    .map_err(|e| setup::Failure::from(anyhow::Error::from(e)))
+                    .and_then(|runtime| runtime.block_on(setup::start_personal(&task_endpoint)));
                 handle.update(move |s, tx| s.ssh_start_finished(&task_endpoint, result, tx));
             });
         if let Err(error) = spawned {
@@ -99,7 +98,7 @@ impl Workspace {
     }
 
     /// One read-only lookup, only while this saved host still needs a connection.
-    fn reconnect_ssh_if_needed(&self, endpoint: &str) -> &'static str {
+    fn reconnect_ssh_if_needed(&mut self, endpoint: &str) -> &'static str {
         let Some(host) = self
             .settings
             .hosts
@@ -115,7 +114,12 @@ impl Workspace {
         "Checking the connection through SSH without starting a server."
     }
 
-    pub fn ssh_start_finished(&mut self, endpoint: &str, result: Result<(), String>, tx: &mut Tx) {
+    pub fn ssh_start_finished(
+        &mut self,
+        endpoint: &str,
+        result: Result<(), setup::Failure>,
+        tx: &mut Tx,
+    ) {
         if self.ssh_setup.running.as_deref() != Some(endpoint) {
             return;
         }
@@ -134,8 +138,13 @@ impl Workspace {
                 ));
             }
             Err(error) => {
+                let connection = if error.may_have_started {
+                    self.reconnect_ssh_if_needed(endpoint)
+                } else {
+                    "Preflight failed; no server start was requested."
+                };
                 let message = format!(
-                    "{error}\nNo automatic retry. Check the host or use Retry connection before trying setup again."
+                    "{error}\n{connection} No automatic setup retry. Check the host before choosing Start personal server again."
                 );
                 if showing {
                     self.panel.as_mut().unwrap().error = Some(message);
@@ -194,7 +203,11 @@ pub fn dialog(s: &Workspace, endpoint: &str) -> rune::El {
     }
     let start = pill(
         "confirm-ssh-start",
-        "Start personal server",
+        if panel.error.is_some() {
+            "Start personal server again"
+        } else {
+            "Start personal server"
+        },
         Pill::Primary,
         32.,
         |s, tx| s.submit(tx),

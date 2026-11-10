@@ -3,6 +3,41 @@ use super::{Target, last_line};
 use anyhow::{Context, Result, ensure};
 use std::{ffi::OsStr, path::PathBuf, process::Stdio, time::Duration};
 
+/// Whether the one-shot command could already have started a server.
+#[derive(Debug)]
+pub struct Failure {
+    pub message: String,
+    pub may_have_started: bool,
+}
+
+impl Failure {
+    fn after_start(error: impl std::fmt::Display) -> Self {
+        Self {
+            message: format!(
+                "The personal server may have started, but setup did not confirm its status: {error}"
+            ),
+            may_have_started: true,
+        }
+    }
+}
+
+impl From<anyhow::Error> for Failure {
+    fn from(error: anyhow::Error) -> Self {
+        Self {
+            message: format!("{error:#}"),
+            may_have_started: false,
+        }
+    }
+}
+
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for Failure {}
+
 /// The exact invocation the confirmation previews. No shell and no session creation.
 pub fn start_args(target: &Target) -> Result<Vec<String>> {
     ensure!(
@@ -65,7 +100,7 @@ fn local_rex() -> PathBuf {
 async fn output(program: &OsStr, args: &[String]) -> Result<String> {
     let output = tokio::time::timeout(Duration::from_secs(45), tokio::process::Command::new(program)
         .args(args).stdin(Stdio::null()).kill_on_drop(true).output()).await
-        .context("Setup timed out. It will not be retried; check the host before trying again")?
+        .context("Command timed out")?
         .with_context(|| format!("Couldn't run {}. Install Rex preview.14 or newer locally and on the SSH host, then try again", program.to_string_lossy()))?;
     ensure!(
         output.status.success(),
@@ -101,12 +136,12 @@ fn require_api12(version: &str, location: &str) -> Result<()> {
 
 /// Call only after the person confirms. Every invocation authorizes one attempt, never a
 /// persistent auto-start setting. SSH config/aliases remain OpenSSH's responsibility.
-pub async fn start_personal(endpoint: &str) -> Result<()> {
+pub async fn start_personal(endpoint: &str) -> Result<(), Failure> {
     let target = Target::parse(endpoint)?.context("Setup requires an ssh:// host")?;
     start_with(&target, local_rex().as_os_str(), OsStr::new("ssh")).await
 }
 
-async fn start_with(target: &Target, rex: &OsStr, ssh: &OsStr) -> Result<()> {
+async fn start_with(target: &Target, rex: &OsStr, ssh: &OsStr) -> Result<(), Failure> {
     let args = start_args(target)?;
     let local = output(rex, &["version".into(), "--json".into()]).await?;
     require_api12(&local, "Local")?;
@@ -120,9 +155,9 @@ async fn start_with(target: &Target, rex: &OsStr, ssh: &OsStr) -> Result<()> {
     require_api12(&version, "Remote")?;
     let reply = output(rex, &args)
         .await
-        .context("Personal server start failed; no automatic retry")?;
-    let _: rexrs::api::server::StatusResponse = serde_json::from_str(&reply)
-        .context("Rex didn't confirm the server status. It may have started; use Retry connection before starting again")?;
+        .map_err(|error| Failure::after_start(format!("{error:#}")))?;
+    let _: rexrs::api::server::StatusResponse =
+        serde_json::from_str(&reply).map_err(Failure::after_start)?;
     Ok(())
 }
 
@@ -168,6 +203,8 @@ mod tests {
             .await
             .unwrap_err();
         assert!(format!("{error:#}").contains("remote refused to start"));
+        assert!(error.may_have_started);
+        assert!(error.message.contains("may have started"));
         let attempts = std::fs::read_to_string(&log).unwrap();
         assert_eq!(attempts.matches("--autostart=true").count(), 1);
         assert!(attempts.contains("ssh://work-alias"));

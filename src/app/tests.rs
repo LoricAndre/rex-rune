@@ -3362,7 +3362,11 @@ fn ssh_start_is_explicit_one_shot_and_defaults_to_not_now() {
     rt.state.submit(&mut rune::Tx::default());
     assert_eq!(rt.state.ssh_setup.ran.len(), 1, "no duplicate while busy");
     rt.update(|s, tx| {
-        s.ssh_start_finished("ssh://work-alias", Err("remote Rex is too old".into()), tx)
+        s.ssh_start_finished(
+            "ssh://work-alias",
+            Err(anyhow::anyhow!("remote Rex is too old").into()),
+            tx,
+        )
     });
     assert!(
         rt.state
@@ -3390,6 +3394,32 @@ fn ssh_start_is_explicit_one_shot_and_defaults_to_not_now() {
             .iter()
             .any(|c| matches!(c, HostCommand::CreateSession { .. }))
     );
+}
+
+#[test]
+fn uncertain_ssh_setup_reconnects_once_without_retrying_setup() {
+    let mut ws = workspace();
+    ws.settings.hosts[0].endpoint = "ssh://box".into();
+    ws.ssh_setup.running = Some("ssh://box".into());
+    let commands = capture_host(&mut ws, 0);
+    for _ in 0..2 {
+        ws.ssh_start_finished(
+            "ssh://box",
+            Err(rex_linux::ssh::setup::Failure {
+                message: "Server may have started: timeout".into(),
+                may_have_started: true,
+            }),
+            &mut rune::Tx::default(),
+        );
+    }
+    assert_eq!(
+        commands
+            .try_iter()
+            .filter(|c| matches!(c, HostCommand::Reconnect))
+            .count(),
+        1
+    );
+    assert!(ws.ssh_setup.ran.is_empty());
 }
 
 #[test]
