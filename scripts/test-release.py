@@ -208,7 +208,7 @@ class SigningTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("missing public key", result.stderr)
 
-    def test_absent_secrets_fail_release_but_skip_manual(self):
+    def test_absent_secrets_fail_closed(self):
         original = self.env.copy()
         for missing in (("RELEASE_MINISIGN_KEY",), ("RELEASE_MINISIGN_PASSWORD",),
                         ("RELEASE_MINISIGN_KEY", "RELEASE_MINISIGN_PASSWORD")):
@@ -216,9 +216,6 @@ class SigningTests(unittest.TestCase):
             result = self.run_sign()
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("refusing unsigned release", result.stderr)
-            result = self.run_sign("--allow-unsigned")
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("Skipping signing for manual test run", result.stdout)
             self.assertEqual(list(self.dist.glob("*.minisig")), [])
 
 

@@ -34,7 +34,6 @@ def main():
     parser.add_argument("--dist", type=Path, default=Path("dist"))
     parser.add_argument("--keys-dir", type=Path, default=Path("packaging/keys"))
     parser.add_argument("--tag", required=True)
-    parser.add_argument("--allow-unsigned", action="store_true", help="manual test runs only: skip if either secret is absent")
     parser.add_argument("--verify-only", action="store_true")
     args = parser.parse_args()
     # Do not pass these environment variables to minisign or any other child.
@@ -45,9 +44,6 @@ def main():
             raise ValueError("tag must be a stable vX.Y.Z release")
         if not args.verify_only and (not secret or not password):
             message = "RELEASE_MINISIGN_KEY and RELEASE_MINISIGN_PASSWORD must both be set in the release environment"
-            if args.allow_unsigned:
-                print(f"Skipping signing for manual test run: {message}")
-                return
             raise ValueError(f"refusing unsigned release: {message}")
         keys = [args.keys_dir / name for name in ("release.pub", "release-backup.pub")]
         for key in keys:

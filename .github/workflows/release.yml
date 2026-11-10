@@ -93,7 +93,51 @@ jobs:
             dist/*.deb
           if-no-files-found: error
 
+  manual-signing-test:
+    if: github.event_name == 'workflow_dispatch'
+    needs: [build, release-tools]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: linux-*
+          path: dist
+          merge-multiple: true
+      - name: Install minisign
+        run: sudo apt-get update && sudo apt-get install -y minisign
+      - name: Generate metadata and sign with a throwaway key
+        run: |
+          (cd dist && sha256sum -- *.tar.gz *.deb > SHA256SUMS)
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          python3 scripts/release-manifest.py --version "$version" --update-from 0.4.2
+          umask 077
+          trap 'rm -f "$RUNNER_TEMP/release.key" "$RUNNER_TEMP/release.pub" "$RUNNER_TEMP/release-backup.pub"' EXIT
+          export RELEASE_MINISIGN_PASSWORD=throwaway-test-password-not-a-secret
+          printf '%s\n%s\n' "$RELEASE_MINISIGN_PASSWORD" "$RELEASE_MINISIGN_PASSWORD" |
+            minisign -G -p "$RUNNER_TEMP/release.pub" -s "$RUNNER_TEMP/release.key"
+          cp "$RUNNER_TEMP/release.pub" "$RUNNER_TEMP/release-backup.pub"
+          export RELEASE_MINISIGN_KEY
+          RELEASE_MINISIGN_KEY=$(< "$RUNNER_TEMP/release.key")
+          python3 scripts/sign-release.py --tag "v$version" --keys-dir "$RUNNER_TEMP"
+          cp "$RUNNER_TEMP/release.pub" "$RUNNER_TEMP/release-backup.pub" dist/
+      - name: Save throwaway-signed metadata and test public keys
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-release-metadata
+          path: |
+            dist/SHA256SUMS
+            dist/SHA256SUMS.minisig
+            dist/latest.json
+            dist/latest.json.minisig
+            dist/release.pub
+            dist/release-backup.pub
+          if-no-files-found: error
+
   publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     needs: [build, release-tools]
     runs-on: ubuntu-24.04
     # U6 default: one reviewed job holds the signing secrets. See docs/releases.md.
@@ -122,12 +166,7 @@ jobs:
           RELEASE_MINISIGN_KEY: ${{ secrets.RELEASE_MINISIGN_KEY }}
           RELEASE_MINISIGN_PASSWORD: ${{ secrets.RELEASE_MINISIGN_PASSWORD }}
           RELEASE_TAG: ${{ steps.metadata.outputs.tag }}
-        run: |
-          args=()
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
-            args+=(--allow-unsigned)
-          fi
-          python3 scripts/sign-release.py --tag "$RELEASE_TAG" "${args[@]}"
+        run: python3 scripts/sign-release.py --tag "$RELEASE_TAG"
       - name: Save metadata for inspection or draft recovery
         uses: actions/upload-artifact@v4
         with:
