@@ -6,7 +6,7 @@ use super::panel::{Entry, Form, Intent, PanelKind};
 use super::theme::SERVER;
 use super::workspace::Workspace;
 use rex_linux::settings::Host;
-use rex_linux::tailnet::{self, Machine, Probe};
+use rex_linux::tailnet::{self, ListenerDescription, Machine, Probe};
 use rune::Tx;
 use std::time::{Duration, Instant};
 

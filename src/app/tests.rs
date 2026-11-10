@@ -3348,6 +3348,7 @@ fn discovered_listeners_are_reviewed_before_connecting() {
                 addresses: vec!["[::]:7297".into()],
                 transport: "tcp".into(),
                 admission: Some("anonymous".into()),
+                primary: Some(true),
             }],
         },
     );
