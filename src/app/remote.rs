@@ -1,14 +1,22 @@
 //! Per-host consent and the deliberately small view-only remote surface.
 use super::{
     actions::{self, Remote},
-    workspace::Workspace,
+    navigation::Visit,
+    workspace::{HostId, Workspace},
 };
 use rex_linux::connection::{
     HostCommand,
     perform::{MAX_WAIT, Outcome, Pending},
 };
 use rune::Tx;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+pub struct Navigation {
+    host: HostId,
+    pending: Pending,
+    id: u64,
+    deadline: Instant,
+}
 
 const TYPING: Duration = Duration::from_millis(1500);
 
@@ -53,25 +61,29 @@ impl Workspace {
                 ),
             ));
         }
+        let selecting = request.action == actions::SELECT_SESSION;
+        let model = &self.hosts[host].model;
         let refused = if self.panel.is_some() {
             Some("A dialog or popup is open")
-        } else if self.active != host {
+        } else if !selecting && self.active != host {
             Some("This host is not on screen")
-        } else if request
-            .session_id
-            .as_ref()
-            .is_some_and(|id| self.model().selected.as_ref() != Some(id))
-        {
+        } else if request.session_id.as_ref().is_some_and(|id| {
+            if selecting {
+                request.args["session_id"].as_str() != Some(id.as_str())
+            } else {
+                model.selected.as_ref() != Some(id)
+            }
+        }) {
             Some("The requested session is not on screen")
         } else if request
             .block_id
             .as_deref()
-            .is_some_and(|id| self.model().focused() != Some(id))
+            .is_some_and(|id| model.focused() != Some(id))
         {
             Some("The requested pane is not focused")
         } else if navigation && self.last_keypress.is_some_and(|at| at.elapsed() < TYPING) {
             Some("The person is typing; try again after a pause")
-        } else if self.navigation.pending.is_some() {
+        } else if self.navigation.pending.is_some() || self.remote_navigation.is_some() {
             Some("Another navigation is still in progress")
         } else {
             None
@@ -88,20 +100,27 @@ impl Workspace {
                 "Rex Linux did not act in time or the host disconnected; nothing was done.",
             ));
         }
+        if selecting {
+            self.session_visit(host, &request.args)?;
+            return Ok(());
+        }
         if request.action != "client.sidebar.toggle" && self.model().window().is_none() {
             return Err(Outcome::error(
                 "internal",
                 "No tab is on screen; nothing was done.",
             ));
         }
-        if request.action == "client.tab.goto" {
-            let index = request.args["index"].as_u64().unwrap() as usize;
-            if self.model().view().is_none_or(|v| index > v.windows.len()) {
-                return Err(Outcome::error(
-                    "bad_request",
-                    "That tab index is out of range; nothing was done.",
-                ));
-            }
+        if request.action == "client.tab.goto"
+            && actions::tab_index(
+                &request.args,
+                self.model().view().map_or(0, |v| v.windows.len()),
+            )
+            .is_none()
+        {
+            return Err(Outcome::error(
+                "bad_request",
+                "That tab index is out of range; nothing was done.",
+            ));
         }
         if request.action == "pane.scroll" && self.active_terminal().is_none() {
             return Err(Outcome::error(
@@ -137,6 +156,26 @@ impl Workspace {
             }
             Ok(()) => {
                 self.bindings.sequence.clear();
+                if pending.request.action == actions::SELECT_SESSION {
+                    let visit = self
+                        .session_visit(host, &pending.request.args)
+                        .expect("validated above");
+                    if let Some(id) = self.navigate_remote(visit, tx) {
+                        self.remote_navigation = Some(Navigation {
+                            host: self.hosts[host].id,
+                            pending,
+                            id,
+                            deadline: Instant::now() + MAX_WAIT,
+                        });
+                        return;
+                    }
+                    self.remote_reply(
+                        host,
+                        pending,
+                        Outcome::error("internal", "Navigation could not start."),
+                    );
+                    return;
+                }
                 if actions::run(self, &pending.request.action, &pending.request.args, tx) {
                     Outcome::Performed
                 } else {
@@ -145,6 +184,97 @@ impl Workspace {
             }
         };
         self.remote_reply(host, pending, outcome);
+    }
+
+    pub(super) fn session_visit(
+        &self,
+        host: usize,
+        args: &serde_json::Value,
+    ) -> Result<Visit, Outcome> {
+        let model = &self.hosts[host].model;
+        let session = args["session_id"].as_str().unwrap_or_default();
+        let window = args["window_id"].as_str();
+        if !model.sessions.iter().any(|s| s.session_id == session) {
+            return Err(Outcome::error(
+                "not_found",
+                "That session does not exist on this host.",
+            ));
+        }
+        // For an uncached session the server checks window membership during focus;
+        // attachment fills the cache so a failed acknowledgement can name not_found.
+        if let (Some(window), Some(view)) = (window, model.views.get(session))
+            && !view
+                .windows
+                .iter()
+                .any(|w| w.window_id.as_deref() == Some(window))
+        {
+            return Err(Outcome::error(
+                "not_found",
+                "That tab does not exist in the requested session.",
+            ));
+        }
+        Ok(Visit {
+            host: self.hosts[host].id,
+            session: session.into(),
+            window: window.map(str::to_owned),
+        })
+    }
+
+    /// Success means the worker acknowledged navigation and the target is showing.
+    /// A disconnect abandons the call: its id must never reach a replacement socket.
+    pub(super) fn poll_remote_navigation(&mut self, now: Instant) -> bool {
+        let Some(navigation) = self.remote_navigation.take() else {
+            return false;
+        };
+        let Some(host) = self.host_index(navigation.host) else {
+            return true;
+        };
+        let model = &self.hosts[host].model;
+        if !model.connected || model.connection_epoch != navigation.pending.epoch {
+            return true;
+        }
+        let result = model
+            .navigation_result
+            .filter(|(id, _)| *id == navigation.id);
+        let outcome = if let Some((_, success)) = result {
+            let args = &navigation.pending.request.args;
+            let showing = self.active == host
+                && model.selected.as_deref() == args["session_id"].as_str()
+                && args["window_id"].as_str().is_none_or(|id| {
+                    model.window().and_then(|w| w.window_id.as_deref()) == Some(id)
+                });
+            if success && showing {
+                Some(Outcome::Performed)
+            } else if let Err(error) = self.session_visit(host, args) {
+                Some(error)
+            } else {
+                Some(Outcome::error(
+                    "internal",
+                    "Navigation failed or the view changed before it completed.",
+                ))
+            }
+        } else if now >= navigation.deadline {
+            Some(Outcome::error(
+                "internal",
+                "Rex Linux did not finish navigation in five seconds.",
+            ))
+        } else if self
+            .navigation
+            .pending
+            .as_ref()
+            .is_none_or(|p| p.id != navigation.id)
+        {
+            Some(Outcome::error("internal", "Navigation was interrupted."))
+        } else {
+            None
+        };
+        if let Some(outcome) = outcome {
+            self.remote_reply(host, navigation.pending, outcome);
+            true
+        } else {
+            self.remote_navigation = Some(navigation);
+            false
+        }
     }
 
     pub(super) fn remote_reply(&mut self, host: usize, pending: Pending, outcome: Outcome) {

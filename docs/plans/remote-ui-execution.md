@@ -1,6 +1,6 @@
 # Remote control: carrying out `client.perform` requests
 
-Plan for [issue #12](https://github.com/shuv1337/rex-rune/issues/12), written 2026-11-09 (PST) against `master` at `da8da40` (Rex Linux 0.4.1, Rex server `0.1.0-preview.14`, API revision 12). Status: approved for 0.5.0. R1–R9 are decided as recommended, with the client label folded into PR 1 (two stacked PRs, released together). PR 1 implements consent, guards, notices, the seven existing actions and the label; PR 2 adds `session.select`. The original rationale and contract evidence below are retained. `client_call_requested` is tracked separately in [#20](https://github.com/shuv1337/rex-rune/issues/20).
+Plan for [issue #12](https://github.com/shuv1337/rex-rune/issues/12), written 2026-11-09 (PST) against `master` at `da8da40` (Rex Linux 0.4.1, Rex server `0.1.0-preview.14`, API revision 12). Status: implemented and tested for 0.5.0; awaiting review, not merged or released. R1–R9 are decided as recommended, with the client label folded into PR 1 (two stacked PRs, released together). PR 1 implements consent, guards, notices, the seven existing actions and the label; PR 2 adds `session.select`. The original rationale and contract evidence below are retained. Both implementation branches are based on 0.4.2 (`origin/master` at `1580461`), with PR 2 stacked on PR 1. `client_call_requested` is tracked separately in [#20](https://github.com/shuv1337/rex-rune/issues/20).
 
 ## Summary
 
@@ -12,6 +12,15 @@ Today Rex Linux answers every `client.perform` request with `not_supported`. The
 - **Host boundary:** a request arrives from one host's server and may only affect that host. Except for `session.select`, it is performed only while that host is the one on screen.
 - **Visibility:** each performed request shows one notice naming the host, the requester and the action. Turning the switch off takes effect on the next request.
 - **Size:** a stack of two pull requests, with an optional third for a client label.
+
+## Implementation verification
+
+- `cargo test --locked --all-features`: protocol mocks and headless UI tests pass, including expiry/busy-loop/reconnect, exhaustive remote classes, hazards, consent, arguments, target/panel/typing guards, navigation acknowledgement/failure/timeout and local binding independence.
+- `cargo clippy --locked --all-targets --all-features -- -D warnings`, `cargo fmt --all -- --check`, and vendored rexrs tests pass.
+- `scripts/keymap-acceptance.py`, `scripts/x11-smoke.py`, and the new `scripts/remote-control-acceptance.py` pass on isolated preview.14 servers. The remote script drives `rex do` and `rex api call client.perform`, including all eight allowed actions, both consent states, non-supported hazards, malformed arguments and target failures.
+- Real `ssh://` attachment to the second private server was exercised with an unprivileged private sshd and disposable keys. No user servers, installed packages or units were changed; owned processes were stopped by PID.
+- Rendered Settings → Remote Hosts and performed-request notices were inspected at 1440×900 in Xvfb.
+- Implementation detail: label edits apply after reopening (stated in Settings), and unknown tabs in uncached sessions are resolved by the server during navigation rather than refusing an unpopulated cache. No vendored SDK changes or API gate were needed.
 
 ## 1. The problem
 

@@ -204,16 +204,37 @@ impl Workspace {
 
     pub(super) fn navigate_to(&mut self, visit: Visit, tx: &mut Tx) {
         let origin = self.navigation.origin();
-        self.begin_navigation(visit, origin, false, tx);
+        self.begin_navigation(visit, origin, false, TIMEOUT, tx);
     }
 
-    fn begin_navigation(&mut self, visit: Visit, origin: usize, defer: bool, tx: &mut Tx) {
+    pub(super) fn navigate_remote(&mut self, visit: Visit, tx: &mut Tx) -> Option<u64> {
+        self.observe_navigation();
+        let origin = self.navigation.origin();
+        self.begin_navigation(
+            visit,
+            origin,
+            false,
+            rex_linux::connection::perform::MAX_WAIT,
+            tx,
+        );
+        tx.wake_after(rex_linux::connection::perform::MAX_WAIT);
+        self.navigation.pending.as_ref().map(|p| p.id)
+    }
+
+    fn begin_navigation(
+        &mut self,
+        visit: Visit,
+        origin: usize,
+        defer: bool,
+        timeout: Duration,
+        tx: &mut Tx,
+    ) {
         self.navigation.serial += 1;
         let now = Instant::now();
         self.navigation.pending = Some(Pending {
             visit,
             id: self.navigation.serial,
-            deadline: now + TIMEOUT,
+            deadline: now + timeout,
             dispatch_at: defer.then_some(now + SETTLE),
             origin,
         });
@@ -298,7 +319,7 @@ impl Workspace {
                         })
                 });
             if valid && Some(&visit) != current.as_ref() {
-                self.begin_navigation(visit, origin, false, tx);
+                self.begin_navigation(visit, origin, false, TIMEOUT, tx);
                 return;
             }
         }
@@ -374,7 +395,7 @@ impl Workspace {
             || visit.host != self.hosts[self.active].id
             || self.model().selected.as_ref() != Some(&visit.session);
         let origin = self.navigation.origin();
-        self.begin_navigation(visit, origin, defer, tx);
+        self.begin_navigation(visit, origin, defer, TIMEOUT, tx);
     }
 }
 
