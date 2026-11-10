@@ -223,6 +223,7 @@ impl Workspace {
                     Some(Probe::Rex {
                         endpoint,
                         listeners,
+                        reason,
                     }),
                     _,
                 ) => {
@@ -231,7 +232,7 @@ impl Workspace {
                     } else {
                         "view listeners"
                     };
-                    format!("{endpoint} · {access}")
+                    format!("{endpoint} · {}", reason.as_deref().unwrap_or(access))
                 }
                 (_, false) => "Offline".into(),
                 (None, true) => "Checking for Rex…".into(),
@@ -367,12 +368,19 @@ impl Workspace {
                 Some(Probe::Rex {
                     endpoint,
                     listeners,
+                    reason,
                 }),
                 _,
             ) => {
                 note.push_str(&format!(
                     " Rex also answers at {endpoint}; this adds another login to it."
                 ));
+                if let Some(reason) = reason {
+                    note.push_str(&format!(" Hello failed: {reason}."));
+                }
+                if !listeners.is_empty() {
+                    note.push_str("\nServer-reported listeners: bound addresses are not reachability or permission checks.");
+                }
                 for listener in listeners {
                     note.push_str(&format!("\n{}", listener.description()));
                 }

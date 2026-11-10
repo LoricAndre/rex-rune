@@ -190,8 +190,16 @@ pub async fn control(endpoint: &str, reconnect: Option<&str>) -> Result<Client> 
     // This is an attachment-only client. Server lifetime and listener configuration
     // belong to the existing upstream Rex server, including its Tailscale identity.
     let socket = socket(endpoint, "/api/control", "rex.control.v1").await?;
+    control_from_socket(socket, reconnect, "Rex Linux").await
+}
+
+pub(crate) async fn control_from_socket(
+    socket: Socket,
+    reconnect: Option<&str>,
+    name: &str,
+) -> Result<Client> {
     let mut builder = AsyncRexClient::builder()
-        .name("Rex Linux")
+        .name(name)
         .version(env!("CARGO_PKG_VERSION"))
         .api_revisions(MIN_API_REVISION..=API_REVISION)
         .platform("linux")

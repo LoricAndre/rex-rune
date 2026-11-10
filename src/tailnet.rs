@@ -211,6 +211,7 @@ pub enum Probe {
     Rex {
         endpoint: String,
         listeners: Vec<Listener>,
+        reason: Option<String>,
     },
     /// Every listener this client would try refused the connection: nothing listens there.
     Nothing,
@@ -285,17 +286,26 @@ async fn listeners(control: &mut crate::transport::Client) -> Vec<Listener> {
 
 /// Probe a single address without attaching to sessions or changing the server.
 pub async fn probe_endpoint(endpoint: &str) -> Result<Probe> {
-    let mut control = tokio::time::timeout(
+    let socket = tokio::time::timeout(
         std::time::Duration::from_secs(6),
-        crate::transport::control(endpoint, None),
+        crate::transport::socket(endpoint, "/api/control", "rex.control.v1"),
     )
     .await
     .context("Rex discovery timed out")??;
-    let listeners = listeners(&mut control).await;
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(1), control.close()).await;
+    let (listeners, reason) =
+        match crate::transport::control_from_socket(socket, None, "Rex Linux (discovery)").await {
+            Ok(mut control) => {
+                let listeners = listeners(&mut control).await;
+                let _ =
+                    tokio::time::timeout(std::time::Duration::from_secs(1), control.close()).await;
+                (listeners, None)
+            }
+            Err(error) => (Vec::new(), Some(format!("{error:#}"))),
+        };
     Ok(Probe::Rex {
         endpoint: endpoint.into(),
         listeners,
+        reason,
     })
 }
 
@@ -504,6 +514,7 @@ mod tests {
         use serde_json::{Value, json};
         use tokio_tungstenite::tungstenite::Message;
         for (revision, metadata, expected) in [
+            (9, json!({}), 0),
             (10, json!({}), 0),
             (11, json!({"listeners":null}), 0),
             (
@@ -531,8 +542,12 @@ mod tests {
                     serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap())
                         .unwrap();
                 assert_eq!(hello["type"], "hello");
+                assert_eq!(hello["client"]["name"], "Rex Linux (discovery)");
                 ws.send(Message::Text(json!({"type":"welcome","protocol":"rex.control.v1","api_revision":revision,
                     "limits":{"max_message_bytes":65536},"client":{"id":"client:probe","reconnect_token":"probe"}}).to_string().into())).await.unwrap();
+                if revision == 9 {
+                    return;
+                }
                 let request: Value =
                     serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap())
                         .unwrap();
@@ -550,11 +565,17 @@ mod tests {
             let Probe::Rex {
                 endpoint: found,
                 listeners,
+                reason,
             } = probe_endpoint(&endpoint).await.unwrap()
             else {
                 panic!("not Rex")
             };
             assert_eq!(found, endpoint);
+            if revision == 9 {
+                assert!(reason.unwrap().contains("revision"));
+            } else {
+                assert!(reason.is_none());
+            }
             assert_eq!(listeners.len(), expected);
             if let Some(listener) = listeners.first() {
                 assert!(listener.description().contains("127.0.0.1:4567"));

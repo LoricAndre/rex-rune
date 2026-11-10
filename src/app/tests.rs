@@ -3294,6 +3294,7 @@ fn rex_at(address: &str) -> rex_linux::tailnet::Probe {
     rex_linux::tailnet::Probe::Rex {
         endpoint: format!("https://{address}"),
         listeners: vec![],
+        reason: None,
     }
 }
 
@@ -3343,6 +3344,7 @@ fn discovered_listeners_are_reviewed_before_connecting() {
         "box.tail1234.ts.net",
         rex_linux::tailnet::Probe::Rex {
             endpoint: "https://box.tail1234.ts.net".into(),
+            reason: None,
             listeners: vec![rex_linux::tailnet::Listener {
                 endpoint: "0.0.0.0:7297".into(),
                 addresses: vec!["[::]:7297".into()],
@@ -3351,6 +3353,10 @@ fn discovered_listeners_are_reviewed_before_connecting() {
                 primary: Some(true),
             }],
         },
+    );
+    assert!(
+        ws.machine_form_note(2)
+            .contains("not reachability or permission checks")
     );
     let before = ws.settings.hosts.len();
     ws.add_machine(2, &mut rune::Tx::default());
@@ -3471,6 +3477,7 @@ fn add_host_lists_the_tailnet_by_kind_and_hides_iphones_and_this_machine() {
         rex_linux::tailnet::Probe::Rex {
             endpoint: "https://box.tail1234.ts.net:7297".into(),
             listeners: vec![],
+            reason: None,
         },
     );
     let entries = rt.state.entries();
