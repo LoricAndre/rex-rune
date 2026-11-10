@@ -80,6 +80,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: CHANGELOG.md
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -91,8 +95,16 @@ jobs:
         run: |
           cd dist
           sha256sum *.tar.gz *.deb > SHA256SUMS
-          cat > RELEASE-NOTES.md <<'EOF'
-          First prebuilt Linux release. No application behavior changes since v0.3.1.
+          version="${GITHUB_REF_NAME#v}"
+          # Release notes: this version's CHANGELOG section, then the standing install notes.
+          awk -v v="$version" '$0 ~ "^## "v"( |$)" {found=1; next} found && /^## / {exit} found {print}' ../CHANGELOG.md > RELEASE-NOTES.md
+          if ! grep -q '[^[:space:]]' RELEASE-NOTES.md; then
+            echo "CHANGELOG.md has no section for $version" >&2
+            exit 1
+          fi
+          cat >> RELEASE-NOTES.md <<'EOF'
+
+          ---
 
           **Downloads:** `x86_64` / `amd64` for Intel/AMD; `aarch64` / `arm64` for ARM64.
           - **Debian/Ubuntu:** `sudo apt install ./rex-linux_*.deb` (choose your architecture).
