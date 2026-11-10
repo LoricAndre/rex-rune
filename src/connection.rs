@@ -1069,11 +1069,19 @@ async fn handle_event(
                     "Rex Linux does not support remote client actions. Use Rex session, window and block commands to manage server state; use the app for interface actions.",
                 ),
             );
-            match tokio::time::timeout(Duration::from_secs(8), control.call(reply)).await? {
-                Ok(_) | Err(rexrs::Error::Api(rexrs::ApiError::NotFound { .. })) => {}
-                Err(error) => return Err(error.into()),
+            match tokio::time::timeout(Duration::from_secs(8), control.call(reply)).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(
+                    error @ (rexrs::Error::Transport(_)
+                    | rexrs::Error::Closed { .. }
+                    | rexrs::Error::Protocol(_)),
+                )) => {
+                    return Err(error.into());
+                }
+                Ok(Err(error)) => log::debug!("client.reply refusal failed: {error}"),
+                Err(error) => log::debug!("client.reply refusal timed out: {error}"),
             }
-            // not_found means the caller's deadline already expired. Never retry a reply.
+            // A failed refusal does not invalidate the connection. Never retry a reply.
         }
         return Ok(());
     }

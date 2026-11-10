@@ -2662,6 +2662,7 @@ dependencies = [
  "flume",
  "futures-util",
  "ghostty-vt",
+ "log",
  "rexrs",
  "rune",
  "rune-kit",

@@ -148,6 +148,89 @@ async fn remote_perform_is_declined_even_without_session_and_after_caller_timeou
     server.await.unwrap();
 }
 
+async fn refusal_failure_is_nonfatal(error: Option<(&str, u16)>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let error = error.map(|(code, status)| {
+        json!({
+            "code": code, "status": status, "message": "reply rejected"
+        })
+    });
+    let (ready, wait) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let mut ws = accept(&listener, "rex.control.v1").await;
+        welcome(&mut ws, 12).await;
+        let bootstrap = recv(&mut ws).await;
+        send(
+            &mut ws,
+            json!({"type":"response","id":bootstrap["id"],"seq":10,"payload":boot()}),
+        )
+        .await;
+        send(
+            &mut ws,
+            json!({"type":"event","seq":1,"payload":{
+                "type":"client_perform_requested","payload":{
+                    "call_id":"refusal","action":"client.tab.new"}}}),
+        )
+        .await;
+        let reply = recv(&mut ws).await;
+        assert_eq!(reply["method"], "client.reply");
+        assert_eq!(reply["payload"]["call_id"], "refusal");
+        assert_eq!(reply["payload"]["error"]["code"], "not_supported");
+        if let Some(error) = error {
+            send(
+                &mut ws,
+                json!({"type":"response","id":reply["id"],"error":error}),
+            )
+            .await;
+        }
+        // With no response, the client must time out and keep using this socket.
+        ready.send(()).unwrap();
+        let request = recv(&mut ws).await;
+        assert_eq!(
+            request["method"], "client.keymap",
+            "refusal must not be retried"
+        );
+        send(
+            &mut ws,
+            json!({"type":"response","id":request["id"],"payload":KeymapResponse::default()}),
+        )
+        .await;
+        assert!(matches!(ws.next().await, Some(Ok(Message::Close(_)))));
+    });
+    let host = HostConnection::spawn(endpoint, None, None, None, false, None);
+    tokio::time::timeout(Duration::from_secs(5), wait)
+        .await
+        .unwrap()
+        .unwrap();
+    host.commands
+        .send(HostCommand::Keymap(declaration(1)))
+        .unwrap();
+    updated(&host, 1).await;
+    {
+        let model = host.model.lock().unwrap();
+        assert!(model.connected);
+        assert!(model.keymap.is_some());
+        assert!(model.keymap_error.is_none());
+        assert!(model.notice.is_none());
+        assert!(model.client_actions.is_empty());
+    }
+    drop(host);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn remote_perform_reply_api_errors_are_nonfatal() {
+    for error in [("bad_request", 400), ("internal", 500)] {
+        refusal_failure_is_nonfatal(Some(error)).await;
+    }
+}
+
+#[tokio::test]
+async fn remote_perform_reply_timeout_is_nonfatal() {
+    refusal_failure_is_nonfatal(None).await;
+}
+
 #[tokio::test]
 async fn action_has_35_second_budget_and_queues_client_actions_without_servers() {
     assert_eq!(actions::TIMEOUT, Duration::from_secs(35));
