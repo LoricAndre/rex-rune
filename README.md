@@ -34,7 +34,7 @@ It is written in Rust on [Rune](https://github.com/anomalyco/rune) (wgpu/winit, 
 - Borderless window with its own close button, edge resizing and drag region. There are no minimize or maximize buttons; double-clicking the drag region maximizes, and the window manager handles the rest.
 - Keys are sent by physical position (Ghostty key names), so non-US layouts work.
 
-**Attachment only.** Rex Linux never starts, stops, replaces or reconfigures a Rex server and attaching does not need a `rex` executable. The only place the app runs `rex` is Settings → Integrations, on this machine and always with `--autostart=false`; it searches `PATH`, then `$XDG_BIN_HOME` or `~/.local/bin` for desktop launches that do not inherit the shell's path. An unavailable server is shown as disconnected and retried. Closing the client leaves server programs running.
+**Attachment only.** Rex Linux never starts, stops, replaces or reconfigures a Rex server and attaching does not need a `rex` executable. The only place the app runs a local `rex` is Settings → Integrations, on this machine and always with `--autostart=false`; it searches `PATH`, then `$XDG_BIN_HOME` or `~/.local/bin` for desktop launches that do not inherit the shell's path. An unavailable server is shown as disconnected and retried. Closing the client leaves server programs running.
 
 ## Install a binary release
 
@@ -54,14 +54,14 @@ bash install.sh
 
 The tarball installs into `~/.local/bin` with a desktop launcher and icons, independently of any source checkout. It needs `desktop-file-utils`; uninstall with `bash scripts/install-desktop.sh --uninstall`. Uninstall a `.deb` with `sudo apt remove rex-linux`. Neither removes preferences or changes Rex servers. Avoid mixing both installation methods: a user installation can shadow `/usr/bin/rex-linux`.
 
-Prebuilt packages are built on Ubuntu 24.04 and require **glibc 2.39+**. They are dynamically linked, not self-contained AppImages. Install your distribution's graphics drivers, fontconfig (including `fc-match`), xkbcommon, Wayland/X11, EGL/OpenGL/Vulkan libraries, CA certificates and `xdg-utils`. On Debian/Ubuntu the `.deb` declares these dependencies. Rust and Zig are **not** needed to run a binary. A running Rex server with API revision 10 or 11 is required.
+Prebuilt packages are built on Ubuntu 24.04 and require **glibc 2.39+**. They are dynamically linked, not self-contained AppImages. Install your distribution's graphics drivers, fontconfig (including `fc-match`), xkbcommon, Wayland/X11, EGL/OpenGL/Vulkan libraries, CA certificates and `xdg-utils`. On Debian/Ubuntu the `.deb` declares these dependencies. Rust and Zig are **not** needed to run a binary. A running Rex server with API revision 10, 11 or 12 is required.
 
 ## Build requirements
 
 - Rust 1.96 or newer (edition 2024; see `rust-version` in `Cargo.toml`).
 - [Zig](https://ziglang.org/) 0.17.x. The `ghostty-vt` crate builds Ghostty's VT library from a checksum-pinned source archive with Zig.
 - Linux with Wayland or X11, plus the usual graphics/input libraries: Vulkan, xkbcommon, fontconfig and the Wayland/X11 client libraries.
-- A running Rex server that supports API revision 10 or 11. Rex is in alpha, so older revisions aren't supported; update Rex on a host that refuses the connection. Uploading files needs revision 11.
+- A running Rex server that supports API revision 10, 11 or 12. Verified with Linux server **0.1.0-preview.14 (`7e460d0`, API 12)**; see [compatibility results](docs/server-preview14.md). Rex is in alpha, so older revisions aren't supported; update Rex on a host that refuses the connection. Uploading files needs revision 11.
 
 ## Build
 
@@ -142,7 +142,9 @@ A host's default shell (empty means the server user's login shell) is used for e
 - A machine already added stays listed, marked with the hosts that reach it; pressing it adds another login over SSH (another user, or another socket). The same endpoint is never added twice.
 - **Enter an endpoint…** takes any endpoint by hand, as before. Without Tailscale, the list says so and this is what remains.
 
-An `ssh://` host is reached by forwarding the Rex server's Unix socket on that machine to a local one with `ssh -L` (OpenSSH's Unix-socket forwarding, so only `sshd` is needed there). Unless the endpoint names the socket (`ssh://user@host/run/rex/server.sock`), the client first asks the machine where it is: the path `rex server status` prints, then the login user's own server (`$XDG_RUNTIME_DIR/rex/server.sock` on Linux, `~/Library/Application Support/rex/server.sock` on macOS), then a shared server's `/run/rex/server.sock` or `/var/run/rex/server.sock`; "No Rex server found on … for …" names those places when none is a socket. `ssh` runs with `BatchMode=yes` (it never prompts; use an agent for keys with passphrases), `StrictHostKeyChecking=accept-new` (a machine's key is trusted the first time and a changed key is refused), keep-alives and `ControlMaster=no` (a shared connection in your SSH configuration is not used, since it would keep the forward after this client lets go). The local end lives in a directory of this process's own under `$XDG_RUNTIME_DIR/rex-linux`, so two instances (or a probe alongside the app) forwarding the same machine don't disturb each other, and it is removed when the forward ends; directories left by a crashed instance are swept on the next forward. When the forward drops, the host reconnects through a new one like any other disconnect, and the reason `ssh` gave (for example "tailnet policy does not permit you to SSH as user …") is shown next to Retry. Edit host… shows the `ssh://` endpoint, where the user name and socket can be changed.
+An `ssh://` host is reached by forwarding the Rex server's Unix socket on that machine to a local one with `ssh -L` (OpenSSH's Unix-socket forwarding, so only `sshd` is needed there). Unless the endpoint names the socket (`ssh://user@host/run/rex/server.sock`), the client first asks the machine where it is: the path `rex server status --autostart=false` prints, then the login user's own server (`$XDG_RUNTIME_DIR/rex/server.sock` on Linux, `~/Library/Application Support/rex/server.sock` on macOS), then a shared server's `/run/rex/server.sock` or `/var/run/rex/server.sock`; "No Rex server found on … for …" names those places when none is a socket and suggests a manual `rex server install 'ssh://[user@]host[:port]'` (preview.14 or newer) for a Linux host. That command asks before installing or configuring anything; the app never runs it. `ssh` runs with `BatchMode=yes` (it never prompts; use an agent for keys with passphrases), `StrictHostKeyChecking=accept-new` (a machine's key is trusted the first time and a changed key is refused), keep-alives and `ControlMaster=no` (a shared connection in your SSH configuration is not used, since it would keep the forward after this client lets go). The local end lives in a directory of this process's own under `$XDG_RUNTIME_DIR/rex-linux`, so two instances (or a probe alongside the app) forwarding the same machine don't disturb each other, and it is removed when the forward ends; directories left by a crashed instance are swept on the next forward. When the forward drops, the host reconnects through a new one like any other disconnect, and the reason `ssh` gave (for example "tailnet policy does not permit you to SSH as user …") is shown next to Retry. Edit host… shows the `ssh://` endpoint, where the user name and socket can be changed.
+
+Unlike the Rex CLI's native `rex -S ssh://host …`, which can auto-start a personal server, Rex Linux keeps using socket forwarding and **never auto-starts** one. No local Rex executable or Tailscale is required for SSH attachment; your OpenSSH configuration and aliases still apply. A server's new `listeners` metadata is understood by the SDK, but discovery still probes the documented tailnet endpoints: listener addresses are only available after connecting and do not prove remote reachability or permission.
 
 The SSH user is the login on that machine, which is also the user whose Rex server is forwarded; it is not a Rex account in the sense of Rex's login server, which is chosen in an `https://user@host` address instead.
 
@@ -271,7 +273,12 @@ Keys accept modifier aliases, named keys, F1–F12, W3C physical codes and `>` s
 Letters follow the keyboard layout, with physical US-position fallbacks on
 non-Latin layouts; Shift stays a modifier instead of being folded into the key.
 Key modes, a recording editor, server actions in Commands, pane-resize bindings
-and `client_perform_requested` handling are not implemented in this phase.
+and executing remote client actions are not implemented. `client_perform_requested`
+is answered with `client.reply` / `not_supported`, explaining that remote interface
+control is unavailable, rather than leaving the caller to time out. This is distinct
+from queued actions returned by a local shortcut's `client.action`, which still run.
+There is no Remote Control setting to enable in this client; agents should use Rex's
+session, window and block commands for server state, and show the refusal message.
 
 The parser, sequence machine, action-registry structure and repeat suppression
 adapt Andrea Zito ([nivox](https://github.com/nivox))’s `8037d78` work. Importing a
@@ -302,7 +309,7 @@ With mise, `mise run test`, `fmt`, `clippy` and `test-rexrs` run the first three
 
 `python3 scripts/keymap-acceptance.py` checks layered bindings, native sequences,
 Lua forwarding, queued client actions, file/server reload, removals and the
-send-key escape hatch on its own disposable Rex server and Xvfb display. It uses
+send-key escape hatch and explicit remote-action refusal on its own disposable Rex server and Xvfb display. It uses
 `target/release/rex-linux` unless `REX_BIN` selects another build, and preserves
 logs/captures in the printed temporary directory.
 
@@ -330,7 +337,7 @@ See [AGENTS.md](AGENTS.md) for the code layout and contributor conventions, and 
 Three dependencies are vendored with small, documented patches and wired in through `[patch]` in `Cargo.toml`:
 
 - [`vendor/rune/`](vendor/rune/README.md): the `rune`, `rune-motion`, `rune-staging` and `procwatch` crates from `anomalyco/rune` at `100b7d9` (MIT), with dead-key forwarding and window-chrome additions for a borderless Linux window (maximize/restore, minimize, edge resize, window menu, native window icon).
-- [`vendor/rexrs/`](vendor/rexrs/REX-LINUX.md): `a10y/rexrs` at `780be3f` (MIT OR Apache-2.0), plus revision-11 generated types, explicit API-revision range negotiation and preservation of an empty `attach_session_ids`.
+- [`vendor/rexrs/`](vendor/rexrs/REX-LINUX.md): `a10y/rexrs` at `780be3f` (MIT OR Apache-2.0), plus revision-12 generated types, explicit API-revision range negotiation and preservation of an empty `attach_session_ids`.
 - [`vendor/ghostty-vt/`](vendor/ghostty-vt/REX-LINUX.md): the crates.io `ghostty-vt` 0.8.0 source (Apache-2.0; Ghostty itself is MIT), plus a safe wrapper for Ghostty's render-state image iterator, image-aware snapshot decoding, a fixed temporary-file medium setting and grayscale PNG normalization.
 
 Each patch is meant to be dropped once the corresponding upstream release has equivalent APIs.
@@ -356,7 +363,7 @@ Other crates are used under their own licenses; see `Cargo.lock`.
 
 ## Acknowledgements
 
-- [Superlogical Rex](https://www.superlogical.com/rex), the server and protocol this client speaks. The implementation follows the server's `/llms.txt` API revision 11 contract; revision 10 is also supported.
+- [Superlogical Rex](https://www.superlogical.com/rex), the server and protocol this client speaks. The implementation follows the server's `/llms.txt` API revision 12 contract; revisions 10 and 11 are also supported.
 - [anomalyco/rune](https://github.com/anomalyco/rune) and [a10y/rexrs](https://github.com/a10y/rexrs).
 - [Ghostty](https://github.com/ghostty-org/ghostty) for the terminal core.
 - [m4nik1/rex-linux-client](https://github.com/m4nik1/rex-linux-client) and [noahdunnagan/rmx](https://github.com/noahdunnagan/rmx), whose protocol work served as references.

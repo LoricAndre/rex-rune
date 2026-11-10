@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Support Rex Linux server **0.1.0-preview.14 (`7e460d0`)**, negotiating API revisions **10–12**. Refresh the vendored SDK capture and generated types for optional listener metadata in `server.status` and `session.bootstrap`; uploads still require revision 11.
+- When SSH finds no Rex socket, explain attachment-only behavior and suggest the manual `rex server install ssh://host` setup. Socket lookup explicitly disables autostart; existing OpenSSH forwarding, aliases and custom sockets remain supported.
+
+### Fixed
+
+- Answer remote `client_perform_requested` actions with `not_supported` and an explanation instead of leaving agents waiting for a timeout. Remote interface control remains unimplemented; local shortcuts and their queued actions are unchanged.
+
+See [preview.14 compatibility notes](docs/server-preview14.md) for the exact protocol diff, test results and deferred features. Intended for the next patch release (0.4.1).
+
 ## 0.4.0 — 2026-11-09
 
 Changes since 0.3.2, including work adapted from [Joe Goldin](https://github.com/joegoldin) ([joegoldin/rex-rune](https://github.com/joegoldin/rex-rune)), [Lily](https://github.com/kitten-lily) ([kitten-lily/rex-rune](https://github.com/kitten-lily/rex-rune)) and [Andrea Zito (nivox)](https://github.com/nivox). Thank you; their contributions are credited below and in the commits.
