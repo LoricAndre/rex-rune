@@ -393,10 +393,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_closed_port_on_this_machine_is_nothing_and_a_wrong_server_is_unknown() {
-        // Nothing listens on a port a listener just gave back.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
+        // Reserve the port without listening: releasing it before connecting lets another
+        // parallel test take it, which can produce a reset instead of a refusal.
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let port = socket.local_addr().unwrap().port();
         let machine = Machine {
             name: "lo".into(),
             address: "127.0.0.1".into(),

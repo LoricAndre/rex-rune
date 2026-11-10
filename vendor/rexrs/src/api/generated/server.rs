@@ -309,6 +309,33 @@ pub struct Config {
     pub hash: String,
 }
 
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
+pub struct Listener {
+    /// The endpoint the listener was configured with, such as unix:///run/rex.sock, 127.0.0.1:7297,
+    /// or tailnet://:7297.
+    pub endpoint: String,
+    /// The addresses the listener is bound to, such as a socket path or 127.0.0.1:54321. They show
+    /// the port that an endpoint like 127.0.0.1:0 got. Left out when the server can't tell.
+    #[serde(
+        default,
+        deserialize_with = "crate::api::nullable",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub addresses: Vec<String>,
+    /// How the listener identifies its callers: 'unix', 'named_pipe', 'tcp', or 'tailscale'. Show a
+    /// value you don't know as it is.
+    pub transport: String,
+    /// Which callers the listener lets in: 'peer_credentials', 'anonymous', 'tailscale_owner',
+    /// 'tailscale_identified', or 'login_server'. Left out when the server can't tell. Show a value
+    /// you don't know as it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission: Option<String>,
+    /// True for the server's primary endpoint, where commands such as rex server status and rex
+    /// server stop look for the server. Left out for the other listeners.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary: Option<bool>,
+}
+
 /// The result of [`Status`].
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
 pub struct StatusResponse {
@@ -339,6 +366,15 @@ pub struct StatusResponse {
     /// The configuration file the server loaded most recently. Always present, even when there is
     /// no file.
     pub config: Config,
+    /// Each endpoint the server accepts connections on, primary first. Servers older than API
+    /// revision 12 leave it out. Doesn't include built-in Tailscale, which the tailscale member
+    /// describes.
+    #[serde(
+        default,
+        deserialize_with = "crate::api::nullable",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub listeners: Vec<Listener>,
 }
 
 /// Get the server's identity, session count, configuration, and Tailscale status.

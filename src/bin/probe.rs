@@ -81,7 +81,7 @@ async fn run() -> Result<()> {
             serde_json::to_string_pretty(&reply)? + "\n",
         )?;
         control.close().await?;
-        println!("PASS captured revision-11 client.keymap reply in {directory}");
+        println!("PASS captured revision-{revision} client.keymap reply in {directory}");
         return Ok(());
     }
     println!("PASS negotiated API revision {revision}");

@@ -1059,6 +1059,33 @@ async fn handle_event(
     state: &mut ControlState,
     keymap: Option<&keymap::Declaration>,
 ) -> Result<()> {
+    // This is a directed request, not a session update: even an unattached session or a
+    // sequence below bootstrap's cutoff needs an answer on this same connection.
+    if event.name == "client_perform_requested" {
+        if let Some(call_id) = event.payload["call_id"].as_str() {
+            let action = event.payload["action"].as_str().unwrap_or("unknown");
+            let reply = rexrs::api::client::Reply::new(call_id).error(
+                rexrs::api::client::ReplyError::new(
+                    "not_supported",
+                    format!("Rex Linux does not support remote client actions: {action}. Use Rex session, window and block commands to manage server state; use the app for interface actions."),
+                ),
+            );
+            match tokio::time::timeout(Duration::from_secs(8), control.call(reply)).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(
+                    error @ (rexrs::Error::Transport(_)
+                    | rexrs::Error::Closed { .. }
+                    | rexrs::Error::Protocol(_)),
+                )) => {
+                    return Err(error.into());
+                }
+                Ok(Err(error)) => log::debug!("client.reply refusal failed: {error}"),
+                Err(error) => log::debug!("client.reply refusal timed out: {error}"),
+            }
+            // A failed refusal does not invalidate the connection. Never retry a reply.
+        }
+        return Ok(());
+    }
     // Config-wide events have no session sequence. Do not broaden includes().
     if event.name == "keymap_changed" {
         let refresh = {
