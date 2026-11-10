@@ -1,12 +1,22 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 - 2026-11-10
 
 ### Added
 
 - Opt-in Remote control per saved host (off even locally), eight view-only client actions, explicit refusals with server-command alternatives, host/target/panel/typing guards, five-second stale-request limits and reconnect-scoped replies. Every performed request names its host and requester in a six-second in-app notice.
 - `session.select session_id=… [window_id=…]` shows a session on the requesting host, with acknowledgement, a five-second deadline and history integration. `client.tab.goto index=-1` selects the last tab. Checked live against private preview.14 servers, including a real SSH host.
 - A client label in Settings → Remote Hosts, defaulting to the hostname and sent in HELLO; edits apply after reopening.
+
+- Signed releases with minisign signatures for `SHA256SUMS` and `latest.json`, protected release approval, package provenance attestations, and committed CI and offline recovery public keys (#21, #28). No client auto-update is included.
+
+### Changed
+
+- Update GitHub Actions checkout to 7.0.1, upload-artifact to 7.0.2, and mise-action to 5.2.7 (Dependabot #22–#24).
+
+### Verifying downloads
+
+Verify the metadata signatures before checking package hashes. See the [README's minisign public keys and verification instructions](https://github.com/shuv1337/rex-rune/blob/v0.5.0/README.md#verify-a-download). Releases through 0.4.2 remain unsigned.
 
 ## 0.4.2 - 2026-11-09
 
