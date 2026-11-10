@@ -329,6 +329,33 @@ fn remote_notices_evict_oldest_non_sticky_notice_before_warnings() {
 }
 
 #[test]
+fn client_label_form_trims_and_rejects_empty_without_freezing_the_default() {
+    let mut ws = workspace();
+    assert!(ws.settings.client_label.is_none());
+    let mut tx = rune::Tx::default();
+    ws.perform(Intent::ClientLabel, &mut tx);
+    assert_eq!(
+        ws.panel.as_ref().unwrap().inputs[0].text,
+        rex_linux::settings::hostname()
+    );
+    ws.panel.as_mut().unwrap().inputs[0] = rune::TextEdit::new("  \n  ");
+    ws.submit(&mut tx);
+    assert!(ws.panel.as_ref().unwrap().error.is_some());
+    assert!(ws.settings.client_label.is_none());
+    ws.panel.as_mut().unwrap().inputs[0] = rune::TextEdit::new("  My laptop  ");
+    ws.submit(&mut tx);
+    assert_eq!(ws.settings.client_label.as_deref(), Some("My laptop"));
+    assert_eq!(
+        Settings::load(&ws.settings_path)
+            .unwrap()
+            .client_label
+            .as_deref(),
+        Some("My laptop")
+    );
+    std::fs::remove_file(&ws.settings_path).unwrap();
+}
+
+#[test]
 fn remote_control_switch_is_per_host_and_survives_save() {
     let mut ws = workspace_hosts(2);
     let rx = capture_host(&mut ws, 1);
