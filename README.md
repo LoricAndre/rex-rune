@@ -276,15 +276,19 @@ dialogs, change interface zoom, or navigate to another host. Refusals name the
 server command to use instead where one exists (`rex window new`, `rex send-key`,
 `rex capture`, etc.). Actions remain listed even with the switch off.
 
-A request must match the host, session and pane on screen. An open panel refuses
-requests; navigation also waits for a 1.5-second pause in terminal typing. Stale
-requests are discarded after five seconds, and replies never cross a reconnect.
+A request must match the host, session and pane on screen. Navigation runs only
+after a pause in typing, and never while a text field has focus. The pause must
+last at least 1.5 seconds. All remote actions are refused while a text field has
+focus, a panel is open or a key sequence is pending. Requests not acted on within
+five seconds are discarded, including time buffered during a busy connection
+step (counted conservatively from that step's start). Replies never cross a reconnect.
 Every performed request gets a six-second in-app notice naming host, requester
 and action; nothing raises the window or sends a desktop notification. The first
 request refused because control is off shows one explanatory notice per host per
 launch. Requester identity is displayed, not used as a second permission filter.
 
-The **Client label**, also in Remote Hosts, defaults to this computer's hostname.
+The **Client label**, also in Remote Hosts, defaults to this computer's current
+hostname (or “Rex Linux” if empty), without saving that default as an override.
 It is visible to clients on every connected server and can be edited (reopen the
 app to apply it). Use `rex -C LABEL actions` to list actions, then, for example,
 `rex -C LABEL do client.sidebar.toggle`. Local shortcuts and queued actions from
