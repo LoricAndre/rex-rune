@@ -112,6 +112,13 @@ from other clients via `client.perform` are refused with `not_supported`.
   these are server/CLI fixes, not client wire changes. No service installation,
   shutdown, remote auto-start or Alpine deployment was exercised here.
 
+## Caveats
+
+A remote `rex` older than support for `--autostart=false` will reject
+`rex server status --autostart=false`. Socket discovery suppresses that error
+and falls back to the default socket paths; it cannot discover a custom socket
+through that older CLI. Supply an explicit `ssh://host/path/to/socket` instead.
+
 ## Verification
 
 Builds used an isolated `CARGO_TARGET_DIR` under the scratch directory. The
