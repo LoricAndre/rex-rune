@@ -51,6 +51,7 @@ Some probes and Python scripts in `scripts/` connect to the configured Rex serve
 - Ordinary attachment must never start, stop or reconfigure a Rex server, and must never create or destroy a session. Creation is always an explicit user action.
 - Failed input is never replayed automatically; a transport failure pauses affected panes.
 - Effective workspace shortcuts consume their keys, but every binding is removable or replaceable. Keep ordinary keys flowing through `client.key`, including releases only when their press was sent. Only explicit `pane.send_key` uses `block.event` to bypass Lua bindings.
+- Remote availability is decided exhaustively in `Spec::remote()`, default deny. Consent belongs to the saved host, never the requester; replies must stay on their connection epoch. Keep the allowed-set test pinned.
 - Terminal content never animates; chrome motion uses the springs in `theme.rs`.
 - UI changes should follow [DESIGN.md](DESIGN.md). Prefer verifying them in a rendered build (for example with Rune's `-- --snap out.png`) rather than by reading code.
 - Add tests for protocol and state-machine changes; headless UI tests in `src/app/tests.rs` cover focus and dialog behavior.
