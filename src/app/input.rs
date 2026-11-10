@@ -251,6 +251,7 @@ fn forward(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx, prefix: Vec<String>) -
                 prefix,
             }
         });
+        s.last_keypress = Some(std::time::Instant::now());
         s.forwarded.insert(
             Input {
                 event: ev,
@@ -299,6 +300,7 @@ pub fn on_ime(s: &mut Workspace, ime: &Ime, _: &mut Tx) -> bool {
             term.preedit.clear();
             if term.status().live && !text.is_empty() {
                 term.send(Command::Paste(text.clone()));
+                s.last_keypress = Some(std::time::Instant::now());
             }
         }
         _ => {}

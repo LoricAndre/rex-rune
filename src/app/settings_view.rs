@@ -336,7 +336,19 @@ fn terminal(s: &Workspace) -> El {
 
 fn hosts(s: &Workspace) -> El {
     let last = s.settings.hosts.len() == 1;
-    let mut body = col().gap(4.);
+    let mut body = col()
+        .gap(4.)
+        .child(setting(
+            "Client label",
+            &format!(
+                "{} · shown to clients on every host; applies after reopening",
+                s.settings.client_label
+            ),
+            pill("client-label", "Edit…", Pill::Neutral, 26., |s, tx| {
+                s.perform(Intent::ClientLabel, tx)
+            }),
+        ))
+        .child(divider());
     for (i, host) in s.settings.hosts.iter().enumerate() {
         let connected = s.hosts.get(i).is_some_and(|h| h.model.connected);
         let mut actions = row().gap(6.).center_y();
@@ -414,6 +426,16 @@ fn hosts(s: &Workspace) -> El {
                     )
                     .child(actions.child(remove)),
             )
+            .child(setting(
+                "Remote control",
+                "Let rex do and other clients on this host change the view in this window.",
+                rune_kit::Switch::new(host.remote_control)
+                    .label(format!("Remote control for {}", host.label))
+                    .hide_label()
+                    .on_toggle(move |s: &mut Workspace| s.toggle_remote_control(i))
+                    .build(kit())
+                    .key(format!("remote-control:{i}")),
+            ))
             .child(divider());
     }
     body.child(row().mt(8.).child(pill(

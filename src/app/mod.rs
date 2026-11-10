@@ -13,6 +13,7 @@ mod notify;
 mod panel;
 mod panes;
 mod popups;
+mod remote;
 mod settings_view;
 mod sidebar;
 mod sprites;

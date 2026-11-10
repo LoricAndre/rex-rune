@@ -11,6 +11,8 @@ use std::{
 pub struct Host {
     pub label: String,
     pub endpoint: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remote_control: bool,
     #[serde(default)]
     pub collapsed: bool,
     /// The shell new terminals on this host start (`zsh`, `/bin/zsh`); none uses the server
@@ -128,6 +130,7 @@ impl From<TerminalThemeChoice> for String {
 #[serde(default)]
 pub struct Settings {
     pub hosts: Vec<Host>,
+    pub client_label: String,
     pub last_host: Option<String>,
     pub sessions: HashMap<String, String>,
     pub sidebar_width: f32,
@@ -164,9 +167,11 @@ impl Default for Settings {
                     .trim()
                     .to_owned(),
                 endpoint: crate::transport::local_endpoint(),
+                remote_control: false,
                 collapsed: false,
                 shell: None,
             }],
+            client_label: hostname(),
             last_host: None,
             sessions: HashMap::new(),
             sidebar_width: 236.,
@@ -246,6 +251,13 @@ impl Settings {
         std::fs::rename(temporary, path)?;
         Ok(())
     }
+}
+
+pub fn hostname() -> String {
+    std::fs::read_to_string("/etc/hostname")
+        .unwrap_or_else(|_| "Rex Linux".into())
+        .trim()
+        .to_owned()
 }
 
 pub fn parse_font_family(family: &str) -> std::result::Result<String, String> {
@@ -364,6 +376,13 @@ mod tests {
             r#"{"hosts":[{"label":"a","endpoint":"unix:///run/rex.sock"}],"font_size":14}"#,
         )
         .unwrap();
+        assert!(!old.hosts[0].remote_control);
+        assert!(!old.client_label.is_empty());
+        assert!(
+            serde_json::to_value(&old).unwrap()["hosts"][0]
+                .get("remote_control")
+                .is_none()
+        );
         assert_eq!(old.notice_position, NoticePosition::TopRight);
         assert_eq!(old.notifications, NotificationsConfig::default());
         let partial: Settings =

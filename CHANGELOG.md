@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Opt-in Remote control per saved host (off even locally), seven view-only client actions, explicit refusals with server-command alternatives, host/target/panel/typing guards, five-second stale-request limits and reconnect-scoped replies. Every performed request names its host and requester in a six-second in-app notice. Intended for 0.5.0 together with `session.select`.
+- A client label in Settings → Remote Hosts, defaulting to the hostname and sent in HELLO; edits apply after reopening.
+
 ## 0.4.2 - 2026-11-09
 
 ### Added
