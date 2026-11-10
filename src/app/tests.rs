@@ -1257,12 +1257,17 @@ fn a_press_on_a_dialogs_padding_leaves_it_open() {
 fn dialog_padding_preserves_field_focus_but_the_scrim_dismisses() {
     let mut ws = workspace();
     ws.open_panel(
-        PanelKind::Form(Form::RenameSession(None)),
-        "Rename session",
-        &[("Session name", "", "work")],
+        PanelKind::Form(Form::AddHost),
+        "Add host",
+        &[
+            ("Name", "", "work"),
+            ("Endpoint", "", "unix:///tmp/rex.sock"),
+        ],
     );
     let mut rt = runtime(ws);
-    let before = focused(&rt).expect("the first field is focused");
+    press(&mut rt, Key::Tab);
+    let before = focused(&rt).expect("the second field is focused");
+    assert!(before.contains("/field:1/"), "Tab reached {before}");
     let r = rt
         .elements()
         .into_iter()
