@@ -126,10 +126,11 @@ pub fn command_preview(target: &Target) -> Result<String> {
 }
 
 fn quote_arg(arg: &str) -> String {
-    if !arg.is_empty()
-        && arg
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || b"_./:@%+=,-{}".contains(&c))
+    if arg == "{}"
+        || (!arg.is_empty()
+            && arg
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"_./:@%+=,-".contains(&c)))
     {
         arg.to_owned()
     } else {
@@ -394,6 +395,7 @@ mod tests {
         assert_eq!(quote_arg("ssh://me@[fd7a::1]"), "'ssh://me@[fd7a::1]'");
         assert_eq!(quote_arg("a'b"), "'a'\\''b'");
         assert_eq!(quote_arg("two words"), "'two words'");
+        assert_eq!(quote_arg("ssh://{a,b}"), "'ssh://{a,b}'");
     }
 
     #[test]

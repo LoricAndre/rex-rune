@@ -150,7 +150,7 @@ try:
     remote_rex.unlink()
     executable(remote_rex, 'if [ "$1" = version ]; then echo \'{"api_revision":11}\'; else exit 1; fi')
     preview()
-    desk.x("mousemove", "--window", window, 755, 520)
+    desk.x("mousemove", "--window", window, 755, 540)
     desk.x("click", 1)
     wait(lambda: "rex version --json" in (work / "remote-commands.log").read_text(), "remote version check never ran")
     time.sleep(1)
@@ -166,7 +166,7 @@ try:
     preview()
     # Explicitly press the named Start button in the fixed 1200x800 fixture.
     # Default Return above must never authorize setup.
-    desk.x("mousemove", "--window", window, 755, 520)
+    desk.x("mousemove", "--window", window, 755, 540)
     desk.x("click", 1)
     wait(lambda: (work / "runtime/rex/server.sock").exists(), "confirmed start did not create the private socket")
     reply = status()
