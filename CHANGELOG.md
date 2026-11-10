@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Support Rex Linux server **0.1.0-preview.14 (`7e460d0`)**, negotiating API revisions **10–12**. Refresh the vendored SDK capture and generated types for optional listener metadata in `server.status` and `session.bootstrap`; uploads still require revision 11.
+- Support Rex server 0.1.0-preview.14 (Linux build `7e460d0`), negotiating API revisions **10–12**. Refresh the vendored SDK capture and generated types for optional listener metadata in `server.status` and `session.bootstrap`; uploads still require revision 11.
 - When SSH finds no Rex socket, explain attachment-only behavior and suggest the manual `rex server install ssh://host` setup. Socket lookup explicitly disables autostart; existing OpenSSH forwarding, aliases and custom sockets remain supported.
 
 ### Fixed
