@@ -10,6 +10,7 @@ use rune::Tx;
 pub struct Setup {
     pub running: Option<String>,
     /// One-shot starts headless tests would have run.
+    #[cfg(test)]
     pub ran: Vec<String>,
 }
 
@@ -68,10 +69,14 @@ impl Workspace {
         if let Some(panel) = &mut self.panel {
             panel.error = None;
         }
-        if cfg!(test) {
-            self.ssh_setup.ran.push(endpoint);
-            return;
-        }
+        #[cfg(test)]
+        self.ssh_setup.ran.push(endpoint);
+        #[cfg(not(test))]
+        self.spawn_ssh_start(endpoint);
+    }
+
+    #[cfg(not(test))]
+    fn spawn_ssh_start(&mut self, endpoint: String) {
         let handle = self.handle.clone();
         let task_endpoint = endpoint.clone();
         let spawned = std::thread::Builder::new()

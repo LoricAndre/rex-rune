@@ -65,11 +65,21 @@ async fn output(program: &OsStr, args: &[String]) -> Result<String> {
 }
 
 fn require_api12(version: &str, location: &str) -> Result<()> {
-    let value: serde_json::Value = serde_json::from_str(version).with_context(|| {
-        format!(
-            "{location} Rex didn't report its version; preview.14 (API 12) or newer is required"
-        )
-    })?;
+    // Local Rex can pretty-print JSON; SSH login banners may precede a compact reply.
+    let value: serde_json::Value = serde_json::from_str(version)
+        .or_else(|_| {
+            serde_json::from_str(
+                version
+                    .lines()
+                    .rfind(|l| !l.trim().is_empty())
+                    .unwrap_or(""),
+            )
+        })
+        .with_context(|| {
+            format!(
+                "{location} Rex didn't report its version; preview.14 (API 12) or newer is required"
+            )
+        })?;
     ensure!(
         value["api_revision"].as_u64().is_some_and(|n| n >= 12),
         "{location} Rex is too old for this setup. Update to preview.14 (API 12) or newer; nothing was started"
@@ -197,5 +207,7 @@ mod tests {
             assert!(require_api12(old, "Remote").is_err());
         }
         require_api12(r#"{"api_revision":12}"#, "Remote").unwrap();
+        require_api12("Welcome to the host!\n{\"api_revision\":12}\n\n", "Remote").unwrap();
+        require_api12("{\n  \"api_revision\":12\n}", "Local").unwrap();
     }
 }
