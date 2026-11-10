@@ -294,6 +294,41 @@ fn remote_actions_preserve_pending_key_sequences_even_after_a_pause() {
 }
 
 #[test]
+fn remote_notices_evict_oldest_non_sticky_notice_before_warnings() {
+    let (mut ws, rx) = tabbed_workspace("single");
+    ws.settings.hosts[0].remote_control = true;
+    ws.notify("sticky warning");
+    ws.inform("old information");
+    ws.notify("second warning");
+    ws.remote_perform(
+        0,
+        pending("client.sidebar.toggle", Value::Null),
+        &mut rune::Tx::default(),
+    );
+    assert_eq!(reply(&rx), Outcome::Performed);
+    assert_eq!(ws.notices.len(), 3);
+    assert_eq!(ws.notices[0].text, "sticky warning");
+    assert_eq!(ws.notices[1].text, "second warning");
+    assert!(
+        ws.notices[2]
+            .text
+            .contains("performed client.sidebar.toggle")
+    );
+    ws.notify("third warning");
+    ws.inform("new information");
+    assert!(
+        ws.notices.iter().all(|n| n.sticky),
+        "information cannot displace three warnings"
+    );
+    ws.notify("fourth warning");
+    assert_eq!(ws.notices.len(), 3);
+    assert_eq!(
+        ws.notices[0].text, "second warning",
+        "all-sticky overflow evicts the oldest"
+    );
+}
+
+#[test]
 fn remote_control_switch_is_per_host_and_survives_save() {
     let mut ws = workspace_hosts(2);
     let rx = capture_host(&mut ws, 1);

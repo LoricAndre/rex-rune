@@ -827,7 +827,8 @@ impl Workspace {
             at: std::time::Instant::now(),
         });
         if self.notices.len() > 3 {
-            self.notices.remove(0);
+            let oldest = self.notices.iter().position(|n| !n.sticky).unwrap_or(0);
+            self.notices.remove(oldest);
         }
     }
 
