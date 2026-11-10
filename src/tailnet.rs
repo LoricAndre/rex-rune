@@ -2,6 +2,7 @@
 //! a Rex server this client can attach to directly over the tailnet (built-in Tailscale,
 //! `tailscale serve`, or a listener on the tailnet address).
 use anyhow::{Context, Result};
+pub use rexrs::api::server::Listener;
 use serde::Deserialize;
 
 /// A machine on the tailnet.
@@ -204,12 +205,13 @@ pub fn status() -> std::result::Result<Vec<Machine>, String> {
 }
 
 /// What checking a machine for a Rex server found.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Probe {
     /// A control connection answered. Only hello and read-only server.status were sent.
     Rex {
         endpoint: String,
         listeners: Vec<Listener>,
+        reason: Option<String>,
     },
     /// Every listener this client would try refused the connection: nothing listens there.
     Nothing,
@@ -219,21 +221,18 @@ pub enum Probe {
 }
 
 /// Listener facts, not a promise that a bound address is reachable from this device.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-pub struct Listener {
-    pub endpoint: String,
-    #[serde(default, deserialize_with = "nullable")]
-    pub addresses: Vec<String>,
-    pub transport: String,
-    pub admission: Option<String>,
+pub trait ListenerDescription {
+    fn description(&self) -> String;
 }
 
-impl Listener {
-    pub fn description(&self) -> String {
+impl ListenerDescription for Listener {
+    fn description(&self) -> String {
         let access = match self.admission.as_deref() {
-            Some("peer_credentials") => "local users allowed by socket permissions",
+            Some("peer_credentials") => {
+                "local processes identified by OS peer credentials (normally only the server's user)"
+            }
             Some("anonymous") => "anyone who can reach it (anonymous)",
-            Some("tailscale_owner") => "the tailnet owner",
+            Some("tailscale_owner") => "only the Tailscale user who signed this device in",
             Some("tailscale_identified") => "identified tailnet users",
             Some("login_server") => "users authenticated by the login server",
             Some(other) => other,
@@ -244,7 +243,15 @@ impl Listener {
         } else {
             format!("bound: {}", self.addresses.join(", "))
         };
-        format!("{} ({}, {bound}) — {access}", self.endpoint, self.transport)
+        let primary = if self.primary == Some(true) {
+            " (primary)"
+        } else {
+            ""
+        };
+        format!(
+            "{}{primary} ({}, {bound}) — {access}",
+            self.endpoint, self.transport
+        )
     }
 }
 
@@ -279,17 +286,26 @@ async fn listeners(control: &mut crate::transport::Client) -> Vec<Listener> {
 
 /// Probe a single address without attaching to sessions or changing the server.
 pub async fn probe_endpoint(endpoint: &str) -> Result<Probe> {
-    let mut control = tokio::time::timeout(
+    let socket = tokio::time::timeout(
         std::time::Duration::from_secs(6),
-        crate::transport::control(endpoint, None),
+        crate::transport::socket(endpoint, "/api/control", "rex.control.v1"),
     )
     .await
     .context("Rex discovery timed out")??;
-    let listeners = listeners(&mut control).await;
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(1), control.close()).await;
+    let (listeners, reason) =
+        match crate::transport::control_from_socket(socket, None, "Rex Linux (discovery)").await {
+            Ok(mut control) => {
+                let listeners = listeners(&mut control).await;
+                let _ =
+                    tokio::time::timeout(std::time::Duration::from_secs(1), control.close()).await;
+                (listeners, None)
+            }
+            Err(error) => (Vec::new(), Some(format!("{error:#}"))),
+        };
     Ok(Probe::Rex {
         endpoint: endpoint.into(),
         listeners,
+        reason,
     })
 }
 
@@ -498,6 +514,7 @@ mod tests {
         use serde_json::{Value, json};
         use tokio_tungstenite::tungstenite::Message;
         for (revision, metadata, expected) in [
+            (9, json!({}), 0),
             (10, json!({}), 0),
             (11, json!({"listeners":null}), 0),
             (
@@ -525,8 +542,12 @@ mod tests {
                     serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap())
                         .unwrap();
                 assert_eq!(hello["type"], "hello");
+                assert_eq!(hello["client"]["name"], "Rex Linux (discovery)");
                 ws.send(Message::Text(json!({"type":"welcome","protocol":"rex.control.v1","api_revision":revision,
                     "limits":{"max_message_bytes":65536},"client":{"id":"client:probe","reconnect_token":"probe"}}).to_string().into())).await.unwrap();
+                if revision == 9 {
+                    return;
+                }
                 let request: Value =
                     serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap())
                         .unwrap();
@@ -544,11 +565,17 @@ mod tests {
             let Probe::Rex {
                 endpoint: found,
                 listeners,
+                reason,
             } = probe_endpoint(&endpoint).await.unwrap()
             else {
                 panic!("not Rex")
             };
             assert_eq!(found, endpoint);
+            if revision == 9 {
+                assert!(reason.unwrap().contains("revision"));
+            } else {
+                assert!(reason.is_none());
+            }
             assert_eq!(listeners.len(), expected);
             if let Some(listener) = listeners.first() {
                 assert!(listener.description().contains("127.0.0.1:4567"));
@@ -575,9 +602,21 @@ mod tests {
                 .description()
                 .contains("access rules not reported")
         );
+        let primary = Listener {
+            primary: Some(true),
+            ..status.listeners[1].clone()
+        };
+        assert!(primary.description().contains("unix:///rex.sock (primary)"));
+        assert!(!status.listeners[1].description().contains("(primary)"));
         for (admission, words) in [
-            ("peer_credentials", "socket permissions"),
-            ("tailscale_owner", "tailnet owner"),
+            (
+                "peer_credentials",
+                "local processes identified by OS peer credentials (normally only the server's user)",
+            ),
+            (
+                "tailscale_owner",
+                "only the Tailscale user who signed this device in",
+            ),
             ("tailscale_identified", "identified tailnet users"),
             ("login_server", "login server"),
         ] {

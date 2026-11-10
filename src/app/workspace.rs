@@ -946,6 +946,28 @@ impl Workspace {
         self.settings.hosts[host].shell.as_deref()
     }
 
+    /// Keep the source host/session/block captured by the action, including pane-menu targets.
+    fn open_terminal(
+        &mut self,
+        host: usize,
+        method: &str,
+        mut payload: Value,
+        session: &str,
+        cwd_from: Option<&str>,
+    ) {
+        payload["session_id"] = json!(session);
+        let method = method.into();
+        let command = match cwd_from {
+            Some(block) => HostCommand::NewTerminal {
+                method,
+                payload,
+                cwd_from: block.into(),
+            },
+            None => HostCommand::Request { method, payload },
+        };
+        self.send(host, command);
+    }
+
     /// One new terminal for `host`: its default shell, with the declared theme unless the
     /// host refused themes.
     pub fn new_terminal(&mut self, host: usize) -> Value {
@@ -1206,13 +1228,17 @@ impl Workspace {
                 &[("Host name", "my-host", ""), ("Endpoint", "https://host.example.ts.net, ssh://user@host[/socket] or unix:///path", "")],
             ),
             Intent::NewWindow => {
-                let layout = self.new_terminal(self.active);
-                self.request("session.new_window", json!({"window_label":DEFAULT_TAB_LABEL,"layout":layout,"focus":true}));
+                if let Some(session) = self.model().selected.clone() {
+                    let from = self.focused_block();
+                    let layout = self.new_terminal(self.active);
+                    let payload = json!({"window_label":DEFAULT_TAB_LABEL,"layout":layout,"focus":true});
+                    self.open_terminal(self.active, "session.new_window", payload, &session, from.as_deref());
+                }
             }
             Intent::Split(direction) => {
-                if let Some(block) = self.focused_block() {
+                if let (Some(session), Some(block)) = (self.model().selected.clone(), self.focused_block()) {
                     let layout = self.new_terminal(self.active);
-                    self.request("session.new_split", split_payload(&block, direction, layout));
+                    self.open_terminal(self.active, "session.new_split", split_payload(&block, direction, layout), &session, Some(&block));
                 }
             }
             Intent::RenameSession => {
@@ -1498,10 +1524,12 @@ impl Workspace {
         match action {
             PaneAction::Split(direction) => {
                 let layout = self.new_terminal(target.host);
-                request(
-                    self,
+                self.open_terminal(
+                    target.host,
                     "session.new_split",
                     split_payload(&target.block, direction, layout),
+                    &target.session,
+                    Some(&target.block),
                 )
             }
             PaneAction::Zoom => {
