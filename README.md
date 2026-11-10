@@ -60,9 +60,23 @@ Prebuilt packages are built on Ubuntu 24.04 and require **glibc 2.39+**. They ar
 
 The signed-release pipeline adds `SHA256SUMS.minisig`, `latest.json`, and
 `latest.json.minisig`. It requires [owner key setup](docs/releases.md#owner-setup-before-the-first-signed-release)
-before its first release; v0.4.2 and earlier remain unsigned. Public keys will be
-committed as `packaging/keys/release.pub` (CI) and `packaging/keys/release-backup.pub`
-(offline recovery); **neither is supplied yet**. No client auto-update is implemented.
+before its first release; v0.4.2 and earlier remain unsigned. The CI public key is
+committed as [`packaging/keys/release.pub`](packaging/keys/release.pub):
+
+- Minisign key ID: `A1FD78C27652816E`.
+- SHA-256 fingerprint (decoded 42-byte minisign public-key record):
+  `9e779605311a46a5287d6c9b25eb2083fb17447454239c7d66f1ecebe336d0c6`.
+
+The offline recovery public key is committed as
+[`packaging/keys/release-backup.pub`](packaging/keys/release-backup.pub):
+
+- Minisign key ID: `368EA1A12E2721F3`.
+- SHA-256 fingerprint (decoded 42-byte minisign public-key record):
+  `d9fe424ca8b20725e11d6039c39445d38a33023a8d366c69e0612a1c3528de76`.
+
+See the [public-key registry](packaging/keys/README.md). Both public trust roots
+are present; tag publication still fails closed on missing secrets or invalid
+signatures. No client auto-update is implemented.
 
 For a signed release, obtain and retain a trusted copy of those public keys
 separately from the downloaded assets. With `minisign` installed, and the package,
