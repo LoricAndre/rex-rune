@@ -16,7 +16,7 @@ jobs:
   release-tools:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install minisign
         run: sudo apt-get update && sudo apt-get install -y minisign
       - name: Manifest and throwaway-key signing tests
@@ -35,12 +35,12 @@ jobs:
             arch: aarch64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Native build and runtime dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config dpkg-dev desktop-file-utils libxkbcommon-dev libxkbcommon-x11-dev libfontconfig1-dev libwayland-dev libx11-dev libx11-xcb-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libegl1-mesa-dev libgl1-mesa-dev libvulkan-dev mesa-vulkan-drivers
-      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
       - name: Check release version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -76,7 +76,7 @@ jobs:
           dpkg-deb --info dist/*.deb
           sudo apt-get install -y ./dist/*.deb
           /usr/bin/rex-linux --version
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-${{ matrix.arch }}
           path: |
@@ -112,7 +112,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: linux-*
@@ -128,7 +128,7 @@ jobs:
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           python3 scripts/release-manifest.py --version "$version" --update-from 0.4.2
       - name: Save unsigned metadata before signing
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unsigned-release-metadata
           path: |
@@ -150,7 +150,7 @@ jobs:
           python3 scripts/sign-release.py --tag "$RELEASE_TAG" --keys-dir "$RUNNER_TEMP"
           cp "$RUNNER_TEMP/release.pub" "$RUNNER_TEMP/release-backup.pub" dist/
       - name: Save throwaway-signed metadata and test public keys
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-release-metadata
           path: |
@@ -171,7 +171,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -190,7 +190,7 @@ jobs:
           # Oldest compatible tarball layout; raise only for an incompatible install change.
           python3 scripts/release-manifest.py --version "$version" --update-from 0.4.2
       - name: Save unsigned metadata before signing
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unsigned-release-metadata
           path: |
@@ -204,7 +204,7 @@ jobs:
           RELEASE_TAG: ${{ steps.metadata.outputs.tag }}
         run: python3 scripts/sign-release.py --tag "$RELEASE_TAG"
       - name: Save metadata for inspection or draft recovery
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-metadata
           path: |
